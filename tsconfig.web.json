@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client", "react", "react-dom"]
+  },
+  "include": [
+    "src/shared/**/*.ts",
+    "src/renderer/**/*.ts",
+    "src/renderer/**/*.tsx",
+    "src/renderer/**/*.d.ts"
+  ]
+}
