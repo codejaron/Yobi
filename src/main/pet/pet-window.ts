@@ -88,6 +88,7 @@ export class PetWindowController {
       | { type: "emotion"; value: string }
       | { type: "talking"; value: string }
       | { type: "speech"; audioBase64: string; mimeType?: string }
+      | { type: "thinking"; value: "start" | "stop" }
   ): void {
     if (!this.window || this.window.isDestroyed()) {
       return;

@@ -282,16 +282,29 @@ export class CompanionRuntime {
       return;
     }
 
-    const reply = await this.withTimeout(
-      this.conversation.replyToUser({
-        text: inbound.text,
-        channel: "telegram",
-        activity: this.activityMonitor.getCurrentSnapshot(),
-        photoUrl: inbound.photoUrl
-      }),
-      CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
-      "LLM 回复超时"
-    );
+    this.pet.emitEvent({
+      type: "thinking",
+      value: "start"
+    });
+
+    let reply = "";
+    try {
+      reply = await this.withTimeout(
+        this.conversation.replyToUser({
+          text: inbound.text,
+          channel: "telegram",
+          activity: this.activityMonitor.getCurrentSnapshot(),
+          photoUrl: inbound.photoUrl
+        }),
+        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+        "LLM 回复超时"
+      );
+    } finally {
+      this.pet.emitEvent({
+        type: "thinking",
+        value: "stop"
+      });
+    }
 
     console.info("[runtime] LLM reply generated", {
       length: reply.length
@@ -654,16 +667,19 @@ export class CompanionRuntime {
       return;
     }
 
-    let modelDir = path.isAbsolute(config.modelDir)
-      ? config.modelDir
-      : path.join(app.getAppPath(), config.modelDir);
+    const modelDirInput = config.modelDir.trim();
+    if (!modelDirInput) {
+      this.pet.close();
+      return;
+    }
+
+    const modelDir = path.isAbsolute(modelDirInput)
+      ? modelDirInput
+      : path.join(app.getAppPath(), modelDirInput);
 
     if (!existsSync(modelDir)) {
-      const legacyDir = path.join(app.getAppPath(), "haru_greeter_pro_jp");
-      const newDefaultDir = path.join(app.getAppPath(), "resources", "models", "haru_greeter_pro_jp");
-      if (modelDir === legacyDir && existsSync(newDefaultDir)) {
-        modelDir = newDefaultDir;
-      }
+      this.pet.close();
+      return;
     }
 
     this.pet.open({

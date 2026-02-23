@@ -104,19 +104,6 @@ export class ConfigStore {
     };
 
     this.cached = appConfigSchema.parse(merged);
-
-    if (
-      this.cached.pet.modelDir === "haru_greeter_pro_jp" ||
-      this.cached.pet.modelDir === "resources/pets/haru_greeter_pro_jp"
-    ) {
-      this.cached = {
-        ...this.cached,
-        pet: {
-          ...this.cached.pet,
-          modelDir: "resources/models/haru_greeter_pro_jp"
-        }
-      };
-    }
     await writeJsonFile(this.paths.configPath, this.cached);
   }
 

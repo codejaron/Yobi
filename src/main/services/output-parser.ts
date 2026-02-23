@@ -2,7 +2,7 @@ import type { AssistantOutputParseResult } from "@shared/types";
 
 const REMINDER_PATTERN = /\[reminder\]([\s\S]*?)\[\/reminder\]/gi;
 const VOICE_PATTERN = /\[voice\]([\s\S]*?)\[\/voice\]/gi;
-const EMOTION_PATTERN = /\[(happy|sad|shy|angry|excited|calm|idle)\]/gi;
+const EMOTION_PATTERN = /\[(happy|sad|shy|angry|surprised|excited|calm|idle)\]/gi;
 
 function squeeze(text: string): string {
   return text

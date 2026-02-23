@@ -301,23 +301,279 @@
           });
           model.interactive = true;
 
+          const expressionDefinitions =
+            model?.internalModel?.motionManager?.expressionManager?.definitions || {};
+          const availableExpressions = new Set(Object.keys(expressionDefinitions));
+          const motionDefinitions = model?.internalModel?.motionManager?.definitions || {};
+
           let baseScale = 0.11;
           let zoomScale = readScalePreference();
           let statusResetTimer = null;
+          let idleMotionTimer = null;
           let suppressTapUntil = 0;
+          let thinkingActive = false;
+          let speechActive = false;
           let activeAudio = null;
+          let syntheticLipSyncRaf = 0;
+          let audioLipSyncRaf = 0;
+          let audioContext = null;
+          let audioAnalyser = null;
+          let audioAnalyserData = null;
+          let audioSourceNode = null;
 
-          const scheduleIdleStatus = () => {
+          const MOUTH_PARAMETER_ID = "PARAM_MOUTH_OPEN_Y";
+
+          const clearStatusTimer = () => {
             if (statusResetTimer) {
               clearTimeout(statusResetTimer);
+              statusResetTimer = null;
+            }
+          };
+
+          const clearIdleMotionLoop = () => {
+            if (idleMotionTimer) {
+              clearTimeout(idleMotionTimer);
+              idleMotionTimer = null;
+            }
+          };
+
+          const motionCount = (group) => {
+            const bucket = motionDefinitions[group];
+            return Array.isArray(bucket) ? bucket.length : 0;
+          };
+
+          const playMotion = (group, index) => {
+            const count = motionCount(group);
+            if (count <= 0) {
+              return false;
             }
 
-            statusResetTimer = setTimeout(() => updateStatus("idle"), 1400);
+            try {
+              if (Number.isInteger(index) && index >= 0 && index < count) {
+                model.motion(group, index);
+              } else {
+                model.motion(group);
+              }
+              return true;
+            } catch {
+              return false;
+            }
+          };
+
+          const applyExpression = (name) => {
+            if (!name) {
+              return;
+            }
+
+            if (availableExpressions.size > 0 && !availableExpressions.has(name)) {
+              return;
+            }
+
+            try {
+              model.expression(name);
+            } catch {}
+          };
+
+          const setMouthOpen = (value) => {
+            const clamped = clamp(value, 0, 1);
+            try {
+              model.internalModel?.coreModel?.setParameterValueById?.(MOUTH_PARAMETER_ID, clamped);
+            } catch {}
           };
 
           const pulseModel = () => {
             rootEl.classList.add("pulse");
             setTimeout(() => rootEl.classList.remove("pulse"), 1600);
+          };
+
+          const stopLipSync = () => {
+            if (syntheticLipSyncRaf) {
+              cancelAnimationFrame(syntheticLipSyncRaf);
+              syntheticLipSyncRaf = 0;
+            }
+
+            if (audioLipSyncRaf) {
+              cancelAnimationFrame(audioLipSyncRaf);
+              audioLipSyncRaf = 0;
+            }
+
+            if (audioSourceNode) {
+              try {
+                audioSourceNode.disconnect();
+              } catch {}
+              audioSourceNode = null;
+            }
+
+            if (audioAnalyser) {
+              try {
+                audioAnalyser.disconnect();
+              } catch {}
+              audioAnalyser = null;
+            }
+
+            audioAnalyserData = null;
+            if (audioContext) {
+              const contextRef = audioContext;
+              audioContext = null;
+              void contextRef.close().catch(() => undefined);
+            }
+
+            setMouthOpen(0);
+          };
+
+          const startSyntheticLipSync = (durationMs) => {
+            if (syntheticLipSyncRaf) {
+              cancelAnimationFrame(syntheticLipSyncRaf);
+              syntheticLipSyncRaf = 0;
+            }
+            if (audioLipSyncRaf) {
+              cancelAnimationFrame(audioLipSyncRaf);
+              audioLipSyncRaf = 0;
+            }
+
+            const startedAt = performance.now();
+            const loop = () => {
+              const elapsed = performance.now() - startedAt;
+              if (elapsed >= durationMs) {
+                syntheticLipSyncRaf = 0;
+                setMouthOpen(0);
+                return;
+              }
+
+              const progress = elapsed / 115;
+              const wave = Math.abs(Math.sin(progress));
+              setMouthOpen(0.1 + wave * 0.7);
+              syntheticLipSyncRaf = requestAnimationFrame(loop);
+            };
+
+            syntheticLipSyncRaf = requestAnimationFrame(loop);
+          };
+
+          const startAudioLipSync = (audio) => {
+            stopLipSync();
+
+            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextCtor) {
+              startSyntheticLipSync(1800);
+              return;
+            }
+
+            try {
+              audioContext = new AudioContextCtor();
+              audioAnalyser = audioContext.createAnalyser();
+              audioAnalyser.fftSize = 256;
+              audioAnalyserData = new Uint8Array(audioAnalyser.frequencyBinCount);
+              audioSourceNode = audioContext.createMediaElementSource(audio);
+              audioSourceNode.connect(audioAnalyser);
+              audioAnalyser.connect(audioContext.destination);
+
+              if (audioContext.state === "suspended") {
+                void audioContext.resume().catch(() => undefined);
+              }
+
+              const loop = () => {
+                if (!audioAnalyser || !audioAnalyserData || !speechActive) {
+                  audioLipSyncRaf = 0;
+                  setMouthOpen(0);
+                  return;
+                }
+
+                audioAnalyser.getByteTimeDomainData(audioAnalyserData);
+                let energy = 0;
+                for (let index = 0; index < audioAnalyserData.length; index += 1) {
+                  const normalized = (audioAnalyserData[index] - 128) / 128;
+                  energy += normalized * normalized;
+                }
+                const rms = Math.sqrt(energy / audioAnalyserData.length);
+                setMouthOpen(rms * 8);
+                audioLipSyncRaf = requestAnimationFrame(loop);
+              };
+
+              audioLipSyncRaf = requestAnimationFrame(loop);
+            } catch {
+              startSyntheticLipSync(1800);
+            }
+          };
+
+          const scheduleStatusBackToBaseline = (delayMs) => {
+            clearStatusTimer();
+            statusResetTimer = setTimeout(() => {
+              statusResetTimer = null;
+              if (speechActive) {
+                return;
+              }
+              if (thinkingActive) {
+                applyThinkingState();
+                return;
+              }
+              applyExpression("Normal");
+              updateStatus("idle");
+            }, delayMs);
+          };
+
+          const scheduleIdleMotionLoop = () => {
+            clearIdleMotionLoop();
+            idleMotionTimer = setTimeout(() => {
+              idleMotionTimer = null;
+              if (thinkingActive || speechActive) {
+                return;
+              }
+              playMotion("Idle");
+              scheduleIdleMotionLoop();
+            }, 4200 + Math.random() * 3600);
+          };
+
+          const enterIdle = (playImmediateMotion = true) => {
+            if (thinkingActive || speechActive) {
+              return;
+            }
+
+            clearStatusTimer();
+            applyExpression("Normal");
+            if (playImmediateMotion) {
+              playMotion("Idle");
+            }
+            updateStatus("idle");
+            scheduleIdleMotionLoop();
+          };
+
+          const applyThinkingState = () => {
+            clearStatusTimer();
+            clearIdleMotionLoop();
+            applyExpression("Normal");
+            if (!playMotion("Idle", 1)) {
+              playMotion("Idle");
+            }
+            updateStatus("thinking");
+          };
+
+          const runStateAction = (input) => {
+            const durationMs = input.durationMs ?? 1700;
+            clearIdleMotionLoop();
+            clearStatusTimer();
+
+            if (input.expression) {
+              applyExpression(input.expression);
+            }
+
+            if (input.motionGroup) {
+              const ok = playMotion(input.motionGroup, input.motionIndex);
+              if (!ok && input.motionGroup !== "Idle") {
+                playMotion("Idle");
+              }
+            }
+
+            if (input.syntheticLipSyncMs && input.syntheticLipSyncMs > 0) {
+              startSyntheticLipSync(input.syntheticLipSyncMs);
+            }
+
+            if (input.pulse) {
+              pulseModel();
+            }
+
+            updateStatus(input.status);
+            scheduleStatusBackToBaseline(durationMs);
+            scheduleIdleMotionLoop();
           };
 
           const stopCurrentAudio = () => {
@@ -331,7 +587,20 @@
               activeAudio.load();
             } catch {}
 
+            speechActive = false;
             activeAudio = null;
+            stopLipSync();
+          };
+
+          const finishSpeech = () => {
+            speechActive = false;
+            activeAudio = null;
+            stopLipSync();
+            if (thinkingActive) {
+              applyThinkingState();
+              return;
+            }
+            enterIdle(false);
           };
 
           const playPetSpeech = (audioBase64, mimeType) => {
@@ -347,31 +616,36 @@
             audio.volume = 1;
 
             audio.onplay = () => {
+              speechActive = true;
+              clearIdleMotionLoop();
+              clearStatusTimer();
               pulseModel();
+              playMotion("Tap");
+              startAudioLipSync(audio);
               updateStatus("talking");
             };
 
             audio.onended = () => {
-              if (activeAudio === audio) {
-                activeAudio = null;
+              if (activeAudio !== audio) {
+                return;
               }
-              scheduleIdleStatus();
+              finishSpeech();
             };
 
             audio.onerror = () => {
-              if (activeAudio === audio) {
-                activeAudio = null;
+              if (activeAudio !== audio) {
+                return;
               }
               updateStatus("speech-error");
-              scheduleIdleStatus();
+              finishSpeech();
             };
 
             audio.play().catch(() => {
-              if (activeAudio === audio) {
-                activeAudio = null;
+              if (activeAudio !== audio) {
+                return;
               }
               updateStatus("speech-blocked");
-              scheduleIdleStatus();
+              finishSpeech();
             });
           };
 
@@ -405,14 +679,22 @@
             const normalizedAreas = hitAreas
               .filter((area) => typeof area === "string" && area.length > 0)
               .map((area) => area.toLowerCase());
-            if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
-              model.motion("TapHead");
-            } else {
-              model.motion("TapBody");
-            }
 
-            updateStatus("tap");
-            scheduleIdleStatus();
+            if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
+              runStateAction({
+                status: "tap-head",
+                expression: "Blushing",
+                motionGroup: "Flick",
+                durationMs: 1700
+              });
+            } else {
+              runStateAction({
+                status: "tap-body",
+                expression: "Surprised",
+                motionGroup: "Tap",
+                durationMs: 1700
+              });
+            }
           };
 
           const dragState = {
@@ -498,7 +780,7 @@
               saveScalePreference(zoomScale);
               applyModelLayout();
               updateStatus(`scale · ${Math.round(zoomScale * 100)}%`);
-              scheduleIdleStatus();
+              scheduleStatusBackToBaseline(900);
             },
             {
               passive: false
@@ -513,7 +795,7 @@
             fitModel();
           });
 
-          updateStatus("idle");
+          enterIdle(true);
 
           model.on("pointertap", (event) => {
             if (Date.now() < suppressTapUntil) {
@@ -556,29 +838,51 @@
               return;
             }
 
+            if (data.type === "thinking") {
+              if (data.value === "start") {
+                thinkingActive = true;
+                applyThinkingState();
+              } else if (data.value === "stop") {
+                thinkingActive = false;
+                if (!speechActive) {
+                  enterIdle(false);
+                }
+              }
+              return;
+            }
+
             if (data.type === "talking") {
-              pulseModel();
-              model.motion("FlickHair");
-              updateStatus("talking");
-              scheduleIdleStatus();
+              runStateAction({
+                status: "talking",
+                motionGroup: "Tap",
+                syntheticLipSyncMs: 1400,
+                pulse: true,
+                durationMs: 1650
+              });
               return;
             }
 
             if (data.type === "emotion") {
+              const emotion = typeof data.value === "string" ? data.value.trim().toLowerCase() : "";
               const mapping = {
-                happy: "FlickHair",
-                sad: "TapBody",
-                shy: "TapHead",
-                angry: "TapBody",
-                excited: "FlickHair",
-                calm: "TapHead",
-                idle: "Idle"
+                happy: { expression: "Smile", motionGroup: "FlickRight" },
+                sad: { expression: "Sad", motionGroup: "Idle", motionIndex: 0 },
+                angry: { expression: "Angry", motionGroup: "Shake" },
+                surprised: { expression: "Surprised", motionGroup: "Flick" },
+                shy: { expression: "Blushing", motionGroup: "Idle" },
+                excited: { expression: "Smile", motionGroup: "Flick3" },
+                calm: { expression: "Normal", motionGroup: "Idle" },
+                idle: { expression: "Normal", motionGroup: "Idle" }
               };
 
-              const motion = mapping[data.value] || "TapBody";
-              model.motion(motion);
-              updateStatus(`emotion · ${data.value}`);
-              scheduleIdleStatus();
+              const action = mapping[emotion] || mapping.idle;
+              runStateAction({
+                status: `emotion · ${emotion || "idle"}`,
+                expression: action.expression,
+                motionGroup: action.motionGroup,
+                motionIndex: action.motionIndex,
+                durationMs: 1850
+              });
               return;
             }
 

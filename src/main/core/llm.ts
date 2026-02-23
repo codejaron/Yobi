@@ -58,7 +58,7 @@ export class LlmRouter {
       "你可以在需要时输出这些标记：",
       "- [voice]...[/voice] 表示这段适合语音发送。",
       "- [reminder]{\"time\":\"ISO8601\",\"text\":\"提醒内容\"}[/reminder] 创建提醒。",
-      "- [happy]/[sad]/[shy]/[angry]/[excited]/[calm]/[idle] 用于桌宠情绪。",
+      "- [happy]/[sad]/[shy]/[angry]/[surprised]/[excited]/[calm]/[idle] 用于桌宠情绪。",
       "强规则1：只有当用户明确要求语音/朗读时，才允许输出 [voice]...[/voice]。",
       "强规则1补充：用户没有明确要求语音时，严禁输出 [voice] 标签。",
       "除标记外不要解释标记含义。",

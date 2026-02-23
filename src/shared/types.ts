@@ -50,7 +50,7 @@ export const appConfigSchema = z.object({
   }),
   pet: z.object({
     enabled: z.boolean().default(true),
-    modelDir: z.string().default("resources/models/haru_greeter_pro_jp"),
+    modelDir: z.string().default(""),
     alwaysOnTop: z.boolean().default(true)
   }),
   realtimeVoice: z.object({
@@ -219,7 +219,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   pet: {
     enabled: true,
-    modelDir: "resources/models/haru_greeter_pro_jp",
+    modelDir: "",
     alwaysOnTop: true
   },
   realtimeVoice: {
