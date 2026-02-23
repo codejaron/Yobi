@@ -46,13 +46,14 @@ export class ConversationEngine {
     text: string;
     activity: ActivitySnapshot | null;
     proactive?: boolean;
+    channel?: "telegram" | "system";
   }): Promise<void> {
     const text = input.text.trim();
     if (!text) {
       return;
     }
 
-    await this.historyStore.append("assistant", text, "telegram", {
+    await this.historyStore.append("assistant", text, input.channel ?? "telegram", {
       proactive: input.proactive,
       activitySnapshot: input.activity?.summary
     });

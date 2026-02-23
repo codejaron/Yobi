@@ -239,6 +239,51 @@ export class CompanionRuntime {
     return this.collectStatus();
   }
 
+  async chatFromPet(text: string): Promise<{ replyText: string }> {
+    const normalized = text.trim();
+    if (!normalized) {
+      return { replyText: "" };
+    }
+
+    const activity = this.activityMonitor.getCurrentSnapshot();
+
+    this.pet.emitEvent({
+      type: "thinking",
+      value: "start"
+    });
+
+    let rawReply = "";
+    try {
+      rawReply = await this.withTimeout(
+        this.conversation.replyToUser({
+          text: normalized,
+          channel: "system",
+          activity
+        }),
+        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+        "LLM 回复超时"
+      );
+    } finally {
+      this.pet.emitEvent({
+        type: "thinking",
+        value: "stop"
+      });
+    }
+
+    const delivered = await this.deliverAssistantOutput({
+      rawText: rawReply,
+      activity,
+      proactive: false,
+      destination: "pet",
+      historyChannel: "system"
+    });
+
+    await this.emitStatus();
+    return {
+      replyText: delivered.displayText
+    };
+  }
+
   private async startTelegram(): Promise<void> {
     await this.telegram.start(async (inbound) => {
       try {
@@ -392,8 +437,12 @@ export class CompanionRuntime {
     rawText: string;
     activity: ActivitySnapshot | null;
     proactive: boolean;
-  }): Promise<void> {
+    destination?: "telegram" | "pet";
+    historyChannel?: HistoryMessage["channel"];
+  }): Promise<{ displayText: string }> {
     const config = this.getConfig();
+    const destination = input.destination ?? "telegram";
+    const sendToTelegram = destination === "telegram";
     const parsed = parseAssistantOutput(input.rawText);
 
     const reminders = await this.reminderService.createBatch(
@@ -402,6 +451,7 @@ export class CompanionRuntime {
 
     const messages: OutboundMessage[] = [];
     const historyTextPieces: string[] = [];
+    const visibleTextPieces: string[] = [];
     const degradedVoiceTexts: string[] = [];
     const synthesizedVoiceByText = new Map<string, Buffer>();
     const ttsConfig = {
@@ -413,7 +463,7 @@ export class CompanionRuntime {
       retryCount: config.voice.retryCount
     };
 
-    if (config.messaging.allowVoiceMessages && parsed.voiceTexts.length > 0) {
+    if (sendToTelegram && config.messaging.allowVoiceMessages && parsed.voiceTexts.length > 0) {
       for (const voiceText of parsed.voiceTexts) {
         try {
           const audio = await this.voiceService.synthesize({
@@ -439,34 +489,48 @@ export class CompanionRuntime {
 
     const textPayload = [...degradedVoiceTexts, parsed.visibleText].filter(Boolean).join("\\n");
     if (textPayload) {
-      messages.push({
-        kind: "text",
-        text: textPayload
-      });
+      if (sendToTelegram) {
+        messages.push({
+          kind: "text",
+          text: textPayload
+        });
+      }
       historyTextPieces.push(textPayload);
+      visibleTextPieces.push(textPayload);
     }
 
     if (reminders.length > 0) {
       const summary = reminders
         .map((item) => `${item.id.slice(0, 8)} · ${new Date(item.at).toLocaleString()} · ${item.text}`)
         .join("\n");
-      messages.push({
-        kind: "text",
-        text: `我帮你记下这些提醒啦:\n${summary}`
-      });
+      const reminderText = `我帮你记下这些提醒啦:\n${summary}`;
+      if (sendToTelegram) {
+        messages.push({
+          kind: "text",
+          text: reminderText
+        });
+      }
       historyTextPieces.push(`[提醒] ${reminders.map((item) => item.text).join("; ")}`);
+      visibleTextPieces.push(reminderText);
     }
 
-    if (messages.length === 0) {
+    if (historyTextPieces.length === 0) {
       const fallback = mergeVoiceIntoText(parsed);
       if (fallback) {
-        messages.push({ kind: "text", text: fallback });
+        if (sendToTelegram) {
+          messages.push({ kind: "text", text: fallback });
+        }
         historyTextPieces.push(fallback);
+        if (visibleTextPieces.length === 0) {
+          visibleTextPieces.push(fallback);
+        }
       }
     }
 
-    for (const message of messages) {
-      await this.telegram.send(message);
+    if (sendToTelegram) {
+      for (const message of messages) {
+        await this.telegram.send(message);
+      }
     }
 
     if (parsed.emotions.length > 0) {
@@ -477,7 +541,7 @@ export class CompanionRuntime {
       });
     }
 
-    if (messages.length > 0) {
+    if (messages.length > 0 || destination === "pet") {
       this.pet.emitEvent({
         type: "talking",
         value: "talking"
@@ -511,8 +575,17 @@ export class CompanionRuntime {
     await this.conversation.commitAssistantMessage({
       text: historyTextPieces.join("\n"),
       activity: input.activity,
-      proactive: input.proactive
+      proactive: input.proactive,
+      channel: input.historyChannel ?? "telegram"
     });
+
+    const displayText = visibleTextPieces
+      .join("\n")
+      .trim();
+
+    return {
+      displayText
+    };
   }
 
   private startSilenceLoop(): void {

@@ -36,6 +36,110 @@
         z-index: 10;
       }
 
+      #chat-panel {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        width: min(300px, calc(100% - 24px));
+        border-radius: 14px;
+        background: rgba(16, 18, 26, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(8px);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 12;
+      }
+
+      #chat-panel.hidden {
+        display: none;
+      }
+
+      #chat-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 12px;
+      }
+
+      #chat-close {
+        border: none;
+        border-radius: 999px;
+        width: 22px;
+        height: 22px;
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      #chat-log {
+        max-height: 170px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .chat-msg {
+        border-radius: 10px;
+        padding: 6px 8px;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .chat-msg.user {
+        align-self: flex-end;
+        background: rgba(80, 171, 255, 0.9);
+        color: #fff;
+      }
+
+      .chat-msg.assistant {
+        align-self: flex-start;
+        background: rgba(255, 255, 255, 0.92);
+        color: #1f2430;
+      }
+
+      .chat-msg.pending {
+        opacity: 0.76;
+      }
+
+      #chat-form {
+        display: flex;
+        gap: 6px;
+      }
+
+      #chat-input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-size: 13px;
+        outline: none;
+      }
+
+      #chat-send {
+        border: none;
+        border-radius: 10px;
+        padding: 0 11px;
+        background: #4f8cff;
+        color: #fff;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      #chat-send:disabled,
+      #chat-input:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
       #fallback {
         width: 220px;
         height: 220px;
@@ -75,6 +179,17 @@
     <div id="root">
       <div id="fallback"></div>
       <div id="status">idle</div>
+      <div id="chat-panel" class="hidden">
+        <div id="chat-topbar">
+          <span>和 Yobi 聊天</span>
+          <button id="chat-close" type="button">×</button>
+        </div>
+        <div id="chat-log"></div>
+        <form id="chat-form">
+          <input id="chat-input" type="text" maxlength="500" placeholder="点这里和我聊天..." />
+          <button id="chat-send" type="submit">发送</button>
+        </form>
+      </div>
     </div>
 
     <script>
@@ -85,6 +200,12 @@
       const statusEl = document.getElementById("status");
       const fallbackEl = document.getElementById("fallback");
       const rootEl = document.getElementById("root");
+      const chatPanelEl = document.getElementById("chat-panel");
+      const chatLogEl = document.getElementById("chat-log");
+      const chatFormEl = document.getElementById("chat-form");
+      const chatInputEl = document.getElementById("chat-input");
+      const chatSendEl = document.getElementById("chat-send");
+      const chatCloseEl = document.getElementById("chat-close");
 
       const params = new URLSearchParams(window.location.search);
       const modelDir = params.get("modelDir") || "";
@@ -94,6 +215,8 @@
       const updateStatus = (text) => {
         statusEl.textContent = text;
       };
+
+      const isElement = (value) => value && typeof value === "object" && "closest" in value;
 
       const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -129,6 +252,37 @@
         return areas
           .filter((value) => typeof value === "string")
           .map((value) => value.trim());
+      };
+
+      const normalizeMotionDefinitions = (input) => {
+        if (!input || typeof input !== "object") {
+          return {};
+        }
+
+        const entries = input instanceof Map ? Array.from(input.entries()) : Object.entries(input);
+        const normalized = {};
+
+        for (const [group, bucket] of entries) {
+          const key = typeof group === "string" ? group : String(group || "");
+          normalized[key] = Array.isArray(bucket) ? bucket : [];
+        }
+
+        return normalized;
+      };
+
+      const readMotionDefinitionsFromModelJson = (modelJsonPath) => {
+        if (!modelJsonPath) {
+          return {};
+        }
+
+        try {
+          const raw = fs.readFileSync(modelJsonPath, "utf-8");
+          const parsed = JSON.parse(raw);
+          const motions = parsed?.FileReferences?.Motions;
+          return normalizeMotionDefinitions(motions);
+        } catch {
+          return {};
+        }
       };
 
       const walkFiles = (baseDir) => {
@@ -295,16 +449,152 @@
           });
 
           rootEl.appendChild(app.view);
+          app.stage.interactive = true;
+          const stageHitArea = new PIXI.Rectangle(0, 0, app.renderer.width, app.renderer.height);
+          app.stage.hitArea = stageHitArea;
 
           const model = await Live2DModel.from(`file://${encodeURI(modelJsonPath)}`, {
             autoInteract: false
           });
           model.interactive = true;
 
-          const expressionDefinitions =
+          const expressionDefinitionsRaw =
             model?.internalModel?.motionManager?.expressionManager?.definitions || {};
+          const expressionDefinitions =
+            expressionDefinitionsRaw instanceof Map
+              ? Object.fromEntries(expressionDefinitionsRaw.entries())
+              : expressionDefinitionsRaw;
           const availableExpressions = new Set(Object.keys(expressionDefinitions));
-          const motionDefinitions = model?.internalModel?.motionManager?.definitions || {};
+
+          const runtimeMotionDefinitions = normalizeMotionDefinitions(
+            model?.internalModel?.motionManager?.definitions
+          );
+          const modelJsonMotionDefinitions = readMotionDefinitionsFromModelJson(modelJsonPath);
+          const motionDefinitions = {
+            ...runtimeMotionDefinitions,
+            ...modelJsonMotionDefinitions
+          };
+          const motionGroupNames = Object.keys(motionDefinitions).filter(
+            (name) => Array.isArray(motionDefinitions[name]) && motionDefinitions[name].length > 0
+          );
+          const normalizedMotionGroupNames = motionGroupNames.map((name) => ({
+            name,
+            normalized: name.trim().toLowerCase()
+          }));
+
+          const findMotionGroup = (candidates, options = {}) => {
+            const allowAny = options.allowAny === true;
+            const includeEmpty = options.includeEmpty === true;
+
+            for (const candidate of candidates) {
+              const normalizedCandidate = candidate.trim().toLowerCase();
+              if (!normalizedCandidate) {
+                continue;
+              }
+
+              const exact = normalizedMotionGroupNames.find(
+                (entry) => entry.normalized === normalizedCandidate
+              );
+              if (exact) {
+                return exact.name;
+              }
+            }
+
+            for (const candidate of candidates) {
+              const normalizedCandidate = candidate.trim().toLowerCase();
+              if (!normalizedCandidate) {
+                continue;
+              }
+
+              const fuzzy = normalizedMotionGroupNames.find((entry) =>
+                entry.normalized.includes(normalizedCandidate)
+              );
+              if (fuzzy) {
+                return fuzzy.name;
+              }
+            }
+
+            if (!allowAny) {
+              return null;
+            }
+
+            const nonEmptyFallback = normalizedMotionGroupNames.find((entry) => entry.normalized.length > 0);
+            if (nonEmptyFallback) {
+              return nonEmptyFallback.name;
+            }
+
+            if (includeEmpty && motionGroupNames.length > 0) {
+              return motionGroupNames[0];
+            }
+
+            return null;
+          };
+
+          const motionBinding = {
+            idle: findMotionGroup(["idle"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            thinking: findMotionGroup(["idle", "think", "thinking"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            talking: findMotionGroup(["tap", "talk", "speak", "voice"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            tapHead: findMotionGroup(["flick", "head", "taphead", "touchhead"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            tapBody: findMotionGroup(["tap", "body", "tapbody", "touchbody"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            happy: findMotionGroup(["flickright", "happy", "smile"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            sad: findMotionGroup(["idle", "sad", "down"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            angry: findMotionGroup(["shake", "angry", "mad"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            surprised: findMotionGroup(["flick", "surprised", "surprise"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            shy: findMotionGroup(["idle", "shy", "blush"], {
+              allowAny: true,
+              includeEmpty: true
+            }),
+            excited: findMotionGroup(["flick3", "excited", "flickright"], {
+              allowAny: true,
+              includeEmpty: true
+            })
+          };
+          const firstDefinedMotionGroup = (...groups) => {
+            for (const group of groups) {
+              if (typeof group === "string") {
+                return group;
+              }
+            }
+            return null;
+          };
+          const idleMotionGroup = firstDefinedMotionGroup(
+            motionBinding.idle,
+            motionBinding.talking,
+            motionGroupNames[0]
+          );
+          const thinkingMotionGroup = firstDefinedMotionGroup(motionBinding.thinking, idleMotionGroup);
+          const talkingMotionGroup = firstDefinedMotionGroup(
+            motionBinding.talking,
+            motionBinding.tapBody,
+            idleMotionGroup
+          );
 
           let baseScale = 0.11;
           let zoomScale = readScalePreference();
@@ -320,8 +610,81 @@
           let audioAnalyser = null;
           let audioAnalyserData = null;
           let audioSourceNode = null;
+          let chatRequestToken = 0;
+          let pendingSingleTapTimer = null;
+          let pendingSingleTapArea = null;
+          let lastTapAt = 0;
 
           const MOUTH_PARAMETER_ID = "PARAM_MOUTH_OPEN_Y";
+          const MOTION_PRIORITY_FORCE = 3;
+          const SINGLE_TAP_DELAY_MS = 340;
+          const DOUBLE_TAP_GAP_MS = 320;
+          const DRAG_ACTIVATE_DISTANCE = 8;
+
+          const setChatVisible = (visible) => {
+            if (!chatPanelEl) {
+              return;
+            }
+
+            if (visible) {
+              chatPanelEl.classList.remove("hidden");
+            } else {
+              chatPanelEl.classList.add("hidden");
+            }
+          };
+
+          const isChatVisible = () => Boolean(chatPanelEl && !chatPanelEl.classList.contains("hidden"));
+
+          const focusChatInput = () => {
+            if (!chatInputEl) {
+              return;
+            }
+
+            chatInputEl.focus();
+          };
+
+          const appendChatMessage = (role, text, options = {}) => {
+            if (!chatLogEl) {
+              return null;
+            }
+
+            const messageEl = document.createElement("div");
+            messageEl.className = `chat-msg ${role}${options.pending ? " pending" : ""}`;
+            messageEl.textContent = text;
+            chatLogEl.appendChild(messageEl);
+
+            while (chatLogEl.children.length > 16) {
+              chatLogEl.removeChild(chatLogEl.firstChild);
+            }
+
+            chatLogEl.scrollTop = chatLogEl.scrollHeight;
+            return messageEl;
+          };
+
+          const setChatSubmitting = (submitting) => {
+            if (chatInputEl) {
+              chatInputEl.disabled = submitting;
+            }
+            if (chatSendEl) {
+              chatSendEl.disabled = submitting;
+            }
+          };
+
+          const resetChatSession = () => {
+            chatRequestToken += 1;
+            setChatSubmitting(false);
+            if (chatInputEl) {
+              chatInputEl.value = "";
+            }
+            if (chatLogEl) {
+              chatLogEl.replaceChildren();
+            }
+          };
+
+          const closeChatPanel = () => {
+            setChatVisible(false);
+            resetChatSession();
+          };
 
           const clearStatusTimer = () => {
             if (statusResetTimer) {
@@ -337,23 +700,37 @@
             }
           };
 
+          const clearPendingSingleTap = () => {
+            if (pendingSingleTapTimer) {
+              clearTimeout(pendingSingleTapTimer);
+              pendingSingleTapTimer = null;
+            }
+            pendingSingleTapArea = null;
+          };
+
           const motionCount = (group) => {
+            if (typeof group !== "string") {
+              return 0;
+            }
             const bucket = motionDefinitions[group];
             return Array.isArray(bucket) ? bucket.length : 0;
           };
 
           const playMotion = (group, index) => {
+            if (typeof group !== "string") {
+              return false;
+            }
             const count = motionCount(group);
             if (count <= 0) {
               return false;
             }
 
             try {
-              if (Number.isInteger(index) && index >= 0 && index < count) {
-                model.motion(group, index);
-              } else {
-                model.motion(group);
-              }
+              const nextIndex =
+                Number.isInteger(index) && index >= 0 && index < count
+                  ? index
+                  : Math.floor(Math.random() * count);
+              model.motion(group, nextIndex, MOTION_PRIORITY_FORCE);
               return true;
             } catch {
               return false;
@@ -518,7 +895,7 @@
               if (thinkingActive || speechActive) {
                 return;
               }
-              playMotion("Idle");
+              playMotion(idleMotionGroup);
               scheduleIdleMotionLoop();
             }, 4200 + Math.random() * 3600);
           };
@@ -531,7 +908,7 @@
             clearStatusTimer();
             applyExpression("Normal");
             if (playImmediateMotion) {
-              playMotion("Idle");
+              playMotion(idleMotionGroup);
             }
             updateStatus("idle");
             scheduleIdleMotionLoop();
@@ -541,8 +918,8 @@
             clearStatusTimer();
             clearIdleMotionLoop();
             applyExpression("Normal");
-            if (!playMotion("Idle", 1)) {
-              playMotion("Idle");
+            if (!playMotion(thinkingMotionGroup, 1)) {
+              playMotion(thinkingMotionGroup);
             }
             updateStatus("thinking");
           };
@@ -556,10 +933,10 @@
               applyExpression(input.expression);
             }
 
-            if (input.motionGroup) {
+            if (typeof input.motionGroup === "string") {
               const ok = playMotion(input.motionGroup, input.motionIndex);
-              if (!ok && input.motionGroup !== "Idle") {
-                playMotion("Idle");
+              if (!ok && input.motionGroup !== idleMotionGroup) {
+                playMotion(idleMotionGroup);
               }
             }
 
@@ -620,7 +997,7 @@
               clearIdleMotionLoop();
               clearStatusTimer();
               pulseModel();
-              playMotion("Tap");
+              playMotion(talkingMotionGroup);
               startAudioLipSync(audio);
               updateStatus("talking");
             };
@@ -675,26 +1052,116 @@
             applyModelLayout();
           };
 
-          const runTapMotion = (hitAreas) => {
-            const normalizedAreas = hitAreas
-              .filter((area) => typeof area === "string" && area.length > 0)
-              .map((area) => area.toLowerCase());
+          const mapClientToCanvasPoint = (clientX, clientY) => {
+            const rect = app.view.getBoundingClientRect();
+            if (!rect || rect.width <= 0 || rect.height <= 0) {
+              return null;
+            }
 
-            if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
+            const pointX = ((clientX - rect.left) / rect.width) * app.renderer.width;
+            const pointY = ((clientY - rect.top) / rect.height) * app.renderer.height;
+            if (!Number.isFinite(pointX) || !Number.isFinite(pointY)) {
+              return null;
+            }
+
+            return {
+              x: pointX,
+              y: pointY
+            };
+          };
+
+          const classifyTapArea = (pointX, pointY) => {
+            const rawHitAreas = model.hitTest(pointX, pointY);
+            if (Array.isArray(rawHitAreas) && rawHitAreas.length > 0) {
+              const normalizedAreas = normalizeHitAreas(rawHitAreas)
+                .filter((area) => area.length > 0)
+                .map((area) => area.toLowerCase());
+
+              if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
+                return "head";
+              }
+              if (normalizedAreas.length > 0) {
+                return "body";
+              }
+            }
+
+            let bounds = null;
+            try {
+              bounds = model.getBounds();
+            } catch {
+              return null;
+            }
+
+            if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+              return null;
+            }
+
+            const insetX = Math.max(8, bounds.width * 0.08);
+            const insetY = Math.max(8, bounds.height * 0.05);
+            const left = bounds.x + insetX;
+            const right = bounds.x + bounds.width - insetX;
+            const top = bounds.y + insetY;
+            const bottom = bounds.y + bounds.height - insetY;
+
+            if (pointX < left || pointX > right || pointY < top || pointY > bottom) {
+              return null;
+            }
+
+            const headThreshold = top + (bottom - top) * 0.36;
+            return pointY <= headThreshold ? "head" : "body";
+          };
+
+          const runTapMotion = (area) => {
+            if (area === "head") {
               runStateAction({
                 status: "tap-head",
                 expression: "Blushing",
-                motionGroup: "Flick",
+                motionGroup: motionBinding.tapHead,
                 durationMs: 1700
               });
             } else {
               runStateAction({
                 status: "tap-body",
                 expression: "Surprised",
-                motionGroup: "Tap",
+                motionGroup: motionBinding.tapBody,
                 durationMs: 1700
               });
             }
+          };
+
+          const handleTapInteraction = (area) => {
+            if (area !== "head" && area !== "body") {
+              return;
+            }
+            runTapMotion(area);
+          };
+
+          const queuePetTap = (area) => {
+            if (area !== "head" && area !== "body") {
+              return;
+            }
+
+            const now = Date.now();
+            if (pendingSingleTapTimer && now - lastTapAt <= DOUBLE_TAP_GAP_MS) {
+              clearPendingSingleTap();
+              lastTapAt = 0;
+              setChatVisible(true);
+              focusChatInput();
+              return;
+            }
+
+            lastTapAt = now;
+            clearPendingSingleTap();
+            pendingSingleTapArea = area;
+            pendingSingleTapTimer = setTimeout(() => {
+              pendingSingleTapTimer = null;
+              const areaToRun = pendingSingleTapArea;
+              pendingSingleTapArea = null;
+              if (!areaToRun) {
+                return;
+              }
+              handleTapInteraction(areaToRun);
+            }, SINGLE_TAP_DELAY_MS);
           };
 
           const dragState = {
@@ -703,7 +1170,8 @@
             startX: 0,
             startY: 0,
             prevX: 0,
-            prevY: 0
+            prevY: 0,
+            dragDistance: 0
           };
 
           const stopDragging = () => {
@@ -713,14 +1181,22 @@
 
             if (dragState.moved) {
               suppressTapUntil = Date.now() + 180;
+              clearPendingSingleTap();
             }
 
             dragState.active = false;
             dragState.moved = false;
+            dragState.dragDistance = 0;
           };
+
+          const isPointerInChatPanel = (target) =>
+            Boolean(isElement(target) && target.closest && target.closest("#chat-panel"));
 
           window.addEventListener("mousedown", (event) => {
             if (event.button !== 0) {
+              return;
+            }
+            if (isPointerInChatPanel(event.target)) {
               return;
             }
 
@@ -730,6 +1206,7 @@
             dragState.startY = event.screenY;
             dragState.prevX = event.screenX;
             dragState.prevY = event.screenY;
+            dragState.dragDistance = 0;
           });
 
           window.addEventListener("mousemove", (event) => {
@@ -738,7 +1215,8 @@
             }
 
             const distance = Math.hypot(event.screenX - dragState.startX, event.screenY - dragState.startY);
-            if (distance < 3) {
+            dragState.dragDistance = distance;
+            if (distance < DRAG_ACTIVATE_DISTANCE) {
               return;
             }
 
@@ -754,8 +1232,39 @@
             ipcRenderer.send("pet:window:move-by", { dx, dy });
           });
 
-          window.addEventListener("mouseup", stopDragging);
-          window.addEventListener("blur", stopDragging);
+          window.addEventListener("mouseup", (event) => {
+            const wasActive = dragState.active;
+            const wasMoved = dragState.moved;
+            stopDragging();
+
+            if (event.button !== 0 || !wasActive || wasMoved) {
+              return;
+            }
+
+            if (isPointerInChatPanel(event.target)) {
+              return;
+            }
+
+            if (Date.now() < suppressTapUntil) {
+              return;
+            }
+
+            const point = mapClientToCanvasPoint(event.clientX, event.clientY);
+            if (!point) {
+              return;
+            }
+
+            const area = classifyTapArea(point.x, point.y);
+            if (!area) {
+              return;
+            }
+
+            queuePetTap(area);
+          });
+          window.addEventListener("blur", () => {
+            stopDragging();
+            clearPendingSingleTap();
+          });
           window.addEventListener("mouseleave", (event) => {
             if (event.buttons === 0) {
               stopDragging();
@@ -765,6 +1274,9 @@
           rootEl.addEventListener(
             "wheel",
             (event) => {
+              if (isPointerInChatPanel(event.target)) {
+                return;
+              }
               if (Math.abs(event.deltaY) < 0.01) {
                 return;
               }
@@ -792,46 +1304,89 @@
 
           window.addEventListener("resize", () => {
             app.renderer.resize(window.innerWidth, window.innerHeight);
+            stageHitArea.width = app.renderer.width;
+            stageHitArea.height = app.renderer.height;
             fitModel();
           });
 
-          enterIdle(true);
+          if (chatCloseEl) {
+            chatCloseEl.addEventListener("click", () => {
+              closeChatPanel();
+            });
+          }
 
-          model.on("pointertap", (event) => {
-            if (Date.now() < suppressTapUntil) {
-              return;
-            }
-
-            const point = event?.data?.global;
-            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-              return;
-            }
-
-            const rawHitAreas = model.hitTest(point.x, point.y);
-            if (!Array.isArray(rawHitAreas) || rawHitAreas.length === 0) {
-              return;
-            }
-
-            const hitAreas = normalizeHitAreas(rawHitAreas);
-
-            const bounds = model.getBounds();
-            if (bounds.width > 0 && bounds.height > 0) {
-              const insetX = bounds.width * 0.08;
-              const insetTop = bounds.height * 0.04;
-              const insetBottom = bounds.height * 0.04;
-              const insideCoreArea =
-                point.x >= bounds.x + insetX &&
-                point.x <= bounds.x + bounds.width - insetX &&
-                point.y >= bounds.y + insetTop &&
-                point.y <= bounds.y + bounds.height - insetBottom;
-
-              if (!insideCoreArea) {
+          if (chatFormEl) {
+            chatFormEl.addEventListener("submit", async (event) => {
+              event.preventDefault();
+              if (!chatInputEl) {
                 return;
               }
-            }
 
-            runTapMotion(hitAreas);
+              const text = chatInputEl.value.trim();
+              if (!text) {
+                focusChatInput();
+                return;
+              }
+
+              setChatVisible(true);
+              appendChatMessage("user", text);
+              chatInputEl.value = "";
+
+              const pendingEl = appendChatMessage("assistant", "思考中...", {
+                pending: true
+              });
+              setChatSubmitting(true);
+              const requestToken = ++chatRequestToken;
+
+              try {
+                const response = await ipcRenderer.invoke("pet:chat:send", {
+                  text
+                });
+                if (requestToken !== chatRequestToken) {
+                  return;
+                }
+
+                const replyText =
+                  response &&
+                  typeof response === "object" &&
+                  typeof response.replyText === "string" &&
+                  response.replyText.trim().length > 0
+                    ? response.replyText.trim()
+                    : "我听见啦。";
+
+                if (pendingEl) {
+                  pendingEl.classList.remove("pending");
+                  pendingEl.textContent = replyText;
+                } else {
+                  appendChatMessage("assistant", replyText);
+                }
+              } catch (error) {
+                const message =
+                  error && typeof error === "object" && "message" in error
+                    ? String(error.message)
+                    : "处理消息时出错，请稍后再试";
+                if (pendingEl) {
+                  pendingEl.classList.remove("pending");
+                  pendingEl.textContent = message;
+                } else {
+                  appendChatMessage("assistant", message);
+                }
+              } finally {
+                if (requestToken === chatRequestToken) {
+                  setChatSubmitting(false);
+                  focusChatInput();
+                }
+              }
+            });
+          }
+
+          window.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && isChatVisible()) {
+              closeChatPanel();
+            }
           });
+
+          enterIdle(true);
 
           ipcRenderer.on("pet:event", (_event, data) => {
             if (!data || typeof data !== "object") {
@@ -854,7 +1409,7 @@
             if (data.type === "talking") {
               runStateAction({
                 status: "talking",
-                motionGroup: "Tap",
+                motionGroup: talkingMotionGroup,
                 syntheticLipSyncMs: 1400,
                 pulse: true,
                 durationMs: 1650
@@ -865,14 +1420,14 @@
             if (data.type === "emotion") {
               const emotion = typeof data.value === "string" ? data.value.trim().toLowerCase() : "";
               const mapping = {
-                happy: { expression: "Smile", motionGroup: "FlickRight" },
-                sad: { expression: "Sad", motionGroup: "Idle", motionIndex: 0 },
-                angry: { expression: "Angry", motionGroup: "Shake" },
-                surprised: { expression: "Surprised", motionGroup: "Flick" },
-                shy: { expression: "Blushing", motionGroup: "Idle" },
-                excited: { expression: "Smile", motionGroup: "Flick3" },
-                calm: { expression: "Normal", motionGroup: "Idle" },
-                idle: { expression: "Normal", motionGroup: "Idle" }
+                happy: { expression: "Smile", motionGroup: motionBinding.happy },
+                sad: { expression: "Sad", motionGroup: motionBinding.sad, motionIndex: 0 },
+                angry: { expression: "Angry", motionGroup: motionBinding.angry },
+                surprised: { expression: "Surprised", motionGroup: motionBinding.surprised },
+                shy: { expression: "Blushing", motionGroup: motionBinding.shy },
+                excited: { expression: "Smile", motionGroup: motionBinding.excited },
+                calm: { expression: "Normal", motionGroup: idleMotionGroup },
+                idle: { expression: "Normal", motionGroup: idleMotionGroup }
               };
 
               const action = mapping[emotion] || mapping.idle;

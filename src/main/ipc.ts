@@ -25,6 +25,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("memory:delete", (_, id: string) => runtime.deleteMemoryFact(id));
 
   ipcMain.handle("status:get", () => runtime.getStatus());
+  ipcMain.handle("pet:chat:send", (_, payload: { text?: string }) =>
+    runtime.chatFromPet(payload?.text ?? "")
+  );
 
   ipcMain.on("status:subscribe", (event) => {
     const target = event.sender;
