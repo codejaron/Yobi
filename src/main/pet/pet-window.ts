@@ -1,5 +1,12 @@
 import path from "node:path";
-import { app, BrowserWindow, ipcMain, type IpcMainEvent } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  screen,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent
+} from "electron";
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
@@ -34,8 +41,65 @@ export class PetWindowController {
     senderWindow.setPosition(Math.round(x + dx), Math.round(y + dy));
   };
 
+  private readonly setIgnoreMouseEventsListener = (event: IpcMainEvent, payload: unknown): void => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    const next = payload as {
+      ignore?: boolean;
+      forward?: boolean;
+    };
+
+    if (typeof next.ignore !== "boolean") {
+      return;
+    }
+
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (
+      !senderWindow ||
+      senderWindow.isDestroyed() ||
+      !this.window ||
+      this.window.isDestroyed() ||
+      senderWindow.id !== this.window.id
+    ) {
+      return;
+    }
+
+    senderWindow.setIgnoreMouseEvents(next.ignore, {
+      forward: next.ignore ? next.forward !== false : false
+    });
+  };
+
+  private readonly getCursorPointHandler = (
+    event: IpcMainInvokeEvent
+  ): { x: number; y: number; windowX: number; windowY: number } => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (
+      !senderWindow ||
+      senderWindow.isDestroyed() ||
+      !this.window ||
+      this.window.isDestroyed() ||
+      senderWindow.id !== this.window.id
+    ) {
+      return { x: 0, y: 0, windowX: 0, windowY: 0 };
+    }
+
+    const point = screen.getCursorScreenPoint();
+    const bounds = senderWindow.getBounds();
+    return {
+      x: Number(point.x),
+      y: Number(point.y),
+      windowX: Number(bounds.x),
+      windowY: Number(bounds.y)
+    };
+  };
+
   constructor() {
     ipcMain.on("pet:window:move-by", this.moveWindowByListener);
+    ipcMain.on("pet:window:set-ignore-mouse-events", this.setIgnoreMouseEventsListener);
+    ipcMain.removeHandler("pet:window:get-cursor-position");
+    ipcMain.handle("pet:window:get-cursor-position", this.getCursorPointHandler);
   }
 
   open(input: { modelDir: string; alwaysOnTop: boolean }): void {

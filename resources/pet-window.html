@@ -285,6 +285,24 @@
         }
       };
 
+      const readHitAreaNamesFromModelJson = (modelJsonPath) => {
+        if (!modelJsonPath) {
+          return [];
+        }
+
+        try {
+          const raw = fs.readFileSync(modelJsonPath, "utf-8");
+          const parsed = JSON.parse(raw);
+          const hitAreas = Array.isArray(parsed?.HitAreas) ? parsed.HitAreas : [];
+
+          return hitAreas
+            .map((item) => (item && typeof item.Name === "string" ? item.Name.trim() : ""))
+            .filter((name) => name.length > 0);
+        } catch {
+          return [];
+        }
+      };
+
       const walkFiles = (baseDir) => {
         const result = [];
         if (!baseDir || !fs.existsSync(baseDir)) {
@@ -470,6 +488,8 @@
             model?.internalModel?.motionManager?.definitions
           );
           const modelJsonMotionDefinitions = readMotionDefinitionsFromModelJson(modelJsonPath);
+          const namedHitAreasFromModelJson = readHitAreaNamesFromModelJson(modelJsonPath);
+          const hasNamedHitAreas = namedHitAreasFromModelJson.length > 0;
           const motionDefinitions = {
             ...runtimeMotionDefinitions,
             ...modelJsonMotionDefinitions
@@ -614,12 +634,19 @@
           let pendingSingleTapTimer = null;
           let pendingSingleTapArea = null;
           let lastTapAt = 0;
+          let mousePassthrough = false;
+          let hasPointerSample = false;
+          let lastPointerClientX = 0;
+          let lastPointerClientY = 0;
+          let cursorPollTimer = 0;
+          let cursorPollInFlight = false;
 
           const MOUTH_PARAMETER_ID = "PARAM_MOUTH_OPEN_Y";
           const MOTION_PRIORITY_FORCE = 3;
           const SINGLE_TAP_DELAY_MS = 340;
           const DOUBLE_TAP_GAP_MS = 320;
           const DRAG_ACTIVATE_DISTANCE = 8;
+          const CURSOR_POLL_INTERVAL_MS = 48;
 
           const setChatVisible = (visible) => {
             if (!chatPanelEl) {
@@ -631,6 +658,17 @@
             } else {
               chatPanelEl.classList.add("hidden");
             }
+          };
+
+          const setMousePassthrough = (ignore) => {
+            if (mousePassthrough === ignore) {
+              return;
+            }
+            mousePassthrough = ignore;
+            ipcRenderer.send("pet:window:set-ignore-mouse-events", {
+              ignore,
+              forward: true
+            });
           };
 
           const isChatVisible = () => Boolean(chatPanelEl && !chatPanelEl.classList.contains("hidden"));
@@ -684,6 +722,9 @@
           const closeChatPanel = () => {
             setChatVisible(false);
             resetChatSession();
+            if (hasPointerSample) {
+              syncPointerHitMode(lastPointerClientX, lastPointerClientY);
+            }
           };
 
           const clearStatusTimer = () => {
@@ -1070,21 +1111,7 @@
             };
           };
 
-          const classifyTapArea = (pointX, pointY) => {
-            const rawHitAreas = model.hitTest(pointX, pointY);
-            if (Array.isArray(rawHitAreas) && rawHitAreas.length > 0) {
-              const normalizedAreas = normalizeHitAreas(rawHitAreas)
-                .filter((area) => area.length > 0)
-                .map((area) => area.toLowerCase());
-
-              if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
-                return "head";
-              }
-              if (normalizedAreas.length > 0) {
-                return "body";
-              }
-            }
-
+          const classifyTapAreaFromBounds = (pointX, pointY) => {
             let bounds = null;
             try {
               bounds = model.getBounds();
@@ -1096,8 +1123,8 @@
               return null;
             }
 
-            const insetX = Math.max(8, bounds.width * 0.08);
-            const insetY = Math.max(8, bounds.height * 0.05);
+            const insetX = Math.max(16, bounds.width * 0.2);
+            const insetY = Math.max(14, bounds.height * 0.12);
             const left = bounds.x + insetX;
             const right = bounds.x + bounds.width - insetX;
             const top = bounds.y + insetY;
@@ -1107,8 +1134,135 @@
               return null;
             }
 
-            const headThreshold = top + (bottom - top) * 0.36;
+            const headThreshold = top + (bottom - top) * 0.34;
             return pointY <= headThreshold ? "head" : "body";
+          };
+
+          const classifyTapArea = (pointX, pointY) => {
+            const rawHitAreas = model.hitTest(pointX, pointY);
+            if (!Array.isArray(rawHitAreas) || rawHitAreas.length === 0) {
+              return classifyTapAreaFromBounds(pointX, pointY);
+            }
+
+            const normalizedAreas = normalizeHitAreas(rawHitAreas)
+              .filter((area) => area.length > 0)
+              .map((area) => area.toLowerCase());
+            if (normalizedAreas.length === 0) {
+              return classifyTapAreaFromBounds(pointX, pointY);
+            }
+
+            if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
+              return "head";
+            }
+            if (normalizedAreas.some((area) => area.includes("body") || area.includes("torso"))) {
+              return "body";
+            }
+
+            if (hasNamedHitAreas) {
+              return "body";
+            }
+            return classifyTapAreaFromBounds(pointX, pointY);
+          };
+
+          const isPointInsideChatPanel = (clientX, clientY) => {
+            if (!chatPanelEl || chatPanelEl.classList.contains("hidden")) {
+              return false;
+            }
+
+            const rect = chatPanelEl.getBoundingClientRect();
+            if (!rect || rect.width <= 0 || rect.height <= 0) {
+              return false;
+            }
+
+            return (
+              clientX >= rect.left &&
+              clientX <= rect.right &&
+              clientY >= rect.top &&
+              clientY <= rect.bottom
+            );
+          };
+
+          const isPointerOverModel = (clientX, clientY) => {
+            const point = mapClientToCanvasPoint(clientX, clientY);
+            if (!point) {
+              return false;
+            }
+
+            return classifyTapArea(point.x, point.y) !== null;
+          };
+
+          const syncPointerHitMode = (clientX, clientY) => {
+            if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+              return;
+            }
+
+            if (dragState.active) {
+              setMousePassthrough(false);
+              return;
+            }
+
+            const interactive = isPointInsideChatPanel(clientX, clientY) || isPointerOverModel(clientX, clientY);
+            setMousePassthrough(!interactive);
+          };
+
+          const syncPointerHitModeByScreenPoint = (screenX, screenY, windowX, windowY) => {
+            if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+              return;
+            }
+
+            const offsetX = Number.isFinite(windowX) ? windowX : window.screenX;
+            const offsetY = Number.isFinite(windowY) ? windowY : window.screenY;
+            const clientX = screenX - offsetX;
+            const clientY = screenY - offsetY;
+            hasPointerSample = true;
+            lastPointerClientX = clientX;
+            lastPointerClientY = clientY;
+            syncPointerHitMode(clientX, clientY);
+          };
+
+          const pollCursorPosition = async () => {
+            if (cursorPollInFlight) {
+              return;
+            }
+
+            cursorPollInFlight = true;
+            try {
+              const point = await ipcRenderer.invoke("pet:window:get-cursor-position");
+              if (!point || typeof point !== "object") {
+                return;
+              }
+
+              syncPointerHitModeByScreenPoint(
+                Number(point.x),
+                Number(point.y),
+                Number(point.windowX),
+                Number(point.windowY)
+              );
+            } catch {
+              // ignore
+            } finally {
+              cursorPollInFlight = false;
+            }
+          };
+
+          const startCursorPolling = () => {
+            if (cursorPollTimer) {
+              clearInterval(cursorPollTimer);
+              cursorPollTimer = 0;
+            }
+
+            cursorPollTimer = window.setInterval(() => {
+              void pollCursorPosition();
+            }, CURSOR_POLL_INTERVAL_MS);
+            void pollCursorPosition();
+          };
+
+          const stopCursorPolling = () => {
+            if (!cursorPollTimer) {
+              return;
+            }
+            clearInterval(cursorPollTimer);
+            cursorPollTimer = 0;
           };
 
           const runTapMotion = (area) => {
@@ -1193,6 +1347,10 @@
             Boolean(isElement(target) && target.closest && target.closest("#chat-panel"));
 
           window.addEventListener("mousedown", (event) => {
+            hasPointerSample = true;
+            lastPointerClientX = event.clientX;
+            lastPointerClientY = event.clientY;
+
             if (event.button !== 0) {
               return;
             }
@@ -1207,9 +1365,15 @@
             dragState.prevX = event.screenX;
             dragState.prevY = event.screenY;
             dragState.dragDistance = 0;
+            setMousePassthrough(false);
           });
 
           window.addEventListener("mousemove", (event) => {
+            hasPointerSample = true;
+            lastPointerClientX = event.clientX;
+            lastPointerClientY = event.clientY;
+            syncPointerHitMode(event.clientX, event.clientY);
+
             if (!dragState.active) {
               return;
             }
@@ -1236,6 +1400,10 @@
             const wasActive = dragState.active;
             const wasMoved = dragState.moved;
             stopDragging();
+            hasPointerSample = true;
+            lastPointerClientX = event.clientX;
+            lastPointerClientY = event.clientY;
+            syncPointerHitMode(event.clientX, event.clientY);
 
             if (event.button !== 0 || !wasActive || wasMoved) {
               return;
@@ -1264,11 +1432,19 @@
           window.addEventListener("blur", () => {
             stopDragging();
             clearPendingSingleTap();
+            setMousePassthrough(true);
           });
           window.addEventListener("mouseleave", (event) => {
             if (event.buttons === 0) {
               stopDragging();
+              setMousePassthrough(true);
             }
+          });
+          window.addEventListener("mouseenter", (event) => {
+            hasPointerSample = true;
+            lastPointerClientX = event.clientX;
+            lastPointerClientY = event.clientY;
+            syncPointerHitMode(event.clientX, event.clientY);
           });
 
           rootEl.addEventListener(
@@ -1307,6 +1483,16 @@
             stageHitArea.width = app.renderer.width;
             stageHitArea.height = app.renderer.height;
             fitModel();
+            if (hasPointerSample) {
+              syncPointerHitMode(lastPointerClientX, lastPointerClientY);
+            }
+          });
+
+          setMousePassthrough(true);
+          startCursorPolling();
+          window.addEventListener("beforeunload", () => {
+            stopCursorPolling();
+            setMousePassthrough(false);
           });
 
           if (chatCloseEl) {
