@@ -390,21 +390,24 @@ export class CompanionRuntime {
     const messages: OutboundMessage[] = [];
     const historyTextPieces: string[] = [];
     const degradedVoiceTexts: string[] = [];
+    const synthesizedVoiceByText = new Map<string, Buffer>();
+    const ttsConfig = {
+      voice: config.voice.ttsVoice,
+      rate: config.voice.ttsRate,
+      pitch: config.voice.ttsPitch,
+      proxy: config.voice.proxy,
+      requestTimeoutMs: config.voice.requestTimeoutMs,
+      retryCount: config.voice.retryCount
+    };
 
     if (config.messaging.allowVoiceMessages && parsed.voiceTexts.length > 0) {
       for (const voiceText of parsed.voiceTexts) {
         try {
           const audio = await this.voiceService.synthesize({
             text: voiceText,
-            config: {
-              voice: config.voice.ttsVoice,
-              rate: config.voice.ttsRate,
-              pitch: config.voice.ttsPitch,
-              proxy: config.voice.proxy,
-              requestTimeoutMs: config.voice.requestTimeoutMs,
-              retryCount: config.voice.retryCount
-            }
+            config: ttsConfig
           });
+          synthesizedVoiceByText.set(voiceText, audio);
 
           messages.push({
             kind: "voice",
@@ -466,6 +469,30 @@ export class CompanionRuntime {
         type: "talking",
         value: "talking"
       });
+    }
+
+    const petSpeechText = config.realtimeVoice.enabled
+      ? parsed.voiceTexts.filter((item) => item.trim().length > 0).join("\n") || parsed.visibleText
+      : "";
+
+    if (petSpeechText.trim().length > 0) {
+      try {
+        const cachedAudio = synthesizedVoiceByText.get(petSpeechText);
+        const speechAudio =
+          cachedAudio ??
+          (await this.voiceService.synthesize({
+            text: petSpeechText,
+            config: ttsConfig
+          }));
+
+        this.pet.emitEvent({
+          type: "speech",
+          audioBase64: speechAudio.toString("base64"),
+          mimeType: "audio/mpeg"
+        });
+      } catch (error) {
+        console.warn("Pet speech synthesis failed:", error);
+      }
     }
 
     await this.conversation.commitAssistantMessage({

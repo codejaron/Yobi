@@ -89,9 +89,46 @@
       const params = new URLSearchParams(window.location.search);
       const modelDir = params.get("modelDir") || "";
       const appPath = params.get("appPath") || "";
+      const PET_SCALE_STORAGE_KEY = "yobi.pet.scale.v1";
 
       const updateStatus = (text) => {
         statusEl.textContent = text;
+      };
+
+      const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+      const readScalePreference = () => {
+        try {
+          const raw = localStorage.getItem(PET_SCALE_STORAGE_KEY);
+          if (!raw) {
+            return 1;
+          }
+
+          const parsed = Number(raw);
+          if (!Number.isFinite(parsed)) {
+            return 1;
+          }
+
+          return clamp(parsed, 0.65, 1.85);
+        } catch {
+          return 1;
+        }
+      };
+
+      const saveScalePreference = (value) => {
+        try {
+          localStorage.setItem(PET_SCALE_STORAGE_KEY, String(clamp(value, 0.65, 1.85)));
+        } catch {}
+      };
+
+      const normalizeHitAreas = (areas) => {
+        if (!Array.isArray(areas)) {
+          return [];
+        }
+
+        return areas
+          .filter((value) => typeof value === "string")
+          .map((value) => value.trim());
       };
 
       const walkFiles = (baseDir) => {
@@ -260,8 +297,90 @@
           rootEl.appendChild(app.view);
 
           const model = await Live2DModel.from(`file://${encodeURI(modelJsonPath)}`, {
-            autoInteract: true
+            autoInteract: false
           });
+          model.interactive = true;
+
+          let baseScale = 0.11;
+          let zoomScale = readScalePreference();
+          let statusResetTimer = null;
+          let suppressTapUntil = 0;
+          let activeAudio = null;
+
+          const scheduleIdleStatus = () => {
+            if (statusResetTimer) {
+              clearTimeout(statusResetTimer);
+            }
+
+            statusResetTimer = setTimeout(() => updateStatus("idle"), 1400);
+          };
+
+          const pulseModel = () => {
+            rootEl.classList.add("pulse");
+            setTimeout(() => rootEl.classList.remove("pulse"), 1600);
+          };
+
+          const stopCurrentAudio = () => {
+            if (!activeAudio) {
+              return;
+            }
+
+            try {
+              activeAudio.pause();
+              activeAudio.src = "";
+              activeAudio.load();
+            } catch {}
+
+            activeAudio = null;
+          };
+
+          const playPetSpeech = (audioBase64, mimeType) => {
+            const payload = typeof audioBase64 === "string" ? audioBase64.trim() : "";
+            if (!payload) {
+              return;
+            }
+
+            stopCurrentAudio();
+
+            const audio = new Audio(`data:${mimeType || "audio/mpeg"};base64,${payload}`);
+            activeAudio = audio;
+            audio.volume = 1;
+
+            audio.onplay = () => {
+              pulseModel();
+              updateStatus("talking");
+            };
+
+            audio.onended = () => {
+              if (activeAudio === audio) {
+                activeAudio = null;
+              }
+              scheduleIdleStatus();
+            };
+
+            audio.onerror = () => {
+              if (activeAudio === audio) {
+                activeAudio = null;
+              }
+              updateStatus("speech-error");
+              scheduleIdleStatus();
+            };
+
+            audio.play().catch(() => {
+              if (activeAudio === audio) {
+                activeAudio = null;
+              }
+              updateStatus("speech-blocked");
+              scheduleIdleStatus();
+            });
+          };
+
+          const applyModelLayout = () => {
+            const scale = clamp(baseScale * zoomScale, 0.03, 0.42);
+            model.scale.set(scale);
+            model.x = app.screen.width / 2;
+            model.y = app.screen.height * 0.56;
+          };
 
           const fitModel = () => {
             model.anchor.set(0.5, 0.5);
@@ -274,14 +393,117 @@
                 const targetWidth = app.screen.width * 0.72;
                 const targetHeight = app.screen.height * 0.84;
                 nextScale = Math.min(targetWidth / bounds.width, targetHeight / bounds.height);
-                nextScale = Math.max(0.05, Math.min(nextScale, 0.2));
+                nextScale = clamp(nextScale, 0.05, 0.2);
               }
             } catch {}
 
-            model.scale.set(nextScale);
-            model.x = app.screen.width / 2;
-            model.y = app.screen.height * 0.56;
+            baseScale = nextScale;
+            applyModelLayout();
           };
+
+          const runTapMotion = (hitAreas) => {
+            const normalizedAreas = hitAreas
+              .filter((area) => typeof area === "string" && area.length > 0)
+              .map((area) => area.toLowerCase());
+            if (normalizedAreas.some((area) => area.includes("head") || area.includes("face"))) {
+              model.motion("TapHead");
+            } else {
+              model.motion("TapBody");
+            }
+
+            updateStatus("tap");
+            scheduleIdleStatus();
+          };
+
+          const dragState = {
+            active: false,
+            moved: false,
+            startX: 0,
+            startY: 0,
+            prevX: 0,
+            prevY: 0
+          };
+
+          const stopDragging = () => {
+            if (!dragState.active) {
+              return;
+            }
+
+            if (dragState.moved) {
+              suppressTapUntil = Date.now() + 180;
+            }
+
+            dragState.active = false;
+            dragState.moved = false;
+          };
+
+          window.addEventListener("mousedown", (event) => {
+            if (event.button !== 0) {
+              return;
+            }
+
+            dragState.active = true;
+            dragState.moved = false;
+            dragState.startX = event.screenX;
+            dragState.startY = event.screenY;
+            dragState.prevX = event.screenX;
+            dragState.prevY = event.screenY;
+          });
+
+          window.addEventListener("mousemove", (event) => {
+            if (!dragState.active) {
+              return;
+            }
+
+            const distance = Math.hypot(event.screenX - dragState.startX, event.screenY - dragState.startY);
+            if (distance < 3) {
+              return;
+            }
+
+            const dx = event.screenX - dragState.prevX;
+            const dy = event.screenY - dragState.prevY;
+            if (dx === 0 && dy === 0) {
+              return;
+            }
+
+            dragState.moved = true;
+            dragState.prevX = event.screenX;
+            dragState.prevY = event.screenY;
+            ipcRenderer.send("pet:window:move-by", { dx, dy });
+          });
+
+          window.addEventListener("mouseup", stopDragging);
+          window.addEventListener("blur", stopDragging);
+          window.addEventListener("mouseleave", (event) => {
+            if (event.buttons === 0) {
+              stopDragging();
+            }
+          });
+
+          rootEl.addEventListener(
+            "wheel",
+            (event) => {
+              if (Math.abs(event.deltaY) < 0.01) {
+                return;
+              }
+
+              event.preventDefault();
+              const direction = event.deltaY < 0 ? 1 : -1;
+              const nextScale = clamp(zoomScale + direction * 0.06, 0.65, 1.85);
+              if (nextScale === zoomScale) {
+                return;
+              }
+
+              zoomScale = nextScale;
+              saveScalePreference(zoomScale);
+              applyModelLayout();
+              updateStatus(`scale · ${Math.round(zoomScale * 100)}%`);
+              scheduleIdleStatus();
+            },
+            {
+              passive: false
+            }
+          );
 
           fitModel();
           app.stage.addChild(model);
@@ -293,12 +515,40 @@
 
           updateStatus("idle");
 
-          model.on("hit", (areas) => {
-            if (areas?.includes("Head")) {
-              model.motion("TapHead");
-            } else {
-              model.motion("TapBody");
+          model.on("pointertap", (event) => {
+            if (Date.now() < suppressTapUntil) {
+              return;
             }
+
+            const point = event?.data?.global;
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+              return;
+            }
+
+            const rawHitAreas = model.hitTest(point.x, point.y);
+            if (!Array.isArray(rawHitAreas) || rawHitAreas.length === 0) {
+              return;
+            }
+
+            const hitAreas = normalizeHitAreas(rawHitAreas);
+
+            const bounds = model.getBounds();
+            if (bounds.width > 0 && bounds.height > 0) {
+              const insetX = bounds.width * 0.08;
+              const insetTop = bounds.height * 0.04;
+              const insetBottom = bounds.height * 0.04;
+              const insideCoreArea =
+                point.x >= bounds.x + insetX &&
+                point.x <= bounds.x + bounds.width - insetX &&
+                point.y >= bounds.y + insetTop &&
+                point.y <= bounds.y + bounds.height - insetBottom;
+
+              if (!insideCoreArea) {
+                return;
+              }
+            }
+
+            runTapMotion(hitAreas);
           });
 
           ipcRenderer.on("pet:event", (_event, data) => {
@@ -307,10 +557,10 @@
             }
 
             if (data.type === "talking") {
-              rootEl.classList.add("pulse");
-              setTimeout(() => rootEl.classList.remove("pulse"), 1600);
+              pulseModel();
               model.motion("FlickHair");
               updateStatus("talking");
+              scheduleIdleStatus();
               return;
             }
 
@@ -328,6 +578,12 @@
               const motion = mapping[data.value] || "TapBody";
               model.motion(motion);
               updateStatus(`emotion · ${data.value}`);
+              scheduleIdleStatus();
+              return;
+            }
+
+            if (data.type === "speech") {
+              playPetSpeech(data.audioBase64, data.mimeType);
             }
           });
         } catch (error) {

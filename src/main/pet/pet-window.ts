@@ -1,8 +1,42 @@
 import path from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain, type IpcMainEvent } from "electron";
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
+  private readonly moveWindowByListener = (event: IpcMainEvent, payload: unknown): void => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    const next = payload as {
+      dx?: number;
+      dy?: number;
+    };
+    const dx = Number(next.dx);
+    const dy = Number(next.dy);
+
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+      return;
+    }
+
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (
+      !senderWindow ||
+      senderWindow.isDestroyed() ||
+      !this.window ||
+      this.window.isDestroyed() ||
+      senderWindow.id !== this.window.id
+    ) {
+      return;
+    }
+
+    const [x, y] = senderWindow.getPosition();
+    senderWindow.setPosition(Math.round(x + dx), Math.round(y + dy));
+  };
+
+  constructor() {
+    ipcMain.on("pet:window:move-by", this.moveWindowByListener);
+  }
 
   open(input: { modelDir: string; alwaysOnTop: boolean }): void {
     if (this.window && !this.window.isDestroyed()) {
@@ -49,7 +83,12 @@ export class PetWindowController {
     this.window = null;
   }
 
-  emitEvent(event: { type: "emotion" | "talking"; value: string }): void {
+  emitEvent(
+    event:
+      | { type: "emotion"; value: string }
+      | { type: "talking"; value: string }
+      | { type: "speech"; audioBase64: string; mimeType?: string }
+  ): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
