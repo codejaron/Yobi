@@ -22,7 +22,6 @@ export const appConfigSchema = z.object({
   }),
   messaging: z.object({
     allowVoiceMessages: z.boolean().default(true),
-    allowStickers: z.boolean().default(true),
     allowPhotoInput: z.boolean().default(true)
   }),
   providers: z.array(providerSchema),
@@ -41,12 +40,10 @@ export const appConfigSchema = z.object({
   voice: z.object({
     ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
     ttsRate: z.string().default("+0%"),
-    ttsPitch: z.string().default("+0Hz")
-  }),
-  stickers: z.object({
-    memeSearchEndpoint: z.string().default(""),
-    offlineFallbackDir: z.string().default(""),
-    requestTimeoutMs: z.number().int().min(1000).max(30000).default(8000)
+    ttsPitch: z.string().default("+0Hz"),
+    proxy: z.string().default(""),
+    requestTimeoutMs: z.number().int().min(3000).max(30000).default(15000),
+    retryCount: z.number().int().min(0).max(2).default(1)
   }),
   background: z.object({
     keepAwake: z.boolean().default(true)
@@ -155,7 +152,6 @@ export interface ReminderDocument {
 export interface AssistantOutputParseResult {
   visibleText: string;
   voiceTexts: string[];
-  stickerKeywords: string[];
   reminders: Array<{
     time: string;
     text: string;
@@ -171,7 +167,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   messaging: {
     allowVoiceMessages: true,
-    allowStickers: true,
     allowPhotoInput: true
   },
   providers: [
@@ -214,12 +209,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   voice: {
     ttsVoice: "zh-CN-XiaoxiaoNeural",
     ttsRate: "+0%",
-    ttsPitch: "+0Hz"
-  },
-  stickers: {
-    memeSearchEndpoint: "",
-    offlineFallbackDir: "",
-    requestTimeoutMs: 8000
+    ttsPitch: "+0Hz",
+    proxy: "",
+    requestTimeoutMs: 15000,
+    retryCount: 1
   },
   background: {
     keepAwake: true

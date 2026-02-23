@@ -2,7 +2,6 @@ import type { AssistantOutputParseResult } from "@shared/types";
 
 const REMINDER_PATTERN = /\[reminder\]([\s\S]*?)\[\/reminder\]/gi;
 const VOICE_PATTERN = /\[voice\]([\s\S]*?)\[\/voice\]/gi;
-const STICKER_PATTERN = /\[sticker:([^\]]+)\]/gi;
 const EMOTION_PATTERN = /\[(happy|sad|shy|angry|excited|calm|idle)\]/gi;
 
 function squeeze(text: string): string {
@@ -38,7 +37,6 @@ function parseReminderPayload(payload: string): { time: string; text: string } |
 export function parseAssistantOutput(rawText: string): AssistantOutputParseResult {
   const reminders: Array<{ time: string; text: string }> = [];
   const voiceTexts: string[] = [];
-  const stickerKeywords: string[] = [];
   const emotions: string[] = [];
 
   let working = rawText;
@@ -59,14 +57,6 @@ export function parseAssistantOutput(rawText: string): AssistantOutputParseResul
     return "";
   });
 
-  working = working.replace(STICKER_PATTERN, (_match, keyword: string) => {
-    const normalized = keyword.trim();
-    if (normalized) {
-      stickerKeywords.push(normalized);
-    }
-    return "";
-  });
-
   working = working.replace(EMOTION_PATTERN, (_match, emotion: string) => {
     emotions.push(emotion.toLowerCase());
     return "";
@@ -75,7 +65,6 @@ export function parseAssistantOutput(rawText: string): AssistantOutputParseResul
   return {
     visibleText: squeeze(working),
     voiceTexts,
-    stickerKeywords,
     reminders,
     emotions
   };

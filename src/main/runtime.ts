@@ -25,7 +25,6 @@ import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage, OutboundMessage } from "@main/channels/types";
 import { parseAssistantOutput, mergeVoiceIntoText } from "@main/services/output-parser";
 import { VoiceService } from "@main/services/voice";
-import { StickerService } from "@main/services/sticker";
 import { KeepAwakeService } from "@main/services/keep-awake";
 import { ReminderService } from "@main/services/reminders";
 import { PetWindowController } from "@main/pet/pet-window";
@@ -38,6 +37,8 @@ interface HistoryQuery {
 }
 
 export class CompanionRuntime {
+  private static readonly CHAT_REPLY_TIMEOUT_MS = 75_000;
+  private static readonly PROACTIVE_DECISION_TIMEOUT_MS = 45_000;
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
   private readonly configStore = new ConfigStore(this.paths);
@@ -81,7 +82,6 @@ export class CompanionRuntime {
 
   private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
   private readonly voiceService = new VoiceService();
-  private readonly stickerService = new StickerService();
   private readonly keepAwake = new KeepAwakeService();
   private readonly pet = new PetWindowController();
   private readonly realtimeVoice = new RealtimeVoiceService();
@@ -117,33 +117,37 @@ export class CompanionRuntime {
     await this.startTelegram();
 
     this.activityMonitor.onChange(async ({ snapshot }) => {
-      const previous = this.lastActivity;
-      this.lastActivity = snapshot;
+      try {
+        const previous = this.lastActivity;
+        this.lastActivity = snapshot;
 
-      await this.handleProactive({
-        trigger: {
-          type: "activity-switch",
-          detail: snapshot.summary
-        },
-        activity: snapshot
-      });
+        await this.handleProactive({
+          trigger: {
+            type: "activity-switch",
+            detail: snapshot.summary
+          },
+          activity: snapshot
+        });
 
-      if (previous) {
-        const gap =
-          new Date(snapshot.changedAt).getTime() - new Date(previous.changedAt).getTime();
+        if (previous) {
+          const gap =
+            new Date(snapshot.changedAt).getTime() - new Date(previous.changedAt).getTime();
 
-        if (gap > this.configStore.getConfig().proactive.comebackGraceMs) {
-          await this.handleProactive({
-            trigger: {
-              type: "comeback",
-              detail: "检测到用户重新活跃"
-            },
-            activity: snapshot
-          });
+          if (gap > this.configStore.getConfig().proactive.comebackGraceMs) {
+            await this.handleProactive({
+              trigger: {
+                type: "comeback",
+                detail: "检测到用户重新活跃"
+              },
+              activity: snapshot
+            });
+          }
         }
-      }
 
-      await this.emitStatus();
+        await this.emitStatus();
+      } catch (error) {
+        console.warn("Activity callback failed:", error);
+      }
     });
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
@@ -257,6 +261,12 @@ export class CompanionRuntime {
   }
 
   private async handleInbound(inbound: InboundMessage): Promise<void> {
+    console.info("[runtime] Inbound Telegram message", {
+      kind: inbound.kind,
+      fromUserId: inbound.fromUserId,
+      preview: inbound.text.slice(0, 80)
+    });
+
     if (inbound.kind === "text") {
       const handled = await this.tryHandleTelegramCommand(inbound.text);
       if (handled) {
@@ -272,11 +282,19 @@ export class CompanionRuntime {
       return;
     }
 
-    const reply = await this.conversation.replyToUser({
-      text: inbound.text,
-      channel: "telegram",
-      activity: this.activityMonitor.getCurrentSnapshot(),
-      photoUrl: inbound.photoUrl
+    const reply = await this.withTimeout(
+      this.conversation.replyToUser({
+        text: inbound.text,
+        channel: "telegram",
+        activity: this.activityMonitor.getCurrentSnapshot(),
+        photoUrl: inbound.photoUrl
+      }),
+      CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+      "LLM 回复超时"
+    );
+
+    console.info("[runtime] LLM reply generated", {
+      length: reply.length
     });
 
     await this.deliverAssistantOutput({
@@ -381,7 +399,10 @@ export class CompanionRuntime {
             config: {
               voice: config.voice.ttsVoice,
               rate: config.voice.ttsRate,
-              pitch: config.voice.ttsPitch
+              pitch: config.voice.ttsPitch,
+              proxy: config.voice.proxy,
+              requestTimeoutMs: config.voice.requestTimeoutMs,
+              retryCount: config.voice.retryCount
             }
           });
 
@@ -391,41 +412,13 @@ export class CompanionRuntime {
             filename: "yobi-voice.mp3"
           });
           historyTextPieces.push(`[语音] ${voiceText}`);
-        } catch {
+        } catch (error) {
+          console.warn("Voice synthesis failed:", error);
           degradedVoiceTexts.push(voiceText);
         }
       }
     } else if (parsed.voiceTexts.length > 0) {
       degradedVoiceTexts.push(...parsed.voiceTexts);
-    }
-
-    if (config.messaging.allowStickers && parsed.stickerKeywords.length > 0) {
-      for (const keyword of parsed.stickerKeywords) {
-        const sticker = await this.stickerService.findSticker({
-          keyword,
-          endpoint: config.stickers.memeSearchEndpoint,
-          timeoutMs: config.stickers.requestTimeoutMs,
-          offlineDir: this.resolveStickerFallbackDir(config.stickers.offlineFallbackDir)
-        });
-
-        if (!sticker) {
-          continue;
-        }
-
-        if (sticker.type === "url") {
-          messages.push({
-            kind: "photo",
-            photoUrl: sticker.value
-          });
-        } else {
-          messages.push({
-            kind: "photo",
-            photoPath: sticker.value
-          });
-        }
-
-        historyTextPieces.push(`[表情包:${keyword}]`);
-      }
     }
 
     const textPayload = [...degradedVoiceTexts, parsed.visibleText].filter(Boolean).join("\\n");
@@ -581,10 +574,14 @@ export class CompanionRuntime {
     trigger: { type: "activity-switch" | "silence" | "comeback"; detail: string };
     activity: ActivitySnapshot | null;
   }): Promise<void> {
-    const decision = await this.proactive.evaluate({
-      trigger: input.trigger,
-      activity: input.activity
-    });
+    const decision = await this.withTimeout(
+      this.proactive.evaluate({
+        trigger: input.trigger,
+        activity: input.activity
+      }),
+      CompanionRuntime.PROACTIVE_DECISION_TIMEOUT_MS,
+      "主动消息决策超时"
+    );
 
     if (!decision.speak || !decision.message) {
       return;
@@ -657,19 +654,6 @@ export class CompanionRuntime {
     this.realtimeVoice.stop();
   }
 
-  private resolveStickerFallbackDir(inputDir: string): string {
-    const trimmed = inputDir.trim();
-    if (!trimmed) {
-      return "";
-    }
-
-    if (path.isAbsolute(trimmed)) {
-      return trimmed;
-    }
-
-    return path.join(app.getAppPath(), trimmed);
-  }
-
   private async collectStatus(): Promise<AppStatus> {
     return {
       bootedAt: this.bootedAt,
@@ -695,6 +679,19 @@ export class CompanionRuntime {
     for (const listener of this.statusListeners) {
       listener(status);
     }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label}（${Math.floor(timeoutMs / 1000)} 秒）`));
+      }, timeoutMs);
+
+      promise
+        .then((value) => resolve(value))
+        .catch((error) => reject(error))
+        .finally(() => clearTimeout(timer));
+    });
   }
 }
 

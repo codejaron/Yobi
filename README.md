@@ -9,8 +9,7 @@
 - 屏幕感知两层策略（`active-win` 标题检测 + `node-screenshots` + `sharp`）
 - 主动聊天决策（状态切换 / 沉默 / 回归）
 - 三层感知控制（全局开关 + `/eyes on/off` + 锁屏/空闲自动暂停）
-- 语音消息标记（`[voice]...[/voice]`，失败自动降级文字）
-- 表情包标记（`[sticker:关键词]`，在线搜索 + 本地目录兜底）
+- 语音消息标记（`[voice]...[/voice]`，`edge-tts-universal` + 自动重试）
 - 提醒标记（`[reminder]{...}[/reminder]`，支持 `/reminders` 与 `/cancel`）
 - Telegram 图片输入（`message:photo` 多模态理解）
 - 后台保活（macOS `caffeinate -i`）
@@ -50,4 +49,4 @@ npm run dev
 
 - 未配置 Telegram token/chatId 时，Bot 不会连接。
 - 模型名采用手动输入，便于兼容 OpenAI-compatible 服务（DeepSeek、Moonshot、智谱、Ollama、LM Studio 等）。
-- `edge-tts-universal` 未安装时，`[voice]` 标签会自动降级为文本输出。
+- Edge TTS 使用微软在线语音服务（无需额外 API Key），网络波动时会自动重试。

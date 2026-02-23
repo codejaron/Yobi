@@ -54,6 +54,9 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+}).catch((error) => {
+  console.error("Failed to start Yobi runtime:", error);
+  app.quit();
 });
 
 app.on("window-all-closed", () => {

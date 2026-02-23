@@ -65,7 +65,7 @@ export function SettingsPage({
       <Card>
         <CardHeader>
           <CardTitle>多模态消息</CardTitle>
-          <CardDescription>语音/表情包/图片输入能力控制。</CardDescription>
+          <CardDescription>语音/图片输入能力控制。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
@@ -78,22 +78,6 @@ export function SettingsPage({
                   messaging: {
                     ...config.messaging,
                     allowVoiceMessages: checked
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>允许发表情包</Label>
-            <Switch
-              checked={config.messaging.allowStickers}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  messaging: {
-                    ...config.messaging,
-                    allowStickers: checked
                   }
                 })
               }
@@ -141,6 +125,23 @@ export function SettingsPage({
             />
           </div>
 
+          <div className="space-y-1.5">
+            <Label>TTS 代理（可选）</Label>
+            <Input
+              value={config.voice.proxy}
+              placeholder="http://127.0.0.1:7890"
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  voice: {
+                    ...config.voice,
+                    proxy: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>语速</Label>
@@ -175,64 +176,44 @@ export function SettingsPage({
               />
             </div>
           </div>
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>表情包参数</CardTitle>
-          <CardDescription>在线搜索失败时可走本地素材目录兜底。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>Meme 搜索 API（MCP 网关）</Label>
-            <Input
-              value={config.stickers.memeSearchEndpoint}
-              placeholder="http://127.0.0.1:8788/meme/search"
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  stickers: {
-                    ...config.stickers,
-                    memeSearchEndpoint: event.target.value
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>离线兜底目录（可选）</Label>
-            <Input
-              value={config.stickers.offlineFallbackDir}
-              placeholder="/path/to/ChineseBQB"
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  stickers: {
-                    ...config.stickers,
-                    offlineFallbackDir: event.target.value
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>请求超时（毫秒）</Label>
-            <Input
-              value={String(config.stickers.requestTimeoutMs)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  stickers: {
-                    ...config.stickers,
-                    requestTimeoutMs:
-                      Number(event.target.value) || config.stickers.requestTimeoutMs
-                  }
-                })
-              }
-            />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>合成超时（毫秒）</Label>
+              <Input
+                value={String(config.voice.requestTimeoutMs)}
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    voice: {
+                      ...config.voice,
+                      requestTimeoutMs:
+                        Number.isFinite(Number(event.target.value))
+                          ? Math.max(3000, Math.min(30000, Number(event.target.value)))
+                          : config.voice.requestTimeoutMs
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>失败重试次数</Label>
+              <Input
+                value={String(config.voice.retryCount)}
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    voice: {
+                      ...config.voice,
+                      retryCount:
+                        Number.isFinite(Number(event.target.value))
+                          ? Math.max(0, Math.min(2, Number(event.target.value)))
+                          : config.voice.retryCount
+                    }
+                  })
+                }
+              />
+            </div>
           </div>
         </CardContent>
       </Card>

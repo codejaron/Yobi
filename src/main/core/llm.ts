@@ -49,16 +49,18 @@ export class LlmRouter {
 
   async generateChatReply(input: ChatReplyInput): Promise<string> {
     const config = this.getConfig();
-    const model = this.getModel(config.modelRouting.chat, "chat");
+    const route = config.modelRouting.chat;
+    const model = this.getModel(route, "chat");
 
     const system = [
       input.characterPrompt,
       "你会根据长期记忆和最近上下文回复，简短自然。",
       "你可以在需要时输出这些标记：",
       "- [voice]...[/voice] 表示这段适合语音发送。",
-      "- [sticker:关键词] 让系统发送对应表情包。",
       "- [reminder]{\"time\":\"ISO8601\",\"text\":\"提醒内容\"}[/reminder] 创建提醒。",
       "- [happy]/[sad]/[shy]/[angry]/[excited]/[calm]/[idle] 用于桌宠情绪。",
+      "强规则1：只有当用户明确要求语音/朗读时，才允许输出 [voice]...[/voice]。",
+      "强规则1补充：用户没有明确要求语音时，严禁输出 [voice] 标签。",
       "除标记外不要解释标记含义。",
       `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
       input.activity
@@ -71,12 +73,19 @@ export class LlmRouter {
       `用户新消息: ${input.userMessage}`
     ].join("\n\n");
 
+    const generationOptions: Record<string, unknown> = {
+      model,
+      system,
+      maxOutputTokens: 400
+    };
+
+    if (this.supportsTemperature(route)) {
+      generationOptions.temperature = 0.75;
+    }
+
     const response = input.userPhotoUrl
       ? await generateText({
-          model,
-          system,
-          temperature: 0.75,
-          maxOutputTokens: 400,
+          ...generationOptions,
           messages: [
             {
               role: "user",
@@ -94,11 +103,8 @@ export class LlmRouter {
           ]
         } as any)
       : await generateText({
-          model,
-          system,
+          ...generationOptions,
           prompt,
-          temperature: 0.75,
-          maxOutputTokens: 400
         } as any);
 
     return response.text.trim();
@@ -219,6 +225,23 @@ export class LlmRouter {
     return createOpenAI({
       apiKey: provider.apiKey
     })(model);
+  }
+
+  private supportsTemperature(route: ModelRoute): boolean {
+    const modelId = route.model.trim().toLowerCase();
+    if (!modelId) {
+      return true;
+    }
+
+    if (modelId.startsWith("gpt-5")) {
+      return false;
+    }
+
+    if (modelId.startsWith("o1") || modelId.startsWith("o3") || modelId.startsWith("o4")) {
+      return false;
+    }
+
+    return !modelId.includes("reasoning");
   }
 
   private formatHistory(history: HistoryMessage[]): string {

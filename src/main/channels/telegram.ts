@@ -88,8 +88,17 @@ export class TelegramChannel implements ChatChannel {
     }
 
     if (message.kind === "voice") {
-      const input = new InputFile(message.audio, message.filename ?? "voice.mp3");
-      await this.bot.api.sendVoice(telegram.chatId, input, {
+      const filename = (message.filename ?? "voice.mp3").toLowerCase();
+      const input = new InputFile(message.audio, filename);
+
+      if (/\.(ogg|opus|mp3|m4a)$/.test(filename)) {
+        await this.bot.api.sendVoice(telegram.chatId, input, {
+          caption: message.caption
+        });
+        return;
+      }
+
+      await this.bot.api.sendAudio(telegram.chatId, input, {
         caption: message.caption
       });
       return;
