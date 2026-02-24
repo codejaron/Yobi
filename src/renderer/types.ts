@@ -8,6 +8,7 @@ import type {
 
 export type PageId =
   | "dashboard"
+  | "console"
   | "providers"
   | "character"
   | "memory"

@@ -1,12 +1,25 @@
 import type { ToolSet } from "ai";
 import type { z } from "zod";
-import type { ActivitySnapshot, AppConfig } from "@shared/types";
+import type { ActivitySnapshot, AppConfig, CommandApprovalDecision } from "@shared/types";
 
 export interface ToolMediaAttachment {
   type: "image" | "file";
   path: string;
   mimeType: string;
 }
+
+export type ToolApprovalDecision = CommandApprovalDecision;
+
+export interface ToolApprovalRequest {
+  toolName: string;
+  params: Record<string, unknown>;
+  description: string;
+  signature: string;
+}
+
+export type ToolApprovalHandler = (
+  request: ToolApprovalRequest
+) => Promise<ToolApprovalDecision>;
 
 export interface ToolResult {
   success: boolean;
@@ -20,6 +33,7 @@ export interface ToolExecutionContext {
   userMessage: string;
   activity: ActivitySnapshot | null;
   getConfig: () => AppConfig;
+  requestApproval?: ToolApprovalHandler;
 }
 
 export interface ToolDefinition<TInput extends Record<string, unknown> = Record<string, unknown>> {

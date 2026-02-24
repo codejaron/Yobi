@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { app, powerMonitor } from "electron";
 import type {
@@ -6,6 +7,8 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
+  CommandApprovalDecision,
+  ConsoleChatEvent,
   HistoryMessage,
   MemoryFact
 } from "@shared/types";
@@ -30,6 +33,7 @@ import { ReminderService } from "@main/services/reminders";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
 import { createDefaultToolRegistry } from "@main/tools/bootstrap";
+import type { ToolApprovalRequest } from "@main/tools/types";
 
 interface HistoryQuery {
   query?: string;
@@ -37,8 +41,13 @@ interface HistoryQuery {
   offset?: number;
 }
 
+interface PendingConsoleApproval {
+  requestId: string;
+  resolve: (decision: CommandApprovalDecision) => void;
+}
+
 export class CompanionRuntime {
-  private static readonly CHAT_REPLY_TIMEOUT_MS = 75_000;
+  private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
   private static readonly PROACTIVE_DECISION_TIMEOUT_MS = 45_000;
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
@@ -98,6 +107,8 @@ export class CompanionRuntime {
   });
 
   private statusListeners = new Set<(status: AppStatus) => void>();
+  private consoleChatListeners = new Set<(event: ConsoleChatEvent) => void>();
+  private pendingConsoleApprovals = new Map<string, PendingConsoleApproval>();
   private silenceTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private lastSilenceHandledAt: string | null = null;
@@ -181,6 +192,10 @@ export class CompanionRuntime {
     this.keepAwake.stop();
     this.pet.close();
     this.realtimeVoice.stop();
+    for (const pending of this.pendingConsoleApprovals.values()) {
+      pending.resolve("deny");
+    }
+    this.pendingConsoleApprovals.clear();
     await this.toolRegistry.dispose();
     await this.telegram.stop();
   }
@@ -191,6 +206,14 @@ export class CompanionRuntime {
 
     return () => {
       this.statusListeners.delete(listener);
+    };
+  }
+
+  onConsoleChatEvent(listener: (event: ConsoleChatEvent) => void): () => void {
+    this.consoleChatListeners.add(listener);
+
+    return () => {
+      this.consoleChatListeners.delete(listener);
     };
   }
 
@@ -243,6 +266,48 @@ export class CompanionRuntime {
     return this.collectStatus();
   }
 
+  async startConsoleChat(text: string): Promise<{ requestId: string }> {
+    const normalized = text.trim();
+    if (!normalized) {
+      throw new Error("消息不能为空");
+    }
+
+    const requestId = randomUUID();
+    queueMicrotask(() => {
+      void this.runConsoleChatRequest(requestId, normalized);
+    });
+
+    return {
+      requestId
+    };
+  }
+
+  async resolveConsoleApproval(input: {
+    approvalId: string;
+    decision: CommandApprovalDecision;
+  }): Promise<{ accepted: boolean }> {
+    const pending = this.pendingConsoleApprovals.get(input.approvalId);
+    if (!pending) {
+      return {
+        accepted: false
+      };
+    }
+
+    this.pendingConsoleApprovals.delete(input.approvalId);
+    pending.resolve(input.decision);
+    this.emitConsoleChatEvent({
+      requestId: pending.requestId,
+      type: "approval-decision",
+      approvalId: input.approvalId,
+      decision: input.decision,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      accepted: true
+    };
+  }
+
   async chatFromPet(text: string): Promise<{ replyText: string }> {
     const normalized = text.trim();
     if (!normalized) {
@@ -286,6 +351,141 @@ export class CompanionRuntime {
     return {
       replyText: delivered.displayText
     };
+  }
+
+  private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
+    const activity = this.activityMonitor.getCurrentSnapshot();
+    this.emitConsoleChatEvent({
+      requestId,
+      type: "thinking",
+      state: "start",
+      timestamp: new Date().toISOString()
+    });
+
+    try {
+      const rawReply = await this.withTimeout(
+        this.conversation.replyToUser({
+          text,
+          channel: "system",
+          activity,
+          stream: {
+            onReasoningDelta: (delta) => {
+              this.emitConsoleChatEvent({
+                requestId,
+                type: "reasoning-delta",
+                delta,
+                timestamp: new Date().toISOString()
+              });
+            },
+            onTextDelta: (delta) => {
+              this.emitConsoleChatEvent({
+                requestId,
+                type: "text-delta",
+                delta,
+                timestamp: new Date().toISOString()
+              });
+            },
+            onToolCall: (payload) => {
+              this.emitConsoleChatEvent({
+                requestId,
+                type: "tool-call",
+                toolCallId: payload.toolCallId,
+                toolName: payload.toolName,
+                input: payload.input,
+                timestamp: new Date().toISOString()
+              });
+            },
+            onToolResult: (payload) => {
+              this.emitConsoleChatEvent({
+                requestId,
+                type: "tool-result",
+                toolCallId: payload.toolCallId,
+                toolName: payload.toolName,
+                input: payload.input,
+                output: payload.output,
+                error: payload.error,
+                success: payload.success,
+                timestamp: new Date().toISOString()
+              });
+            }
+          },
+          requestApproval: (request) => this.requestConsoleApproval(requestId, request)
+        }),
+        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+        "LLM 回复超时"
+      );
+
+      const delivered = await this.deliverAssistantOutput({
+        rawText: rawReply,
+        activity,
+        proactive: false,
+        destination: "console",
+        historyChannel: "system"
+      });
+
+      this.emitConsoleChatEvent({
+        requestId,
+        type: "final",
+        rawText: rawReply,
+        displayText: delivered.displayText,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "处理消息时出现未知错误。";
+      this.emitConsoleChatEvent({
+        requestId,
+        type: "error",
+        message,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      this.flushPendingApprovalsForRequest(requestId);
+      this.emitConsoleChatEvent({
+        requestId,
+        type: "thinking",
+        state: "stop",
+        timestamp: new Date().toISOString()
+      });
+      await this.emitStatus();
+    }
+  }
+
+  private async requestConsoleApproval(
+    requestId: string,
+    request: ToolApprovalRequest
+  ): Promise<CommandApprovalDecision> {
+    if (this.consoleChatListeners.size === 0) {
+      return "deny";
+    }
+
+    const approvalId = randomUUID();
+    this.emitConsoleChatEvent({
+      requestId,
+      type: "approval-request",
+      approvalId,
+      toolName: request.toolName,
+      description: request.description,
+      timestamp: new Date().toISOString()
+    });
+
+    return new Promise<CommandApprovalDecision>((resolve) => {
+      this.pendingConsoleApprovals.set(approvalId, {
+        requestId,
+        resolve
+      });
+    });
+  }
+
+  private flushPendingApprovalsForRequest(requestId: string): void {
+    for (const [approvalId, pending] of this.pendingConsoleApprovals.entries()) {
+      if (pending.requestId !== requestId) {
+        continue;
+      }
+
+      this.pendingConsoleApprovals.delete(approvalId);
+      pending.resolve("deny");
+    }
   }
 
   private async startTelegram(): Promise<void> {
@@ -483,12 +683,13 @@ export class CompanionRuntime {
     rawText: string;
     activity: ActivitySnapshot | null;
     proactive: boolean;
-    destination?: "telegram" | "pet";
+    destination?: "telegram" | "pet" | "console";
     historyChannel?: HistoryMessage["channel"];
   }): Promise<{ displayText: string }> {
     const config = this.getConfig();
     const destination = input.destination ?? "telegram";
     const sendToTelegram = destination === "telegram";
+    const emitPetEvents = destination !== "console";
     const parsed = parseAssistantOutput(input.rawText);
 
     const reminders = await this.reminderService.createBatch(
@@ -579,7 +780,7 @@ export class CompanionRuntime {
       }
     }
 
-    if (parsed.emotions.length > 0) {
+    if (emitPetEvents && parsed.emotions.length > 0) {
       const emotion = parsed.emotions.at(-1) ?? "idle";
       this.pet.emitEvent({
         type: "emotion",
@@ -587,14 +788,14 @@ export class CompanionRuntime {
       });
     }
 
-    if (messages.length > 0 || destination === "pet") {
+    if (emitPetEvents && (messages.length > 0 || destination === "pet")) {
       this.pet.emitEvent({
         type: "talking",
         value: "talking"
       });
     }
 
-    const petSpeechText = config.realtimeVoice.enabled
+    const petSpeechText = emitPetEvents && config.realtimeVoice.enabled
       ? parsed.voiceTexts.filter((item) => item.trim().length > 0).join("\n") || parsed.visibleText
       : "";
 
@@ -840,6 +1041,16 @@ export class CompanionRuntime {
     const status = await this.collectStatus();
     for (const listener of this.statusListeners) {
       listener(status);
+    }
+  }
+
+  private emitConsoleChatEvent(event: ConsoleChatEvent): void {
+    if (this.consoleChatListeners.size === 0) {
+      return;
+    }
+
+    for (const listener of this.consoleChatListeners) {
+      listener(event);
     }
   }
 

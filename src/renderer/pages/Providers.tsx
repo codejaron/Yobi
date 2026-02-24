@@ -55,6 +55,7 @@ export function ProvidersPage({
           id,
           label: "Custom Provider",
           kind: "custom-openai",
+          apiMode: "chat",
           apiKey: "",
           baseUrl: "https://api.openai.com/v1",
           enabled: true
@@ -146,6 +147,25 @@ export function ProvidersPage({
                     <option value="custom-openai">Custom OpenAI Compatible</option>
                   </Select>
                 </div>
+
+                {provider.kind === "openai" || provider.kind === "custom-openai" ? (
+                  <div className="space-y-1.5">
+                    <Label>接口模式</Label>
+                    <Select
+                      value={provider.apiMode}
+                      onChange={(event) =>
+                        setConfig(
+                          updateProvider(config, provider.id, {
+                            apiMode: event.target.value as ProviderConfig["apiMode"]
+                          })
+                        )
+                      }
+                    >
+                      <option value="chat">Chat Completions</option>
+                      <option value="responses">Responses API</option>
+                    </Select>
+                  </div>
+                ) : null}
 
                 <div className="space-y-1.5 md:col-span-2">
                   <Label>API Key</Label>

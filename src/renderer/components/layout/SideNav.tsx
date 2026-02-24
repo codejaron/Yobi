@@ -3,6 +3,7 @@ import {
   Brain,
   Gauge,
   History,
+  MessageSquare,
   MessageCircleHeart,
   Settings2
 } from "lucide-react";
@@ -16,6 +17,7 @@ const items: Array<{
   icon: ComponentType<{ className?: string }>;
 }> = [
   { id: "dashboard", label: "仪表盘", icon: Gauge },
+  { id: "console", label: "聊天", icon: MessageSquare },
   { id: "providers", label: "Provider", icon: Bot },
   { id: "character", label: "角色", icon: MessageCircleHeart },
   { id: "memory", label: "记忆", icon: Brain },

@@ -2,6 +2,8 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
+  CommandApprovalDecision,
+  ConsoleChatEvent,
   HistoryMessage,
   MemoryFact
 } from "./types";
@@ -21,4 +23,11 @@ export interface CompanionApi {
 
   getStatus(): Promise<AppStatus>;
   onStatus(listener: (status: AppStatus) => void): () => void;
+
+  sendConsoleChat(text: string): Promise<{ requestId: string }>;
+  approveConsoleCommand(input: {
+    approvalId: string;
+    decision: CommandApprovalDecision;
+  }): Promise<{ accepted: boolean }>;
+  onConsoleChatEvent(listener: (event: ConsoleChatEvent) => void): () => void;
 }

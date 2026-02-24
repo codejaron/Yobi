@@ -4,7 +4,8 @@ import { LlmRouter } from "./llm";
 import { MemoryManager } from "./memory";
 import { HistoryStore } from "@main/storage/history";
 import { ContextStore } from "@main/storage/context-store";
-import type { ToolRegistry } from "@main/tools/types";
+import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
+import type { ChatReplyStreamListener } from "./llm";
 
 export class ConversationEngine {
   constructor(
@@ -22,6 +23,8 @@ export class ConversationEngine {
     channel: "telegram" | "system";
     activity: ActivitySnapshot | null;
     photoUrl?: string;
+    stream?: ChatReplyStreamListener;
+    requestApproval?: ToolApprovalHandler;
   }): Promise<string> {
     const config = this.getConfig();
     await this.historyStore.append("user", input.text, input.channel);
@@ -34,7 +37,8 @@ export class ConversationEngine {
     const tools = this.toolRegistry.getToolSet({
       channel: input.channel,
       userMessage: input.text,
-      activity: input.activity
+      activity: input.activity,
+      requestApproval: input.requestApproval
     });
 
     const answer = await this.llm.generateChatReply({
@@ -44,7 +48,8 @@ export class ConversationEngine {
       memoryFacts: this.memoryManager.listFacts(),
       activity: input.activity,
       userPhotoUrl: input.photoUrl,
-      tools
+      tools,
+      stream: input.stream
     });
 
     return answer;

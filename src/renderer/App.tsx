@@ -10,6 +10,7 @@ import { SideNav } from "@renderer/components/layout/SideNav";
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
 import { DashboardPage } from "@renderer/pages/Dashboard";
+import { ConsoleChatPage } from "@renderer/pages/ConsoleChat";
 import { ProvidersPage } from "@renderer/pages/Providers";
 import { CharacterPage } from "@renderer/pages/Character";
 import { MemoryPage } from "@renderer/pages/Memory";
@@ -23,6 +24,8 @@ function pageTitle(page: PageId): string {
       return "运行仪表盘";
     case "providers":
       return "Provider 与模型路由";
+    case "console":
+      return "聊天控制台";
     case "character":
       return "角色人设";
     case "memory":
@@ -127,6 +130,10 @@ export default function App() {
 
     if (activePage === "dashboard") {
       return <DashboardPage status={status} refreshStatus={refreshStatus} />;
+    }
+
+    if (activePage === "console") {
+      return <ConsoleChatPage />;
     }
 
     if (activePage === "providers") {

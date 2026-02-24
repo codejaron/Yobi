@@ -3,6 +3,8 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
+  CommandApprovalDecision,
+  ConsoleChatEvent,
   HistoryMessage,
   MemoryFact
 } from "@shared/types";
@@ -48,6 +50,31 @@ const api: CompanionApi = {
 
     ipcRenderer.on(channel, wrapped);
     ipcRenderer.send("status:subscribe");
+
+    return () => {
+      ipcRenderer.removeListener(channel, wrapped);
+    };
+  },
+
+  sendConsoleChat(text: string): Promise<{ requestId: string }> {
+    return ipcRenderer.invoke("console:chat:send", {
+      text
+    });
+  },
+  approveConsoleCommand(input: {
+    approvalId: string;
+    decision: CommandApprovalDecision;
+  }): Promise<{ accepted: boolean }> {
+    return ipcRenderer.invoke("console:chat:approve", input);
+  },
+  onConsoleChatEvent(listener: (event: ConsoleChatEvent) => void): () => void {
+    const channel = "runtime:console-chat-event";
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: ConsoleChatEvent) => {
+      listener(payload);
+    };
+
+    ipcRenderer.on(channel, wrapped);
+    ipcRenderer.send("console:chat:subscribe");
 
     return () => {
       ipcRenderer.removeListener(channel, wrapped);

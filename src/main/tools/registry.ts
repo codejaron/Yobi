@@ -102,7 +102,7 @@ export class DefaultToolRegistry implements ToolRegistry {
         params: input,
         description,
         signature
-      });
+      }, context.requestApproval);
 
       if (!approved) {
         return {

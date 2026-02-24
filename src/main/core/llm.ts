@@ -1,4 +1,4 @@
-import { generateObject, generateText, stepCountIs, type ToolSet } from "ai";
+import { generateObject, generateText, stepCountIs, streamText, type ToolSet } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
@@ -21,6 +21,25 @@ interface ChatReplyInput {
   activity?: ActivitySnapshot | null;
   userPhotoUrl?: string;
   tools?: ToolSet;
+  stream?: ChatReplyStreamListener;
+}
+
+export interface ChatReplyStreamListener {
+  onReasoningDelta?: (delta: string) => void;
+  onTextDelta?: (delta: string) => void;
+  onToolCall?: (payload: {
+    toolCallId: string;
+    toolName: string;
+    input: unknown;
+  }) => void;
+  onToolResult?: (payload: {
+    toolCallId: string;
+    toolName: string;
+    input: unknown;
+    success: boolean;
+    output?: unknown;
+    error?: string;
+  }) => void;
 }
 
 interface ResolvedModel {
@@ -124,24 +143,76 @@ export class LlmRouter {
       });
     }
 
-    const response = await generateText(
-      input.userPhotoUrl
-        ? ({
-            ...generationOptions,
-            messages: [
-              {
-                role: "user",
-                content
-              }
-            ]
-          } as any)
-        : ({
-            ...generationOptions,
-            prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
-          } as any)
-    );
+    const requestPayload = input.userPhotoUrl
+      ? ({
+          ...generationOptions,
+          messages: [
+            {
+              role: "user",
+              content
+            }
+          ]
+        } as any)
+      : ({
+          ...generationOptions,
+          prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
+        } as any);
 
-    const text = response.text.trim();
+    if (!input.stream) {
+      const response = await generateText(requestPayload);
+      const text = response.text.trim();
+      return text || "操作已完成。";
+    }
+
+    const response = streamText(requestPayload);
+    for await (const part of response.fullStream) {
+      if (part.type === "reasoning-delta") {
+        input.stream.onReasoningDelta?.(part.text);
+        continue;
+      }
+
+      if (part.type === "text-delta") {
+        input.stream.onTextDelta?.(part.text);
+        continue;
+      }
+
+      if (part.type === "tool-call") {
+        input.stream.onToolCall?.({
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          input: part.input
+        });
+        continue;
+      }
+
+      if (part.type === "tool-result") {
+        input.stream.onToolResult?.({
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          input: part.input,
+          success: true,
+          output: part.output
+        });
+        continue;
+      }
+
+      if (part.type === "tool-error") {
+        input.stream.onToolResult?.({
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          input: part.input,
+          success: false,
+          error:
+            part.error instanceof Error
+              ? part.error.message
+              : typeof part.error === "string"
+                ? part.error
+                : "工具执行失败"
+        });
+      }
+    }
+
+    const text = (await response.text).trim();
     return text || "操作已完成。";
   }
 
@@ -272,11 +343,25 @@ export class LlmRouter {
         throw new Error(`Provider ${provider.id} missing baseUrl`);
       }
 
+      const normalizedBaseUrl = this.normalizeCustomOpenAIBaseUrl(provider.baseUrl);
+      const client = createOpenAI({
+        apiKey: provider.apiKey,
+        baseURL: normalizedBaseUrl
+      });
+
       return {
-        model: createOpenAI({
-          apiKey: provider.apiKey,
-          baseURL: provider.baseUrl
-        }).chat(model),
+        model: this.selectOpenAIEndpoint(client, provider.apiMode, model),
+        providerKind: provider.kind
+      };
+    }
+
+    if (provider.kind === "openai") {
+      const client = createOpenAI({
+        apiKey: provider.apiKey
+      });
+
+      return {
+        model: this.selectOpenAIEndpoint(client, provider.apiMode, model),
         providerKind: provider.kind
       };
     }
@@ -327,5 +412,39 @@ export class LlmRouter {
     return facts
       .map((fact, index) => `${index + 1}. ${fact.content} (置信度 ${fact.confidence.toFixed(2)})`)
       .join("\n");
+  }
+
+  private normalizeCustomOpenAIBaseUrl(raw: string): string {
+    const input = raw.trim();
+    if (!input) {
+      return input;
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(input);
+    } catch {
+      return input;
+    }
+
+    const pathname = parsed.pathname.trim();
+    if (pathname === "" || pathname === "/") {
+      parsed.pathname = "/v1";
+      return parsed.toString().replace(/\/$/, "");
+    }
+
+    return input.replace(/\/$/, "");
+  }
+
+  private selectOpenAIEndpoint(
+    client: ReturnType<typeof createOpenAI>,
+    apiMode: ProviderConfig["apiMode"],
+    model: string
+  ) {
+    if (apiMode === "responses") {
+      return client.responses(model as any);
+    }
+
+    return client.chat(model as any);
   }
 }

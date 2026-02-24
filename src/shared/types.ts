@@ -4,6 +4,7 @@ export const providerSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   kind: z.enum(["openai", "anthropic", "custom-openai", "openrouter"]),
+  apiMode: z.enum(["chat", "responses"]).default("chat"),
   apiKey: z.string().default(""),
   baseUrl: z.string().url().optional(),
   enabled: z.boolean().default(true)
@@ -111,6 +112,75 @@ export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
 
 export type ChatRole = "system" | "user" | "assistant";
 
+export type CommandApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type ConsoleChatEvent =
+  | {
+      requestId: string;
+      type: "thinking";
+      state: "start" | "stop";
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "reasoning-delta";
+      delta: string;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "text-delta";
+      delta: string;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "tool-result";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      output?: unknown;
+      error?: string;
+      success: boolean;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "approval-request";
+      approvalId: string;
+      toolName: string;
+      description: string;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "approval-decision";
+      approvalId: string;
+      decision: CommandApprovalDecision;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "final";
+      rawText: string;
+      displayText: string;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "error";
+      message: string;
+      timestamp: string;
+    };
+
 export interface HistoryMessage {
   id: string;
   role: ChatRole;
@@ -195,6 +265,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       id: "openai-main",
       label: "OpenAI",
       kind: "openai",
+      apiMode: "chat",
       apiKey: "",
       enabled: true
     },
@@ -202,6 +273,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       id: "anthropic-main",
       label: "Anthropic",
       kind: "anthropic",
+      apiMode: "chat",
       apiKey: "",
       enabled: true
     }

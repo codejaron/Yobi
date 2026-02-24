@@ -1,25 +1,35 @@
 import { dialog } from "electron";
 import type { AppConfig } from "@shared/types";
-
-interface ApprovalRequest {
-  toolName: string;
-  params: Record<string, unknown>;
-  description: string;
-  signature: string;
-}
+import type {
+  ToolApprovalDecision,
+  ToolApprovalHandler,
+  ToolApprovalRequest
+} from "@main/tools/types";
 
 export class ApprovalGuard {
   private readonly rememberedAllow = new Set<string>();
 
   constructor(private readonly getConfig: () => AppConfig) {}
 
-  async ensureApproved(request: ApprovalRequest): Promise<boolean> {
+  async ensureApproved(
+    request: ToolApprovalRequest,
+    requestApproval?: ToolApprovalHandler
+  ): Promise<boolean> {
     if (!this.needsApproval(request.toolName, request.params)) {
       return true;
     }
 
     if (this.rememberedAllow.has(request.signature)) {
       return true;
+    }
+
+    if (requestApproval) {
+      const decision = await requestApproval(request);
+      if (decision === "allow-always") {
+        this.rememberedAllow.add(request.signature);
+      }
+
+      return decision === "allow-once" || decision === "allow-always";
     }
 
     const result = await dialog.showMessageBox({
@@ -33,12 +43,14 @@ export class ApprovalGuard {
       noLink: true
     });
 
-    if (result.response === 2) {
+    const decision: ToolApprovalDecision =
+      result.response === 2 ? "allow-always" : result.response === 0 ? "allow-once" : "deny";
+
+    if (decision === "allow-always") {
       this.rememberedAllow.add(request.signature);
-      return true;
     }
 
-    return result.response === 0;
+    return decision === "allow-once" || decision === "allow-always";
   }
 
   needsApproval(toolName: string, params: Record<string, unknown>): boolean {
