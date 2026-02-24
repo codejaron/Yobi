@@ -70,7 +70,11 @@ export class ConversationEngine {
       proactive: input.proactive,
       activitySnapshot: input.activity?.summary
     });
-    await this.memoryManager.onConversationTurn();
+    try {
+      await this.memoryManager.onConversationTurn();
+    } catch (error) {
+      console.warn("[conversation] memory update skipped:", error);
+    }
   }
 
   async saveProactiveMessage(text: string, activity: ActivitySnapshot | null): Promise<void> {

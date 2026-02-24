@@ -118,7 +118,7 @@ export class LlmRouter {
       if (resolved.providerKind === "openai" || resolved.providerKind === "custom-openai") {
         generationOptions.providerOptions = {
           openai: {
-            store: true,
+            store: resolved.providerKind === "custom-openai" ? false : true,
             parallelToolCalls: false
           }
         };
@@ -164,55 +164,99 @@ export class LlmRouter {
       return text || "操作已完成。";
     }
 
-    const response = streamText(requestPayload);
-    for await (const part of response.fullStream) {
-      if (part.type === "reasoning-delta") {
-        input.stream.onReasoningDelta?.(part.text);
-        continue;
-      }
+    const STREAM_IDLE_TIMEOUT_MS = 12_000;
+    const abortController = new AbortController();
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let bufferedText = "";
+    let abortedByIdle = false;
 
-      if (part.type === "text-delta") {
-        input.stream.onTextDelta?.(part.text);
-        continue;
+    const refreshIdleTimer = (): void => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
       }
+      idleTimer = setTimeout(() => {
+        abortedByIdle = true;
+        abortController.abort("stream-idle-timeout");
+      }, STREAM_IDLE_TIMEOUT_MS);
+    };
 
-      if (part.type === "tool-call") {
-        input.stream.onToolCall?.({
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: part.input
-        });
-        continue;
+    const response = streamText({
+      ...(requestPayload as Record<string, unknown>),
+      abortSignal: abortController.signal
+    } as any);
+
+    refreshIdleTimer();
+    try {
+      for await (const part of response.fullStream) {
+        refreshIdleTimer();
+
+        if (part.type === "reasoning-delta") {
+          input.stream.onReasoningDelta?.(part.text);
+          continue;
+        }
+
+        if (part.type === "text-delta") {
+          bufferedText += part.text;
+          input.stream.onTextDelta?.(part.text);
+          continue;
+        }
+
+        if (part.type === "tool-call") {
+          input.stream.onToolCall?.({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input
+          });
+          continue;
+        }
+
+        if (part.type === "tool-result") {
+          input.stream.onToolResult?.({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+            success: true,
+            output: part.output
+          });
+          continue;
+        }
+
+        if (part.type === "tool-error") {
+          input.stream.onToolResult?.({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+            success: false,
+            error:
+              part.error instanceof Error
+                ? part.error.message
+                : typeof part.error === "string"
+                  ? part.error
+                  : "工具执行失败"
+          });
+        }
       }
-
-      if (part.type === "tool-result") {
-        input.stream.onToolResult?.({
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: part.input,
-          success: true,
-          output: part.output
-        });
-        continue;
+    } catch (error) {
+      if (!abortedByIdle) {
+        throw error;
       }
-
-      if (part.type === "tool-error") {
-        input.stream.onToolResult?.({
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: part.input,
-          success: false,
-          error:
-            part.error instanceof Error
-              ? part.error.message
-              : typeof part.error === "string"
-                ? part.error
-                : "工具执行失败"
-        });
+    } finally {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
       }
     }
 
-    const text = (await response.text).trim();
+    if (abortedByIdle) {
+      void response.text.catch(() => undefined);
+      const partialText = bufferedText.trim();
+      if (partialText) {
+        return partialText;
+      }
+      throw new Error("流式输出空闲超时");
+    }
+
+    const text = (await response.text).trim() || bufferedText.trim();
     return text || "操作已完成。";
   }
 

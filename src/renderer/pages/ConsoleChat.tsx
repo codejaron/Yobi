@@ -568,28 +568,11 @@ export function ConsoleChatPage() {
     );
   }, []);
 
-  const helperText = useMemo(() => {
-    if (pendingApproval) {
-      return "检测到命令审批：按 ↑/↓ 选择，Enter 确认。";
-    }
-
-    if (busy) {
-      return "正在流式输出，等待本轮完成...";
-    }
-
-    if (historyHasMore) {
-      return "已显示最近 20 条，向上可继续加载历史消息。";
-    }
-
-    return "支持流式输出 + Thinking + 工具动作日志。";
-  }, [busy, historyHasMore, pendingApproval]);
-
   return (
-    <div className="grid h-[calc(100vh-220px)] min-h-[620px] max-h-[780px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="grid h-[calc(100vh-140px)] min-h-[680px] max-h-[900px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
         <CardHeader>
           <CardTitle>对话窗口</CardTitle>
-          <CardDescription>自动显示历史消息，支持流式回复与命令审批。</CardDescription>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
           <div
@@ -676,11 +659,14 @@ export function ConsoleChatPage() {
                 onKeyDown={handleInputKeyDown}
                 disabled={inputDisabled}
               />
-              <Button type="submit" disabled={busy || draft.trim().length === 0}>
+              <Button
+                type="submit"
+                disabled={busy || draft.trim().length === 0}
+                className="h-11 min-w-[92px] shrink-0 whitespace-nowrap"
+              >
                 {busy ? "处理中..." : "发送"}
               </Button>
             </form>
-            <p className="mt-2 text-xs text-muted-foreground">{helperText}</p>
           </div>
         </CardContent>
       </Card>

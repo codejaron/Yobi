@@ -189,19 +189,21 @@ export default function App() {
       <SideNav active={activePage} onSelect={setActivePage} />
 
       <main className="space-y-4">
-        <header className="glass-panel flex items-center justify-between p-4">
-          <div>
-            <h1 className="font-display text-2xl tracking-wide">{pageTitle(activePage)}</h1>
-            <p className="text-sm text-muted-foreground">{notice}</p>
-          </div>
+        {activePage === "console" ? null : (
+          <header className="glass-panel flex items-center justify-between p-4">
+            <div>
+              <h1 className="font-display text-2xl tracking-wide">{pageTitle(activePage)}</h1>
+              <p className="text-sm text-muted-foreground">{notice}</p>
+            </div>
 
-          <div className="flex items-center gap-3">
-            <Badge>{status?.telegramConnected ? "Telegram Online" : "Telegram Offline"}</Badge>
-            <Button onClick={() => void saveConfig()} disabled={saving || !config}>
-              {saving ? "保存中..." : "保存配置"}
-            </Button>
-          </div>
-        </header>
+            <div className="flex items-center gap-3">
+              <Badge>{status?.telegramConnected ? "Telegram Online" : "Telegram Offline"}</Badge>
+              <Button onClick={() => void saveConfig()} disabled={saving || !config}>
+                {saving ? "保存中..." : "保存配置"}
+              </Button>
+            </div>
+          </header>
+        )}
 
         {content}
       </main>
