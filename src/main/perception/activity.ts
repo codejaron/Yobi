@@ -112,7 +112,8 @@ export class ActivityMonitor {
 
     const screenshot = await captureCompressedScreenshot({
       maxWidth: this.getConfig().perception.screenshotMaxWidth,
-      quality: this.getConfig().perception.screenshotQuality
+      quality: this.getConfig().perception.screenshotQuality,
+      windowInfo
     });
 
     if (!screenshot) {

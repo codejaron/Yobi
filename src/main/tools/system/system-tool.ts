@@ -1,4 +1,6 @@
 import os from "node:os";
+import path from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
 import { SandboxGuard } from "@main/tools/guard/sandbox";
@@ -34,6 +36,190 @@ interface SystemToolDeps {
   sandboxGuard: SandboxGuard;
 }
 
+type CaptureTarget = Record<string, unknown> & {
+  captureImageSync?: () => unknown;
+  captureImage?: () => Promise<unknown>;
+};
+
+type WindowTarget = CaptureTarget & {
+  appName?: () => string;
+  title?: () => string;
+  isFocused?: () => boolean;
+  z?: () => number;
+};
+
+type ScreenshotsModule = Record<string, unknown> & {
+  Window?: {
+    all?: () => WindowTarget[];
+  };
+};
+
+function normalizeText(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function readWindowAppName(target: WindowTarget): string {
+  if (typeof target.appName !== "function") {
+    return "";
+  }
+
+  try {
+    return String(target.appName() ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function readWindowTitle(target: WindowTarget): string {
+  if (typeof target.title !== "function") {
+    return "";
+  }
+
+  try {
+    return String(target.title() ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function readWindowFocused(target: WindowTarget): boolean {
+  if (typeof target.isFocused !== "function") {
+    return false;
+  }
+
+  try {
+    return Boolean(target.isFocused());
+  } catch {
+    return false;
+  }
+}
+
+function readWindowZ(target: WindowTarget): number {
+  if (typeof target.z !== "function") {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  try {
+    const z = Number(target.z());
+    return Number.isFinite(z) ? z : Number.POSITIVE_INFINITY;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+async function normalizeCapturedImage(image: unknown): Promise<Buffer | null> {
+  if (!image) {
+    return null;
+  }
+
+  if (Buffer.isBuffer(image)) {
+    return image;
+  }
+
+  if (typeof image === "object") {
+    const candidate = image as Record<string, unknown>;
+    const toPngSync = candidate.toPngSync;
+    if (typeof toPngSync === "function") {
+      return Buffer.from(toPngSync.call(candidate));
+    }
+
+    const toPng = candidate.toPng;
+    if (typeof toPng === "function") {
+      return Buffer.from(await toPng.call(candidate));
+    }
+  }
+
+  return null;
+}
+
+async function captureTargetImage(target: CaptureTarget): Promise<Buffer | null> {
+  const image =
+    (typeof target.captureImageSync === "function" && target.captureImageSync()) ||
+    (typeof target.captureImage === "function" && (await target.captureImage()));
+
+  return normalizeCapturedImage(image);
+}
+
+async function loadScreenshotsModule(): Promise<ScreenshotsModule | null> {
+  try {
+    const imported = (await import("node-screenshots")) as Record<string, unknown>;
+    return (imported.default ?? imported) as ScreenshotsModule;
+  } catch {
+    return null;
+  }
+}
+
+function selectWindowTarget(windows: WindowTarget[], appName?: string): WindowTarget {
+  const requestedApp = normalizeText(appName);
+  const filtered =
+    requestedApp.length === 0
+      ? windows
+      : windows.filter((item) => {
+          const current = normalizeText(readWindowAppName(item));
+          return current === requestedApp || current.includes(requestedApp);
+        });
+
+  if (filtered.length === 0) {
+    const knownApps = Array.from(
+      new Set(
+        windows
+          .map((item) => readWindowAppName(item))
+          .filter((item) => item.length > 0)
+      )
+    )
+      .slice(0, 12)
+      .join(", ");
+    const suffix = knownApps ? ` 可用应用: ${knownApps}` : "";
+    throw new Error(`未找到应用窗口: ${appName ?? "(empty appName)"}。${suffix}`);
+  }
+
+  const focused = filtered.find((item) => readWindowFocused(item));
+  if (focused) {
+    return focused;
+  }
+
+  return filtered.slice().sort((a, b) => readWindowZ(a) - readWindowZ(b))[0];
+}
+
+async function saveSystemScreenshot(buffer: Buffer): Promise<string> {
+  const outputDir = path.join(os.homedir(), ".yobi", "tool-media");
+  await mkdir(outputDir, { recursive: true });
+  const file = path.join(outputDir, `system-${Date.now()}.png`);
+  await writeFile(file, buffer);
+  return file;
+}
+
+async function captureAppScreenshot(appName?: string): Promise<{
+  path: string;
+  appName: string;
+  title: string;
+  focused: boolean;
+}> {
+  const screenshots = await loadScreenshotsModule();
+  if (!screenshots) {
+    throw new Error("加载 node-screenshots 失败。请确认依赖与系统权限。");
+  }
+
+  const windows = screenshots.Window?.all?.() ?? [];
+  if (windows.length === 0) {
+    throw new Error("未检测到可截图窗口。");
+  }
+
+  const target = selectWindowTarget(windows, appName);
+  const image = await captureTargetImage(target);
+  if (!image) {
+    throw new Error("窗口截图失败，未获取到图像数据。");
+  }
+
+  const filePath = await saveSystemScreenshot(image);
+  return {
+    path: filePath,
+    appName: readWindowAppName(target),
+    title: readWindowTitle(target),
+    focused: readWindowFocused(target)
+  };
+}
+
 function ensureSystemEnabled(config: AppConfig): void {
   if (!config.tools.system.enabled) {
     throw new Error("系统操控工具未启用，请先在设置中开启。");
@@ -47,7 +233,7 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
 
   return {
     name: "system",
-    description: "执行受控 shell 命令，或操控本机 App（open/type/press/notify）。",
+    description: "执行受控 shell 命令，或操控本机 App（open/type/press/notify/screenshot）。",
     parameters: systemParamsSchema,
     requiresApproval(params) {
       return params.action !== "notify" && params.action !== "get_windows";
@@ -67,6 +253,10 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
 
       if (params.action === "press_keys") {
         return `发送快捷键: ${(params.keys ?? []).join(" + ")}`;
+      }
+
+      if (params.action === "screenshot_app") {
+        return `截取应用窗口截图: ${params.appName ?? "当前前台窗口"}`;
       }
 
       return `执行系统操作: ${params.action}`;
@@ -113,7 +303,18 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
       }
 
       if (params.action === "screenshot_app") {
-        throw new Error("screenshot_app 还未实现。");
+        const captured = await captureAppScreenshot(params.appName);
+        return {
+          success: true,
+          data: captured,
+          media: [
+            {
+              type: "image",
+              path: captured.path,
+              mimeType: "image/png"
+            }
+          ]
+        };
       }
 
       if (!params.appName && (params.action === "open_app" || params.action === "get_windows")) {

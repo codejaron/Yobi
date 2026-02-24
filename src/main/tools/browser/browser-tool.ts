@@ -47,7 +47,7 @@ function controllerConfig(config: AppConfig) {
 }
 
 async function saveScreenshot(buffer: Buffer): Promise<string> {
-  const outputDir = path.join(os.tmpdir(), "yobi-tool-media");
+  const outputDir = path.join(os.homedir(), ".yobi", "tool-media");
   await mkdir(outputDir, { recursive: true });
 
   const file = path.join(outputDir, `browser-${Date.now()}.png`);
