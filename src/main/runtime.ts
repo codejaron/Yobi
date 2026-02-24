@@ -365,6 +365,47 @@ export class CompanionRuntime {
   private async tryHandleTelegramCommand(text: string): Promise<boolean> {
     const command = text.trim();
 
+    if (/^\/eyes(\s+status)?$/i.test(command)) {
+      const config = this.getConfig();
+      const context = this.contextStore.get();
+      const issues: string[] = [];
+
+      if (!config.perception.enabled) {
+        issues.push("设置页中的『启用桌面感知』为关闭状态");
+      }
+      if (!context.eyesCommandEnabled) {
+        issues.push("命令开关为 OFF（发送 /eyes on 恢复）");
+      }
+      if (this.screenLocked) {
+        issues.push("系统处于锁屏/休眠状态");
+      }
+      if (this.idlePaused) {
+        issues.push(`系统空闲超过 ${config.perception.idlePauseSeconds} 秒`);
+      }
+
+      const running = this.activityMonitor.isRunning();
+      const lines = [
+        `桌面感知状态：${running ? "运行中" : "已暂停"}`,
+        `全局开关：${config.perception.enabled ? "ON" : "OFF"}`,
+        `/eyes 开关：${context.eyesCommandEnabled ? "ON" : "OFF"}`,
+        `轮询间隔：${config.perception.pollIntervalMs} ms`,
+        `截图宽度/质量：${config.perception.screenshotMaxWidth}px / ${config.perception.screenshotQuality}`,
+        `空闲暂停阈值：${config.perception.idlePauseSeconds} 秒`
+      ];
+
+      if (issues.length > 0) {
+        lines.push(`暂停原因：${issues.join("；")}`);
+      }
+
+      lines.push("命令：/eyes on | /eyes off");
+
+      await this.telegram.send({
+        kind: "text",
+        text: lines.join("\n")
+      });
+      return true;
+    }
+
     if (/^\/eyes\s+off$/i.test(command)) {
       await this.contextStore.patch({ eyesCommandEnabled: false });
       await this.syncPerceptionState();
