@@ -10,6 +10,21 @@ import {
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
+  private applyWindowPinning(alwaysOnTop: boolean): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    this.window.setAlwaysOnTop(alwaysOnTop, alwaysOnTop ? "screen-saver" : "normal");
+    this.window.setVisibleOnAllWorkspaces(alwaysOnTop, {
+      visibleOnFullScreen: alwaysOnTop
+    });
+
+    if (alwaysOnTop) {
+      this.window.moveTop();
+    }
+  }
+
   private readonly moveWindowByListener = (event: IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -104,6 +119,7 @@ export class PetWindowController {
 
   open(input: { modelDir: string; alwaysOnTop: boolean }): void {
     if (this.window && !this.window.isDestroyed()) {
+      this.applyWindowPinning(input.alwaysOnTop);
       this.window.show();
       this.window.focus();
       return;
@@ -130,6 +146,7 @@ export class PetWindowController {
         nodeIntegration: true
       }
     });
+    this.applyWindowPinning(input.alwaysOnTop);
 
     this.window.loadURL(targetUrl.toString()).catch(() => undefined);
     this.window.on("closed", () => {
