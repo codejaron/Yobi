@@ -106,10 +106,6 @@ export class ActivityMonitor {
   }
 
   private async summarizeWindow(windowInfo: ActiveWindowInfo): Promise<string> {
-    if (this.isCompanionWindow(windowInfo)) {
-      return "用户正在使用 Yobi 控制台（隐私保护：不上传界面内容）";
-    }
-
     const screenshot = await captureCompressedScreenshot({
       maxWidth: this.getConfig().perception.screenshotMaxWidth,
       quality: this.getConfig().perception.screenshotQuality,
@@ -125,11 +121,5 @@ export class ActivityMonitor {
       windowTitle: windowInfo.title,
       screenshotBase64: screenshot
     });
-  }
-
-  private isCompanionWindow(windowInfo: ActiveWindowInfo): boolean {
-    const appName = windowInfo.appName.trim().toLowerCase();
-    const title = windowInfo.title.trim().toLowerCase();
-    return appName.includes("yobi") || title.includes("yobi");
   }
 }

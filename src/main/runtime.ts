@@ -604,13 +604,17 @@ export class CompanionRuntime {
       }
 
       const running = this.activityMonitor.isRunning();
+      const snapshot = this.activityMonitor.getCurrentSnapshot();
       const lines = [
         `桌面感知状态：${running ? "运行中" : "已暂停"}`,
         `全局开关：${config.perception.enabled ? "ON" : "OFF"}`,
         `/eyes 开关：${context.eyesCommandEnabled ? "ON" : "OFF"}`,
         `轮询间隔：${config.perception.pollIntervalMs} ms`,
         `截图宽度/质量：${config.perception.screenshotMaxWidth}px / ${config.perception.screenshotQuality}`,
-        `空闲暂停阈值：${config.perception.idlePauseSeconds} 秒`
+        `空闲暂停阈值：${config.perception.idlePauseSeconds} 秒`,
+        `最近快照应用：${snapshot?.app ?? "(暂无)"}`,
+        `最近快照标题：${snapshot?.title ?? "(暂无)"}`,
+        `最近快照时间：${snapshot?.changedAt ?? "(暂无)"}`
       ];
 
       if (issues.length > 0) {
