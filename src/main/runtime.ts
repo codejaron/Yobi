@@ -29,6 +29,7 @@ import { KeepAwakeService } from "@main/services/keep-awake";
 import { ReminderService } from "@main/services/reminders";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
+import { createDefaultToolRegistry } from "@main/tools/bootstrap";
 
 interface HistoryQuery {
   query?: string;
@@ -49,6 +50,7 @@ export class CompanionRuntime {
   private readonly characterStore = new CharacterStore(this.paths);
 
   private readonly llm = new LlmRouter(() => this.configStore.getConfig());
+  private readonly toolRegistry = createDefaultToolRegistry(() => this.configStore.getConfig());
   private readonly memoryManager = new MemoryManager(
     this.memoryStore,
     this.historyStore,
@@ -62,6 +64,7 @@ export class CompanionRuntime {
     this.memoryManager,
     this.characterStore,
     this.contextStore,
+    this.toolRegistry,
     () => this.configStore.getConfig()
   );
 
@@ -178,6 +181,7 @@ export class CompanionRuntime {
     this.keepAwake.stop();
     this.pet.close();
     this.realtimeVoice.stop();
+    await this.toolRegistry.dispose();
     await this.telegram.stop();
   }
 

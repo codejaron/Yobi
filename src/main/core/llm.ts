@@ -1,4 +1,4 @@
-import { generateObject, generateText } from "ai";
+import { generateObject, generateText, stepCountIs, type ToolSet } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
@@ -19,7 +19,20 @@ interface ChatReplyInput {
   memoryFacts: MemoryFact[];
   activity?: ActivitySnapshot | null;
   userPhotoUrl?: string;
+  tools?: ToolSet;
 }
+
+interface ResolvedModel {
+  model: any;
+  providerKind: ProviderConfig["kind"];
+}
+
+const compatToolStepSchema = z.object({
+  kind: z.enum(["tool", "final"]),
+  toolName: z.string().optional(),
+  toolInput: z.record(z.string(), z.unknown()).optional(),
+  response: z.string().optional()
+});
 
 interface ProactiveDecisionInput {
   characterPrompt: string;
@@ -50,7 +63,7 @@ export class LlmRouter {
   async generateChatReply(input: ChatReplyInput): Promise<string> {
     const config = this.getConfig();
     const route = config.modelRouting.chat;
-    const model = this.getModel(route, "chat");
+    const resolved = this.getModel(route, "chat");
 
     const system = [
       input.characterPrompt,
@@ -61,6 +74,8 @@ export class LlmRouter {
       "- [happy]/[sad]/[shy]/[angry]/[surprised]/[excited]/[calm]/[idle] 用于桌宠情绪。",
       "强规则1：只有当用户明确要求语音/朗读时，才允许输出 [voice]...[/voice]。",
       "强规则1补充：用户没有明确要求语音时，严禁输出 [voice] 标签。",
+      "如果用户要求你打开网页、点击按钮、填表、执行系统命令或读写文件，你可以调用可用工具完成，再基于工具结果回复。",
+      "执行浏览器任务时优先采用：navigate/open -> snapshot -> act 的节奏，保证动作可解释。",
       "除标记外不要解释标记含义。",
       `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
       input.activity
@@ -74,40 +89,68 @@ export class LlmRouter {
     ].join("\n\n");
 
     const generationOptions: Record<string, unknown> = {
-      model,
+      model: resolved.model,
       system,
       maxOutputTokens: 400
     };
+
+    if (input.tools && Object.keys(input.tools).length > 0) {
+      generationOptions.tools = input.tools;
+      generationOptions.toolChoice = "auto";
+      generationOptions.stopWhen = stepCountIs(8);
+      if (resolved.providerKind === "openai" || resolved.providerKind === "custom-openai") {
+        generationOptions.providerOptions = {
+          openai: {
+            store: true,
+            parallelToolCalls: false
+          }
+        };
+      }
+    }
 
     if (this.supportsTemperature(route)) {
       generationOptions.temperature = 0.75;
     }
 
-    const response = input.userPhotoUrl
-      ? await generateText({
-          ...generationOptions,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: prompt
-                },
-                {
-                  type: "image",
-                  image: input.userPhotoUrl
-                }
-              ]
-            }
-          ]
-        } as any)
-      : await generateText({
-          ...generationOptions,
-          prompt,
-        } as any);
+    const content: Array<{ type: "text"; text: string } | { type: "image"; image: string }> = [
+      {
+        type: "text",
+        text: prompt
+      }
+    ];
 
-    return response.text.trim();
+    if (input.userPhotoUrl) {
+      content.push({
+        type: "image",
+        image: input.userPhotoUrl
+      });
+    }
+
+    let response: Awaited<ReturnType<typeof generateText>>;
+    try {
+      response = await generateText({
+        ...generationOptions,
+        messages: [
+          {
+            role: "user",
+            content
+          }
+        ]
+      } as any);
+    } catch (error) {
+      if (input.tools && this.isNativeToolProtocolError(error)) {
+        return this.generateChatReplyViaCompatTools({
+          model: resolved.model,
+          system,
+          prompt,
+          tools: input.tools
+        });
+      }
+      throw error;
+    }
+
+    const text = response.text.trim();
+    return text || "操作已完成。";
   }
 
   async describeActivity(input: {
@@ -116,10 +159,10 @@ export class LlmRouter {
     screenshotBase64: string;
   }): Promise<string> {
     const config = this.getConfig();
-    const model = this.getModel(config.modelRouting.perception, "perception");
+    const resolved = this.getModel(config.modelRouting.perception, "perception");
 
     const result = await generateText({
-      model,
+      model: resolved.model,
       system:
         "你是桌面活动观察器。输出一句中文，描述用户当前在做什么。不要夸张，不要建议。",
       maxOutputTokens: 80,
@@ -148,10 +191,10 @@ export class LlmRouter {
     existingFacts: MemoryFact[];
   }): Promise<Array<{ content: string; confidence: number }>> {
     const config = this.getConfig();
-    const model = this.getModel(config.modelRouting.memory, "memory");
+    const resolved = this.getModel(config.modelRouting.memory, "memory");
 
     const result = await generateObject({
-      model,
+      model: resolved.model,
       schema: memorySchema,
       system:
         "你负责提炼长期记忆。仅提炼相对稳定、对后续陪伴有帮助的用户事实。避免短期任务和敏感隐私。",
@@ -171,10 +214,10 @@ export class LlmRouter {
     message?: string;
   }> {
     const config = this.getConfig();
-    const model = this.getModel(config.modelRouting.chat, "chat");
+    const resolved = this.getModel(config.modelRouting.chat, "chat");
 
     const result = await generateObject({
-      model,
+      model: resolved.model,
       schema: proactiveSchema,
       system:
         "你是一个克制的陪伴助手。只有在有价值时才主动开口，避免打扰。若 shouldSpeak=false，不给 message。",
@@ -190,7 +233,7 @@ export class LlmRouter {
     return proactiveSchema.parse(result.object ?? {});
   }
 
-  private getModel(route: ModelRoute, purpose: Purpose) {
+  private getModel(route: ModelRoute, purpose: Purpose): ResolvedModel {
     const config = this.getConfig();
     const provider = config.providers.find((candidate) => candidate.id === route.providerId);
     if (!provider) {
@@ -200,15 +243,18 @@ export class LlmRouter {
     return this.makeModel(provider, route.model);
   }
 
-  private makeModel(provider: ProviderConfig, model: string) {
+  private makeModel(provider: ProviderConfig, model: string): ResolvedModel {
     if (!provider.enabled) {
       throw new Error(`Provider ${provider.id} is disabled`);
     }
 
     if (provider.kind === "anthropic") {
-      return createAnthropic({
-        apiKey: provider.apiKey
-      })(model);
+      return {
+        model: createAnthropic({
+          apiKey: provider.apiKey
+        })(model),
+        providerKind: provider.kind
+      };
     }
 
     if (provider.kind === "custom-openai") {
@@ -216,15 +262,113 @@ export class LlmRouter {
         throw new Error(`Provider ${provider.id} missing baseUrl`);
       }
 
-      return createOpenAI({
-        apiKey: provider.apiKey,
-        baseURL: provider.baseUrl
-      })(model);
+      return {
+        model: createOpenAI({
+          apiKey: provider.apiKey,
+          baseURL: provider.baseUrl
+        })(model),
+        providerKind: provider.kind
+      };
     }
 
-    return createOpenAI({
-      apiKey: provider.apiKey
-    })(model);
+    return {
+      model: createOpenAI({
+        apiKey: provider.apiKey
+      }).responses(model),
+      providerKind: provider.kind
+    };
+  }
+
+  private isNativeToolProtocolError(error: unknown): boolean {
+    const message = this.flattenErrorMessage(error).toLowerCase();
+    return (
+      message.includes("function_call_output requires item_reference") ||
+      message.includes("previous_response_id") ||
+      message.includes("tool_call context")
+    );
+  }
+
+  private flattenErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      const cause = (error as Error & { cause?: unknown }).cause;
+      return `${error.message}\n${cause ? this.flattenErrorMessage(cause) : ""}`.trim();
+    }
+
+    if (typeof error === "string") {
+      return error;
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  private async generateChatReplyViaCompatTools(input: {
+    model: any;
+    system: string;
+    prompt: string;
+    tools: ToolSet;
+  }): Promise<string> {
+    const toolEntries = Object.entries(input.tools);
+    const toolSummary = toolEntries
+      .map(([name, toolDefinition]) => `- ${name}: ${toolDefinition.description ?? "无描述"}`)
+      .join("\n");
+
+    const MAX_STEPS = 6;
+    let executionLog = "";
+
+    for (let step = 0; step < MAX_STEPS; step += 1) {
+      const decision = await generateObject({
+        model: input.model,
+        schema: compatToolStepSchema,
+        system: [
+          input.system,
+          "你处于工具兼容模式：必须输出 JSON，决定是调用工具还是直接回复。",
+          "当需要调用工具时输出 kind=tool，并给出 toolName 和 toolInput。",
+          "当信息足够时输出 kind=final，并把最终回复放在 response 字段。"
+        ].join("\n\n"),
+        prompt: [
+          `用户请求与上下文:\n${input.prompt}`,
+          `可用工具:\n${toolSummary || "(无可用工具)"}`,
+          `已执行步骤:\n${executionLog || "(尚未执行工具)"}`
+        ].join("\n\n")
+      } as any);
+
+      const parsed = compatToolStepSchema.parse(decision.object ?? {});
+      if (parsed.kind === "final") {
+        const text = parsed.response?.trim();
+        return text || "操作已完成。";
+      }
+
+      const toolName = parsed.toolName?.trim() ?? "";
+      const selectedTool = (input.tools as Record<string, any>)[toolName];
+      if (!selectedTool?.execute) {
+        executionLog += `\n[step ${step + 1}] 工具不存在: ${toolName}`;
+        continue;
+      }
+
+      let toolResultText = "";
+      try {
+        const result = await selectedTool.execute(parsed.toolInput ?? {}, {
+          toolCallId: `compat-${Date.now()}-${step + 1}`,
+          messages: []
+        } as any);
+        toolResultText = JSON.stringify(result).slice(0, 3000);
+      } catch (error) {
+        toolResultText = `ERROR: ${this.flattenErrorMessage(error).slice(0, 1200)}`;
+      }
+
+      executionLog += [
+        "",
+        `[step ${step + 1}] tool=${toolName}`,
+        `input=${JSON.stringify(parsed.toolInput ?? {})}`,
+        `result=${toolResultText}`
+      ].join("\n");
+    }
+
+    return "工具调用步骤过多，已中止。请给我更具体一点的操作指令。";
   }
 
   private supportsTemperature(route: ModelRoute): boolean {

@@ -66,6 +66,27 @@ export const appConfigSchema = z.object({
   memory: z.object({
     workingSetSize: z.number().int().min(10).max(100).default(30),
     summarizeEveryTurns: z.number().int().min(10).max(500).default(50)
+  }),
+  tools: z.object({
+    browser: z.object({
+      enabled: z.boolean().default(false),
+      headless: z.boolean().default(false),
+      cdpPort: z.number().int().min(1000).max(65535).default(19222),
+      allowedDomains: z.array(z.string().min(1)).default([]),
+      blockPrivateNetwork: z.boolean().default(true)
+    }),
+    system: z.object({
+      enabled: z.boolean().default(false),
+      execEnabled: z.boolean().default(false),
+      allowedCommands: z.array(z.string().min(1)).default([]),
+      blockedPatterns: z.array(z.string().min(1)).default(["rm -rf", "sudo"]),
+      approvalRequired: z.boolean().default(true)
+    }),
+    file: z.object({
+      readEnabled: z.boolean().default(true),
+      writeEnabled: z.boolean().default(false),
+      allowedPaths: z.array(z.string().min(1)).default([])
+    })
   })
 });
 
@@ -235,6 +256,27 @@ export const DEFAULT_CONFIG: AppConfig = {
   memory: {
     workingSetSize: 30,
     summarizeEveryTurns: 50
+  },
+  tools: {
+    browser: {
+      enabled: false,
+      headless: false,
+      cdpPort: 19222,
+      allowedDomains: [],
+      blockPrivateNetwork: true
+    },
+    system: {
+      enabled: false,
+      execEnabled: false,
+      allowedCommands: [],
+      blockedPatterns: ["rm -rf", "sudo"],
+      approvalRequired: true
+    },
+    file: {
+      readEnabled: true,
+      writeEnabled: false,
+      allowedPaths: []
+    }
   }
 };
 

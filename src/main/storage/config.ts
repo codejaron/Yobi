@@ -15,6 +15,16 @@ function normalizeString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+}
+
 export class ConfigStore {
   private cached: AppConfig = DEFAULT_CONFIG;
 
@@ -70,6 +80,20 @@ export class ConfigStore {
         ...DEFAULT_CONFIG.memory,
         ...raw.memory
       },
+      tools: {
+        browser: {
+          ...DEFAULT_CONFIG.tools.browser,
+          ...raw.tools?.browser
+        },
+        system: {
+          ...DEFAULT_CONFIG.tools.system,
+          ...raw.tools?.system
+        },
+        file: {
+          ...DEFAULT_CONFIG.tools.file,
+          ...raw.tools?.file
+        }
+      },
       modelRouting: {
         chat: {
           ...DEFAULT_CONFIG.modelRouting.chat,
@@ -103,6 +127,22 @@ export class ConfigStore {
       )
     };
 
+    merged.tools = {
+      browser: {
+        ...merged.tools.browser,
+        allowedDomains: normalizeStringList(merged.tools.browser.allowedDomains)
+      },
+      system: {
+        ...merged.tools.system,
+        allowedCommands: normalizeStringList(merged.tools.system.allowedCommands),
+        blockedPatterns: normalizeStringList(merged.tools.system.blockedPatterns)
+      },
+      file: {
+        ...merged.tools.file,
+        allowedPaths: normalizeStringList(merged.tools.file.allowedPaths)
+      }
+    };
+
     this.cached = appConfigSchema.parse(merged);
     await writeJsonFile(this.paths.configPath, this.cached);
   }
@@ -124,6 +164,21 @@ export class ConfigStore {
           DEFAULT_CONFIG.voice.requestTimeoutMs
         ),
         retryCount: clampInt(nextConfig.voice.retryCount, 0, 2, DEFAULT_CONFIG.voice.retryCount)
+      },
+      tools: {
+        browser: {
+          ...nextConfig.tools.browser,
+          allowedDomains: normalizeStringList(nextConfig.tools.browser.allowedDomains)
+        },
+        system: {
+          ...nextConfig.tools.system,
+          allowedCommands: normalizeStringList(nextConfig.tools.system.allowedCommands),
+          blockedPatterns: normalizeStringList(nextConfig.tools.system.blockedPatterns)
+        },
+        file: {
+          ...nextConfig.tools.file,
+          allowedPaths: normalizeStringList(nextConfig.tools.file.allowedPaths)
+        }
       }
     };
 
