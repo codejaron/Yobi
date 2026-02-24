@@ -293,6 +293,7 @@ export class CompanionRuntime {
       try {
         await this.handleInbound(inbound);
       } catch (error) {
+        console.error("[runtime] handleInbound failed:", error);
         const message =
           error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
         await this.telegram.send({

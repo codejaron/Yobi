@@ -1,6 +1,7 @@
 import { generateObject, generateText, stepCountIs, type ToolSet } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
 import type {
   ActivitySnapshot,
@@ -26,13 +27,6 @@ interface ResolvedModel {
   model: any;
   providerKind: ProviderConfig["kind"];
 }
-
-const compatToolStepSchema = z.object({
-  kind: z.enum(["tool", "final"]),
-  toolName: z.string().optional(),
-  toolInput: z.record(z.string(), z.unknown()).optional(),
-  response: z.string().optional()
-});
 
 interface ProactiveDecisionInput {
   characterPrompt: string;
@@ -64,6 +58,7 @@ export class LlmRouter {
     const config = this.getConfig();
     const route = config.modelRouting.chat;
     const resolved = this.getModel(route, "chat");
+    const inlineSystem = resolved.providerKind === "custom-openai";
 
     const system = [
       input.characterPrompt,
@@ -90,9 +85,12 @@ export class LlmRouter {
 
     const generationOptions: Record<string, unknown> = {
       model: resolved.model,
-      system,
       maxOutputTokens: 400
     };
+
+    if (!inlineSystem) {
+      generationOptions.system = system;
+    }
 
     if (input.tools && Object.keys(input.tools).length > 0) {
       generationOptions.tools = input.tools;
@@ -115,7 +113,7 @@ export class LlmRouter {
     const content: Array<{ type: "text"; text: string } | { type: "image"; image: string }> = [
       {
         type: "text",
-        text: prompt
+        text: inlineSystem ? `${system}\n\n${prompt}` : prompt
       }
     ];
 
@@ -126,28 +124,22 @@ export class LlmRouter {
       });
     }
 
-    let response: Awaited<ReturnType<typeof generateText>>;
-    try {
-      response = await generateText({
-        ...generationOptions,
-        messages: [
-          {
-            role: "user",
-            content
-          }
-        ]
-      } as any);
-    } catch (error) {
-      if (input.tools && this.isNativeToolProtocolError(error)) {
-        return this.generateChatReplyViaCompatTools({
-          model: resolved.model,
-          system,
-          prompt,
-          tools: input.tools
-        });
-      }
-      throw error;
-    }
+    const response = await generateText(
+      input.userPhotoUrl
+        ? ({
+            ...generationOptions,
+            messages: [
+              {
+                role: "user",
+                content
+              }
+            ]
+          } as any)
+        : ({
+            ...generationOptions,
+            prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
+          } as any)
+    );
 
     const text = response.text.trim();
     return text || "操作已完成。";
@@ -160,11 +152,14 @@ export class LlmRouter {
   }): Promise<string> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.perception, "perception");
+    const inlineSystem = resolved.providerKind === "custom-openai";
+    const system =
+      "你是桌面活动观察器。输出一句中文，描述用户当前在做什么。不要夸张，不要建议。";
+    const context = `当前窗口应用名: ${input.appName}; 窗口标题: ${input.windowTitle}`;
 
     const result = await generateText({
       model: resolved.model,
-      system:
-        "你是桌面活动观察器。输出一句中文，描述用户当前在做什么。不要夸张，不要建议。",
+      system: inlineSystem ? undefined : system,
       maxOutputTokens: 80,
       messages: [
         {
@@ -172,7 +167,7 @@ export class LlmRouter {
           content: [
             {
               type: "text",
-              text: `当前窗口应用名: ${input.appName}; 窗口标题: ${input.windowTitle}`
+              text: inlineSystem ? `${system}\n\n${context}` : context
             },
             {
               type: "image",
@@ -192,17 +187,20 @@ export class LlmRouter {
   }): Promise<Array<{ content: string; confidence: number }>> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.memory, "memory");
+    const inlineSystem = resolved.providerKind === "custom-openai";
+    const system =
+      "你负责提炼长期记忆。仅提炼相对稳定、对后续陪伴有帮助的用户事实。避免短期任务和敏感隐私。";
+    const prompt = [
+      `现有记忆:\n${this.formatFacts(input.existingFacts)}`,
+      `最近对话:\n${this.formatHistory(input.recentHistory)}`,
+      "输出最多 8 条事实。"
+    ].join("\n\n");
 
     const result = await generateObject({
       model: resolved.model,
       schema: memorySchema,
-      system:
-        "你负责提炼长期记忆。仅提炼相对稳定、对后续陪伴有帮助的用户事实。避免短期任务和敏感隐私。",
-      prompt: [
-        `现有记忆:\n${this.formatFacts(input.existingFacts)}`,
-        `最近对话:\n${this.formatHistory(input.recentHistory)}`,
-        "输出最多 8 条事实。"
-      ].join("\n\n")
+      system: inlineSystem ? undefined : system,
+      prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
     } as any);
 
     return memorySchema.parse(result.object ?? {}).facts;
@@ -215,19 +213,22 @@ export class LlmRouter {
   }> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.chat, "chat");
+    const inlineSystem = resolved.providerKind === "custom-openai";
+    const system =
+      "你是一个克制的陪伴助手。只有在有价值时才主动开口，避免打扰。若 shouldSpeak=false，不给 message。";
+    const prompt = [
+      input.characterPrompt,
+      `触发原因: ${input.reason}`,
+      `活动状态: ${input.activity?.summary ?? "未知"}`,
+      `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
+      `最近对话:\n${this.formatHistory(input.recentHistory)}`
+    ].join("\n\n");
 
     const result = await generateObject({
       model: resolved.model,
       schema: proactiveSchema,
-      system:
-        "你是一个克制的陪伴助手。只有在有价值时才主动开口，避免打扰。若 shouldSpeak=false，不给 message。",
-      prompt: [
-        input.characterPrompt,
-        `触发原因: ${input.reason}`,
-        `活动状态: ${input.activity?.summary ?? "未知"}`,
-        `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
-        `最近对话:\n${this.formatHistory(input.recentHistory)}`
-      ].join("\n\n")
+      system: inlineSystem ? undefined : system,
+      prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
     } as any);
 
     return proactiveSchema.parse(result.object ?? {});
@@ -257,6 +258,15 @@ export class LlmRouter {
       };
     }
 
+    if (provider.kind === "openrouter") {
+      return {
+        model: createOpenRouter({
+          apiKey: provider.apiKey
+        }).chat(model),
+        providerKind: provider.kind
+      };
+    }
+
     if (provider.kind === "custom-openai") {
       if (!provider.baseUrl) {
         throw new Error(`Provider ${provider.id} missing baseUrl`);
@@ -266,7 +276,7 @@ export class LlmRouter {
         model: createOpenAI({
           apiKey: provider.apiKey,
           baseURL: provider.baseUrl
-        })(model),
+        }).chat(model),
         providerKind: provider.kind
       };
     }
@@ -274,101 +284,9 @@ export class LlmRouter {
     return {
       model: createOpenAI({
         apiKey: provider.apiKey
-      }).responses(model),
+      }).chat(model),
       providerKind: provider.kind
     };
-  }
-
-  private isNativeToolProtocolError(error: unknown): boolean {
-    const message = this.flattenErrorMessage(error).toLowerCase();
-    return (
-      message.includes("function_call_output requires item_reference") ||
-      message.includes("previous_response_id") ||
-      message.includes("tool_call context")
-    );
-  }
-
-  private flattenErrorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      const cause = (error as Error & { cause?: unknown }).cause;
-      return `${error.message}\n${cause ? this.flattenErrorMessage(cause) : ""}`.trim();
-    }
-
-    if (typeof error === "string") {
-      return error;
-    }
-
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return String(error);
-    }
-  }
-
-  private async generateChatReplyViaCompatTools(input: {
-    model: any;
-    system: string;
-    prompt: string;
-    tools: ToolSet;
-  }): Promise<string> {
-    const toolEntries = Object.entries(input.tools);
-    const toolSummary = toolEntries
-      .map(([name, toolDefinition]) => `- ${name}: ${toolDefinition.description ?? "无描述"}`)
-      .join("\n");
-
-    const MAX_STEPS = 6;
-    let executionLog = "";
-
-    for (let step = 0; step < MAX_STEPS; step += 1) {
-      const decision = await generateObject({
-        model: input.model,
-        schema: compatToolStepSchema,
-        system: [
-          input.system,
-          "你处于工具兼容模式：必须输出 JSON，决定是调用工具还是直接回复。",
-          "当需要调用工具时输出 kind=tool，并给出 toolName 和 toolInput。",
-          "当信息足够时输出 kind=final，并把最终回复放在 response 字段。"
-        ].join("\n\n"),
-        prompt: [
-          `用户请求与上下文:\n${input.prompt}`,
-          `可用工具:\n${toolSummary || "(无可用工具)"}`,
-          `已执行步骤:\n${executionLog || "(尚未执行工具)"}`
-        ].join("\n\n")
-      } as any);
-
-      const parsed = compatToolStepSchema.parse(decision.object ?? {});
-      if (parsed.kind === "final") {
-        const text = parsed.response?.trim();
-        return text || "操作已完成。";
-      }
-
-      const toolName = parsed.toolName?.trim() ?? "";
-      const selectedTool = (input.tools as Record<string, any>)[toolName];
-      if (!selectedTool?.execute) {
-        executionLog += `\n[step ${step + 1}] 工具不存在: ${toolName}`;
-        continue;
-      }
-
-      let toolResultText = "";
-      try {
-        const result = await selectedTool.execute(parsed.toolInput ?? {}, {
-          toolCallId: `compat-${Date.now()}-${step + 1}`,
-          messages: []
-        } as any);
-        toolResultText = JSON.stringify(result).slice(0, 3000);
-      } catch (error) {
-        toolResultText = `ERROR: ${this.flattenErrorMessage(error).slice(0, 1200)}`;
-      }
-
-      executionLog += [
-        "",
-        `[step ${step + 1}] tool=${toolName}`,
-        `input=${JSON.stringify(parsed.toolInput ?? {})}`,
-        `result=${toolResultText}`
-      ].join("\n");
-    }
-
-    return "工具调用步骤过多，已中止。请给我更具体一点的操作指令。";
   }
 
   private supportsTemperature(route: ModelRoute): boolean {

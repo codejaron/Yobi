@@ -13,6 +13,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.4",
     "@ai-sdk/openai": "^2.0.10",
+    "@openrouter/ai-sdk-provider": "^1.5.4",
     "active-win": "^8.1.0",
     "ai": "^5.0.90",
     "class-variance-authority": "^0.7.1",

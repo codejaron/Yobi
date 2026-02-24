@@ -3,7 +3,7 @@ import { z } from "zod";
 export const providerSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
-  kind: z.enum(["openai", "anthropic", "custom-openai"]),
+  kind: z.enum(["openai", "anthropic", "custom-openai", "openrouter"]),
   apiKey: z.string().default(""),
   baseUrl: z.string().url().optional(),
   enabled: z.boolean().default(true)

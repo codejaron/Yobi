@@ -102,7 +102,9 @@ export function ProvidersPage({
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle>Provider 管理</CardTitle>
-            <CardDescription>内置 OpenAI / Anthropic，也支持任意 OpenAI 兼容服务。</CardDescription>
+            <CardDescription>
+              内置 OpenAI / Anthropic / OpenRouter，也支持任意 OpenAI 兼容服务。
+            </CardDescription>
           </div>
           <Button variant="outline" onClick={addProvider}>
             <Plus className="mr-2 h-4 w-4" />
@@ -140,6 +142,7 @@ export function ProvidersPage({
                   >
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic</option>
+                    <option value="openrouter">OpenRouter</option>
                     <option value="custom-openai">Custom OpenAI Compatible</option>
                   </Select>
                 </div>
