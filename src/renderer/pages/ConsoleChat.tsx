@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CommandApprovalDecision, ConsoleChatEvent } from "@shared/types";
+import type { CommandApprovalDecision, ConsoleChatEvent, HistoryMessage } from "@shared/types";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -37,6 +37,10 @@ interface PendingApproval {
   approvalId: string;
   toolName: string;
   description: string;
+}
+
+function historyRoleToMessageRole(role: HistoryMessage["role"]): MessageRole {
+  return role === "assistant" ? "assistant" : "user";
 }
 
 const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string }> = [
@@ -107,7 +111,12 @@ function actionColor(kind: ActionKind): string {
 }
 
 export function ConsoleChatPage() {
-  const [messages, setMessages] = useState<ConsoleMessage[]>([]);
+  const [liveMessages, setLiveMessages] = useState<ConsoleMessage[]>([]);
+  const [persistedMessages, setPersistedMessages] = useState<HistoryMessage[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [actions, setActions] = useState<ActionItem[]>([]);
   const [draft, setDraft] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
@@ -116,8 +125,10 @@ export function ConsoleChatPage() {
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const chatListRef = useRef<HTMLDivElement | null>(null);
   const actionBottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const loadingMoreHistoryRef = useRef(false);
 
   const appendAction = useCallback((item: Omit<ActionItem, "id"> & { id?: string }) => {
     setActions((prev) => {
@@ -163,7 +174,7 @@ export function ConsoleChatPage() {
   }, []);
 
   const upsertAssistantMessage = useCallback((requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
-    setMessages((prev) => {
+    setLiveMessages((prev) => {
       const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
 
       if (index < 0) {
@@ -300,6 +311,96 @@ export function ConsoleChatPage() {
     });
   }, [appendAction, upsertAssistantMessage, upsertReasoningAction]);
 
+  const loadLatestHistory = useCallback(async () => {
+    try {
+      const page = await window.companion.listConsoleHistory({
+        limit: 20
+      });
+
+      setPersistedMessages(page.items);
+      setHistoryHasMore(page.hasMore);
+      setHistoryCursor(page.nextCursor);
+    } finally {
+      setHistoryLoaded(true);
+    }
+  }, []);
+
+  const loadMoreHistory = useCallback(async () => {
+    if (!historyHasMore || !historyCursor || loadingMoreHistoryRef.current) {
+      return;
+    }
+
+    loadingMoreHistoryRef.current = true;
+    setLoadingMoreHistory(true);
+    const container = chatListRef.current;
+    const previousScrollTop = container?.scrollTop ?? 0;
+    const previousScrollHeight = container?.scrollHeight ?? 0;
+
+    try {
+      const page = await window.companion.listConsoleHistory({
+        cursor: historyCursor,
+        limit: 20
+      });
+
+      if (page.items.length === 0) {
+        setHistoryHasMore(false);
+        setHistoryCursor(null);
+        return;
+      }
+
+      setPersistedMessages((prev) => {
+        const existingIds = new Set(prev.map((item) => item.id));
+        const additions = page.items.filter((item) => !existingIds.has(item.id));
+        return additions.length > 0 ? [...additions, ...prev] : prev;
+      });
+
+      if (page.nextCursor === historyCursor) {
+        setHistoryHasMore(false);
+        setHistoryCursor(null);
+      } else {
+        setHistoryHasMore(page.hasMore);
+        setHistoryCursor(page.nextCursor);
+      }
+
+      requestAnimationFrame(() => {
+        const node = chatListRef.current;
+        if (!node) {
+          return;
+        }
+
+        const nextHeight = node.scrollHeight;
+        const delta = Math.max(0, nextHeight - previousScrollHeight);
+        node.scrollTop = previousScrollTop + delta;
+      });
+    } finally {
+      loadingMoreHistoryRef.current = false;
+      setLoadingMoreHistory(false);
+    }
+  }, [historyCursor, historyHasMore]);
+
+  const maybeLoadMoreHistory = useCallback(() => {
+    const container = chatListRef.current;
+    if (!container || !historyLoaded || !historyHasMore || loadingMoreHistoryRef.current) {
+      return;
+    }
+
+    if (container.scrollTop > 36) {
+      return;
+    }
+
+    void loadMoreHistory();
+  }, [historyHasMore, historyLoaded, loadMoreHistory]);
+
+  const handleChatScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      if (!event.currentTarget) {
+        return;
+      }
+      maybeLoadMoreHistory();
+    },
+    [maybeLoadMoreHistory]
+  );
+
   useEffect(() => {
     return window.companion.onConsoleChatEvent((event) => {
       handleChatEvent(event);
@@ -307,8 +408,20 @@ export function ConsoleChatPage() {
   }, [handleChatEvent]);
 
   useEffect(() => {
+    void loadLatestHistory();
+  }, [loadLatestHistory]);
+
+  useEffect(() => {
+    if (!historyLoaded) {
+      return;
+    }
+
+    chatBottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+  }, [historyLoaded]);
+
+  useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+  }, [liveMessages]);
 
   useEffect(() => {
     actionBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -346,7 +459,7 @@ export function ConsoleChatPage() {
     }
 
     setDraft("");
-    setMessages((prev) => [
+    setLiveMessages((prev) => [
       ...prev,
       {
         id: makeId("user"),
@@ -360,7 +473,7 @@ export function ConsoleChatPage() {
     try {
       const started = await window.companion.sendConsoleChat(text);
       setActiveRequestId(started.requestId);
-      setMessages((prev) => [
+      setLiveMessages((prev) => [
         ...prev,
         {
           id: makeId("assistant"),
@@ -380,7 +493,7 @@ export function ConsoleChatPage() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "提交请求失败，请稍后重试";
-      setMessages((prev) => [
+      setLiveMessages((prev) => [
         ...prev,
         {
           id: makeId("assistant"),
@@ -429,6 +542,19 @@ export function ConsoleChatPage() {
 
   const busy = activeRequestId !== null;
   const inputDisabled = busy && !pendingApproval;
+  const messages = useMemo<ConsoleMessage[]>(() => {
+    const historyMessages = persistedMessages
+      .filter((item) => item.role === "user" || item.role === "assistant")
+      .map((item) => ({
+        id: item.id,
+        requestId: `history-${item.id}`,
+        role: historyRoleToMessageRole(item.role),
+        text: item.text,
+        state: "done" as const
+      }));
+
+    return [...historyMessages, ...liveMessages];
+  }, [persistedMessages, liveMessages]);
 
   const isToolAction = useCallback((item: ActionItem): boolean => {
     if (item.kind === "tool") {
@@ -451,21 +577,41 @@ export function ConsoleChatPage() {
       return "正在流式输出，等待本轮完成...";
     }
 
+    if (historyHasMore) {
+      return "已显示最近 20 条，向上可继续加载历史消息。";
+    }
+
     return "支持流式输出 + Thinking + 工具动作日志。";
-  }, [busy, pendingApproval]);
+  }, [busy, historyHasMore, pendingApproval]);
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <Card className="flex min-h-[640px] flex-col overflow-hidden">
+    <div className="grid h-[calc(100vh-220px)] min-h-[620px] max-h-[780px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <Card className="flex h-full min-h-0 flex-col overflow-hidden">
         <CardHeader>
-          <CardTitle>聊天调试台</CardTitle>
-          <CardDescription>实时展示 LLM 输出、Thinking 与工具调用轨迹。</CardDescription>
+          <CardTitle>对话窗口</CardTitle>
+          <CardDescription>自动显示历史消息，支持流式回复与命令审批。</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-1 flex-col gap-4 overflow-hidden">
-          <div className="flex-1 space-y-3 overflow-y-auto pr-2">
-            {messages.length === 0 ? (
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+          <div
+            ref={chatListRef}
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2"
+            onScroll={handleChatScroll}
+          >
+            {historyLoaded && historyHasMore ? (
+              <div className="flex justify-center">
+                <span className="rounded-full border border-border/70 bg-white/75 px-3 py-1 text-xs text-muted-foreground">
+                  {loadingMoreHistory ? "正在加载更早消息..." : "上滑到顶部自动加载历史消息"}
+                </span>
+              </div>
+            ) : null}
+
+            {!historyLoaded ? (
               <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-4 text-sm text-muted-foreground">
-                发送第一条消息后，这里会显示流式回复和最终结果。
+                正在加载历史消息...
+              </p>
+            ) : messages.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-4 text-sm text-muted-foreground">
+                暂无对话记录，发一条消息开始聊天吧。
               </p>
             ) : (
               messages.map((item) => (
@@ -539,13 +685,13 @@ export function ConsoleChatPage() {
         </CardContent>
       </Card>
 
-      <Card className="flex min-h-[640px] flex-col overflow-hidden">
+      <Card className="flex h-full min-h-0 flex-col overflow-hidden">
         <CardHeader>
           <CardTitle>动作日志</CardTitle>
           <CardDescription>记录 Thinking、工具命令、审批与错误。</CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 overflow-hidden">
-          <div className="h-full space-y-2 overflow-y-auto pr-1">
+        <CardContent className="min-h-0 flex-1 overflow-hidden">
+          <div className="h-full min-h-0 space-y-2 overflow-y-auto pr-1">
             {actions.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-3 text-xs text-muted-foreground">
                 等待模型动作...

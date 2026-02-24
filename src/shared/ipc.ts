@@ -8,6 +8,12 @@ import type {
   MemoryFact
 } from "./types";
 
+export interface CursorHistoryPage {
+  items: HistoryMessage[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
 export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
@@ -25,6 +31,10 @@ export interface CompanionApi {
   onStatus(listener: (status: AppStatus) => void): () => void;
 
   sendConsoleChat(text: string): Promise<{ requestId: string }>;
+  listConsoleHistory(input?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<CursorHistoryPage>;
   approveConsoleCommand(input: {
     approvalId: string;
     decision: CommandApprovalDecision;

@@ -266,6 +266,21 @@ export class CompanionRuntime {
     return this.collectStatus();
   }
 
+  async getConsoleChatHistory(input?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    items: HistoryMessage[];
+    hasMore: boolean;
+    nextCursor: string | null;
+  }> {
+    return this.historyStore.searchByCursor({
+      limit: input?.limit ?? 20,
+      beforeId: input?.cursor,
+      roles: ["user", "assistant"]
+    });
+  }
+
   async startConsoleChat(text: string): Promise<{ requestId: string }> {
     const normalized = text.trim();
     if (!normalized) {

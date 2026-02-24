@@ -61,6 +61,16 @@ const api: CompanionApi = {
       text
     });
   },
+  listConsoleHistory(input?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    items: HistoryMessage[];
+    hasMore: boolean;
+    nextCursor: string | null;
+  }> {
+    return ipcRenderer.invoke("console:chat:history", input ?? {});
+  },
   approveConsoleCommand(input: {
     approvalId: string;
     decision: CommandApprovalDecision;

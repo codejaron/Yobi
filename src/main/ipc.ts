@@ -4,6 +4,8 @@ import { runtime } from "./runtime";
 
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_CHAT_EVENT_CHANNEL = "runtime:console-chat-event";
+const statusSubscriptions = new Map<number, () => void>();
+const consoleChatSubscriptions = new Map<number, () => void>();
 
 export function registerIpcHandlers(): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
@@ -33,6 +35,16 @@ export function registerIpcHandlers(): void {
     runtime.startConsoleChat(payload?.text ?? "")
   );
   ipcMain.handle(
+    "console:chat:history",
+    (
+      _,
+      payload: {
+        cursor?: string;
+        limit?: number;
+      }
+    ) => runtime.getConsoleChatHistory(payload)
+  );
+  ipcMain.handle(
     "console:chat:approve",
     (
       _,
@@ -55,31 +67,55 @@ export function registerIpcHandlers(): void {
 }
 
 function subscribeToStatus(target: WebContents): void {
+  const previous = statusSubscriptions.get(target.id);
+  if (previous) {
+    previous();
+    statusSubscriptions.delete(target.id);
+  }
+
   const unsubscribe = runtime.onStatus((status) => {
     if (target.isDestroyed()) {
       unsubscribe();
+      statusSubscriptions.delete(target.id);
       return;
     }
 
     target.send(STATUS_CHANNEL, status);
   });
+  statusSubscriptions.set(target.id, unsubscribe);
 
   target.once("destroyed", () => {
-    unsubscribe();
+    const active = statusSubscriptions.get(target.id);
+    if (active) {
+      active();
+      statusSubscriptions.delete(target.id);
+    }
   });
 }
 
 function subscribeToConsoleChat(target: WebContents): void {
+  const previous = consoleChatSubscriptions.get(target.id);
+  if (previous) {
+    previous();
+    consoleChatSubscriptions.delete(target.id);
+  }
+
   const unsubscribe = runtime.onConsoleChatEvent((event) => {
     if (target.isDestroyed()) {
       unsubscribe();
+      consoleChatSubscriptions.delete(target.id);
       return;
     }
 
     target.send(CONSOLE_CHAT_EVENT_CHANNEL, event);
   });
+  consoleChatSubscriptions.set(target.id, unsubscribe);
 
   target.once("destroyed", () => {
-    unsubscribe();
+    const active = consoleChatSubscriptions.get(target.id);
+    if (active) {
+      active();
+      consoleChatSubscriptions.delete(target.id);
+    }
   });
 }
