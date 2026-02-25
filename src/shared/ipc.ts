@@ -32,6 +32,7 @@ export interface CompanionApi {
 
   getStatus(): Promise<AppStatus>;
   onStatus(listener: (status: AppStatus) => void): () => void;
+  onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 
   sendConsoleChat(text: string): Promise<{ requestId: string }>;
   listConsoleHistory(input?: {

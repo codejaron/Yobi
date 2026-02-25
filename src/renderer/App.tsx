@@ -55,7 +55,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let unsub: (() => void) | null = null;
+    let unsubStatus: (() => void) | null = null;
+    let unsubPetEnabled: (() => void) | null = null;
 
     const load = async (): Promise<void> => {
       const [nextConfig, nextStatus, nextMemory] = await Promise.all([
@@ -73,15 +74,35 @@ export default function App() {
       setCharacter(currentCharacter);
       setNotice("就绪");
 
-      unsub = window.companion.onStatus((update) => {
+      unsubStatus = window.companion.onStatus((update) => {
         setStatus(update);
+      });
+
+      unsubPetEnabled = window.companion.onPetEnabledChange((enabled) => {
+        setConfig((current) => {
+          if (!current || current.pet.enabled === enabled) {
+            return current;
+          }
+
+          return {
+            ...current,
+            pet: {
+              ...current.pet,
+              enabled
+            }
+          };
+        });
+        if (!enabled) {
+          setNotice("桌宠已退出（开关已同步关闭）");
+        }
       });
     };
 
     void load();
 
     return () => {
-      unsub?.();
+      unsubStatus?.();
+      unsubPetEnabled?.();
     };
   }, []);
 

@@ -25,15 +25,7 @@
       }
 
       #status {
-        position: absolute;
-        bottom: 12px;
-        left: 12px;
-        padding: 4px 8px;
-        border-radius: 999px;
-        background: rgba(0, 0, 0, 0.45);
-        color: #fff;
-        font-size: 12px;
-        z-index: 10;
+        display: none;
       }
 
       #chat-panel {
@@ -1570,6 +1562,18 @@
             if (event.key === "Escape" && isChatVisible()) {
               closeChatPanel();
             }
+          });
+
+          window.addEventListener("contextmenu", (event) => {
+            if (isPointerInChatPanel(event.target)) {
+              return;
+            }
+
+            event.preventDefault();
+            ipcRenderer.send("pet:menu:show", {
+              x: Math.round(event.x),
+              y: Math.round(event.y)
+            });
           });
 
           enterIdle(true);

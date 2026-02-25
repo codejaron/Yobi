@@ -64,6 +64,18 @@ const api: CompanionApi = {
       ipcRenderer.removeListener(channel, wrapped);
     };
   },
+  onPetEnabledChange(listener: (enabled: boolean) => void): () => void {
+    const channel = "runtime:pet-enabled";
+    const wrapped = (_event: Electron.IpcRendererEvent, enabled: boolean) => {
+      listener(Boolean(enabled));
+    };
+
+    ipcRenderer.on(channel, wrapped);
+
+    return () => {
+      ipcRenderer.removeListener(channel, wrapped);
+    };
+  },
 
   sendConsoleChat(text: string): Promise<{ requestId: string }> {
     return ipcRenderer.invoke("console:chat:send", {
