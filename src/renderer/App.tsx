@@ -3,7 +3,6 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
-  HistoryMessage,
   MemoryFact
 } from "@shared/types";
 import { SideNav } from "@renderer/components/layout/SideNav";
@@ -14,7 +13,6 @@ import { ConsoleChatPage } from "@renderer/pages/ConsoleChat";
 import { ProvidersPage } from "@renderer/pages/Providers";
 import { CharacterPage } from "@renderer/pages/Character";
 import { MemoryPage } from "@renderer/pages/Memory";
-import { HistoryPage } from "@renderer/pages/History";
 import { SettingsPage } from "@renderer/pages/Settings";
 import type { PageId } from "./types";
 
@@ -30,8 +28,6 @@ function pageTitle(page: PageId): string {
       return "角色人设";
     case "memory":
       return "长期记忆";
-    case "history":
-      return "永久历史";
     case "settings":
       return "行为与通道设置";
     default:
@@ -45,7 +41,6 @@ export default function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [character, setCharacter] = useState<CharacterProfile | null>(null);
   const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([]);
-  const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
 
@@ -57,15 +52,6 @@ export default function App() {
   const refreshMemory = useCallback(async (): Promise<void> => {
     const list = await window.companion.listMemory();
     setMemoryFacts(list);
-  }, []);
-
-  const refreshHistory = useCallback(async (query?: string): Promise<void> => {
-    const rows = await window.companion.listHistory({
-      query,
-      limit: 400,
-      offset: 0
-    });
-    setHistory(rows);
   }, []);
 
   useEffect(() => {
@@ -82,13 +68,9 @@ export default function App() {
       setStatus(nextStatus);
       setMemoryFacts(nextMemory);
 
-      const [currentCharacter, initialHistory] = await Promise.all([
-        window.companion.getCharacter(nextConfig.characterId),
-        window.companion.listHistory({ limit: 100 })
-      ]);
+      const currentCharacter = await window.companion.getCharacter(nextConfig.characterId);
 
       setCharacter(currentCharacter);
-      setHistory(initialHistory);
       setNotice("就绪");
 
       unsub = window.companion.onStatus((update) => {
@@ -173,16 +155,21 @@ export default function App() {
             await refreshMemory();
             setNotice("记忆已删除");
           }}
+          onClearAll={async () => {
+            await window.companion.clearMemory();
+            await refreshMemory();
+            setNotice("长期记忆已清空");
+          }}
+          onOpenFileLocation={async () => {
+            await window.companion.openMemoryFileLocation();
+            setNotice("已打开记忆文件位置");
+          }}
         />
       );
     }
 
-    if (activePage === "history") {
-      return <HistoryPage items={history} onSearch={refreshHistory} />;
-    }
-
     return <SettingsPage config={config} setConfig={setConfig} />;
-  }, [activePage, character, config, history, memoryFacts, refreshHistory, refreshMemory, refreshStatus, status]);
+  }, [activePage, character, config, memoryFacts, refreshMemory, refreshStatus, status]);
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">

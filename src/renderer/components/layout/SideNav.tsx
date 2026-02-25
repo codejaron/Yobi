@@ -2,7 +2,6 @@ import {
   Bot,
   Brain,
   Gauge,
-  History,
   MessageSquare,
   MessageCircleHeart,
   Settings2
@@ -21,7 +20,6 @@ const items: Array<{
   { id: "providers", label: "Provider", icon: Bot },
   { id: "character", label: "角色", icon: MessageCircleHeart },
   { id: "memory", label: "记忆", icon: Brain },
-  { id: "history", label: "历史", icon: History },
   { id: "settings", label: "设置", icon: Settings2 }
 ];
 

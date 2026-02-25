@@ -1,4 +1,4 @@
-import { ipcMain, WebContents } from "electron";
+import { ipcMain, shell, WebContents } from "electron";
 import type { AppConfig, CharacterProfile, CommandApprovalDecision } from "@shared/types";
 import { runtime } from "./runtime";
 
@@ -19,6 +19,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("history:list", (_, query: { query?: string; limit?: number; offset?: number }) =>
     runtime.getHistory(query)
   );
+  ipcMain.handle("history:clear", () => runtime.clearHistory());
 
   ipcMain.handle("memory:list", () => runtime.getMemoryFacts());
   ipcMain.handle(
@@ -26,6 +27,15 @@ export function registerIpcHandlers(): void {
     (_, fact: { id?: string; content: string; confidence: number }) => runtime.upsertMemoryFact(fact)
   );
   ipcMain.handle("memory:delete", (_, id: string) => runtime.deleteMemoryFact(id));
+  ipcMain.handle("memory:clear", () => runtime.clearMemoryFacts());
+  ipcMain.handle("memory:open-location", () => {
+    const path = runtime.getMemoryFilePath();
+    shell.showItemInFolder(path);
+
+    return {
+      path
+    };
+  });
 
   ipcMain.handle("status:get", () => runtime.getStatus());
   ipcMain.handle("pet:chat:send", (_, payload: { text?: string }) =>

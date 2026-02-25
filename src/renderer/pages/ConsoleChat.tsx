@@ -117,6 +117,7 @@ export function ConsoleChatPage() {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
   const [actions, setActions] = useState<ActionItem[]>([]);
   const [draft, setDraft] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
@@ -324,6 +325,46 @@ export function ConsoleChatPage() {
       setHistoryLoaded(true);
     }
   }, []);
+
+  const clearHistory = useCallback(async () => {
+    if (activeRequestId || clearingHistory) {
+      return;
+    }
+
+    const confirmed = window.confirm("确认清空全部历史记录吗？该操作不可撤销。");
+    if (!confirmed) {
+      return;
+    }
+
+    setClearingHistory(true);
+    try {
+      await window.companion.clearHistory();
+      setPersistedMessages([]);
+      setLiveMessages([]);
+      setHistoryHasMore(false);
+      setHistoryCursor(null);
+      setActions([]);
+      setExpandedActions({});
+      setPendingApproval(null);
+      appendAction({
+        requestId: "history-cleared",
+        kind: "status",
+        label: "历史已清空",
+        detail: "全部对话历史记录已删除。",
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      appendAction({
+        requestId: "history-clear-error",
+        kind: "error",
+        label: "清空失败",
+        detail: error instanceof Error ? error.message : "清空历史记录失败，请稍后重试。",
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      setClearingHistory(false);
+    }
+  }, [activeRequestId, appendAction, clearingHistory]);
 
   const loadMoreHistory = useCallback(async () => {
     if (!historyHasMore || !historyCursor || loadingMoreHistoryRef.current) {
@@ -571,8 +612,19 @@ export function ConsoleChatPage() {
   return (
     <div className="grid h-[calc(100vh-140px)] min-h-[680px] max-h-[900px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-        <CardHeader>
-          <CardTitle>对话窗口</CardTitle>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle>对话窗口</CardTitle>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void clearHistory()}
+            disabled={busy || clearingHistory || !historyLoaded}
+            className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50"
+          >
+            {clearingHistory ? "清空中..." : "清空历史记录"}
+          </Button>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
           <div

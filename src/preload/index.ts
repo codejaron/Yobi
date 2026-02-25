@@ -28,6 +28,9 @@ const api: CompanionApi = {
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]> {
     return ipcRenderer.invoke("history:list", query ?? {});
   },
+  clearHistory(): Promise<void> {
+    return ipcRenderer.invoke("history:clear");
+  },
 
   listMemory(): Promise<MemoryFact[]> {
     return ipcRenderer.invoke("memory:list");
@@ -37,6 +40,12 @@ const api: CompanionApi = {
   },
   deleteMemory(id: string): Promise<void> {
     return ipcRenderer.invoke("memory:delete", id);
+  },
+  clearMemory(): Promise<void> {
+    return ipcRenderer.invoke("memory:clear");
+  },
+  openMemoryFileLocation(): Promise<{ path: string }> {
+    return ipcRenderer.invoke("memory:open-location");
   },
 
   getStatus(): Promise<AppStatus> {

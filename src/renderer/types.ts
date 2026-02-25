@@ -2,7 +2,6 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
-  HistoryMessage,
   MemoryFact
 } from "@shared/types";
 
@@ -12,7 +11,6 @@ export type PageId =
   | "providers"
   | "character"
   | "memory"
-  | "history"
   | "settings";
 
 export interface PageProps {
@@ -27,5 +25,4 @@ export interface DataBundle {
   status: AppStatus | null;
   character: CharacterProfile | null;
   memoryFacts: MemoryFact[];
-  history: HistoryMessage[];
 }

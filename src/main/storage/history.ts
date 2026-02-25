@@ -138,4 +138,8 @@ export class HistoryStore {
     const content = await fs.readFile(this.paths.historyPath, "utf8").catch(() => "");
     return parseJsonl(content).length;
   }
+
+  async clear(): Promise<void> {
+    await fs.writeFile(this.paths.historyPath, "", "utf8");
+  }
 }

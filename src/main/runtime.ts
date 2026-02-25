@@ -246,6 +246,11 @@ export class CompanionRuntime {
     return this.historyStore.search(options);
   }
 
+  async clearHistory(): Promise<void> {
+    await this.historyStore.clear();
+    await this.emitStatus();
+  }
+
   async getMemoryFacts(): Promise<MemoryFact[]> {
     return this.memoryManager.listFacts();
   }
@@ -260,6 +265,15 @@ export class CompanionRuntime {
 
   async deleteMemoryFact(id: string): Promise<void> {
     await this.memoryManager.deleteFact(id);
+  }
+
+  async clearMemoryFacts(): Promise<void> {
+    await this.memoryStore.clearFacts();
+    await this.emitStatus();
+  }
+
+  getMemoryFilePath(): string {
+    return this.paths.memoryPath;
   }
 
   async getStatus(): Promise<AppStatus> {

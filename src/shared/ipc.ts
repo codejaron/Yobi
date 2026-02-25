@@ -22,10 +22,13 @@ export interface CompanionApi {
   saveCharacter(profile: CharacterProfile): Promise<void>;
 
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]>;
+  clearHistory(): Promise<void>;
 
   listMemory(): Promise<MemoryFact[]>;
   upsertMemory(input: { id?: string; content: string; confidence: number }): Promise<MemoryFact>;
   deleteMemory(id: string): Promise<void>;
+  clearMemory(): Promise<void>;
+  openMemoryFileLocation(): Promise<{ path: string }>;
 
   getStatus(): Promise<AppStatus>;
   onStatus(listener: (status: AppStatus) => void): () => void;

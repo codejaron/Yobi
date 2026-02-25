@@ -65,6 +65,15 @@ export class MemoryStore {
     await this.persist();
   }
 
+  async clearFacts(): Promise<void> {
+    this.cached = {
+      ...this.cached,
+      facts: []
+    };
+
+    await this.persist();
+  }
+
   async markSummary(turnsSinceSummary: number): Promise<void> {
     this.cached = {
       ...this.cached,
