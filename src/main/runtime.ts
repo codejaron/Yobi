@@ -1,6 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { app, powerMonitor } from "electron";
 import type {
   ActivitySnapshot,
@@ -226,6 +227,55 @@ export class CompanionRuntime {
 
   getConfig(): AppConfig {
     return this.configStore.getConfig();
+  }
+
+  async importPetModelDirectory(sourceDir: string): Promise<{ modelDir: string }> {
+    const resolvedSourceDir = path.resolve(sourceDir);
+
+    let sourceStat;
+    try {
+      sourceStat = await stat(resolvedSourceDir);
+    } catch {
+      throw new Error("选择的模型目录不存在。");
+    }
+
+    if (!sourceStat.isDirectory()) {
+      throw new Error("请选择模型文件夹，而不是文件。");
+    }
+
+    const containsModelFile = await this.containsModel3JsonFile(resolvedSourceDir);
+    if (!containsModelFile) {
+      throw new Error("所选目录内未找到 .model3.json 文件。");
+    }
+
+    await mkdir(this.paths.modelsDir, {
+      recursive: true
+    });
+
+    const managedModelsDir = path.resolve(this.paths.modelsDir);
+    if (resolvedSourceDir === managedModelsDir) {
+      throw new Error("请选择具体模型文件夹，不要选择 models 根目录。");
+    }
+
+    const baseName = this.normalizeModelDirectoryName(path.basename(resolvedSourceDir));
+    let targetDir = path.join(this.paths.modelsDir, baseName);
+    if (existsSync(targetDir)) {
+      targetDir = path.join(this.paths.modelsDir, `${baseName}-${Date.now()}`);
+    }
+
+    await cp(resolvedSourceDir, targetDir, {
+      recursive: true,
+      force: true
+    });
+
+    const copiedContainsModelFile = await this.containsModel3JsonFile(targetDir);
+    if (!copiedContainsModelFile) {
+      throw new Error("模型导入失败：复制后未找到 .model3.json 文件。");
+    }
+
+    return {
+      modelDir: targetDir
+    };
   }
 
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
@@ -1155,6 +1205,53 @@ export class CompanionRuntime {
         .catch((error) => reject(error))
         .finally(() => clearTimeout(timer));
     });
+  }
+
+  private normalizeModelDirectoryName(name: string): string {
+    const sanitized = name
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+/, "")
+      .replace(/-+$/, "")
+      .slice(0, 64);
+
+    return sanitized || "live2d-model";
+  }
+
+  private async containsModel3JsonFile(baseDir: string): Promise<boolean> {
+    const stack = [baseDir];
+
+    while (stack.length > 0) {
+      const currentDir = stack.pop();
+      if (!currentDir) {
+        continue;
+      }
+
+      let entries: Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }> = [];
+      try {
+        entries = await readdir(currentDir, {
+          withFileTypes: true
+        });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+
+        if (entry.isFile() && entry.name.toLowerCase().endsWith(".model3.json")) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 }
 

@@ -45,10 +45,15 @@ export class CompanionPaths {
     return path.join(this.baseDir, "logs");
   }
 
+  get modelsDir(): string {
+    return path.join(this.baseDir, "models");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.charactersDir, { recursive: true });
     mkdirSync(this.sessionDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
+    mkdirSync(this.modelsDir, { recursive: true });
   }
 }

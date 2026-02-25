@@ -1,4 +1,5 @@
-import { ipcMain, shell, WebContents } from "electron";
+import { BrowserWindow, dialog, ipcMain, shell, WebContents } from "electron";
+import type { OpenDialogOptions } from "electron";
 import type { AppConfig, CharacterProfile, CommandApprovalDecision } from "@shared/types";
 import { runtime } from "./runtime";
 
@@ -38,6 +39,28 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("status:get", () => runtime.getStatus());
+  ipcMain.handle("pet:model:import", async (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions: OpenDialogOptions = {
+      title: "选择 Live2D 模型文件夹",
+      properties: ["openDirectory"]
+    };
+    const picked = senderWindow
+      ? await dialog.showOpenDialog(senderWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return {
+        canceled: true
+      };
+    }
+
+    const imported = await runtime.importPetModelDirectory(picked.filePaths[0]);
+    return {
+      canceled: false,
+      modelDir: imported.modelDir
+    };
+  });
   ipcMain.handle("pet:chat:send", (_, payload: { text?: string }) =>
     runtime.chatFromPet(payload?.text ?? "")
   );

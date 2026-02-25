@@ -31,6 +31,10 @@ export interface CompanionApi {
   openMemoryFileLocation(): Promise<{ path: string }>;
 
   getStatus(): Promise<AppStatus>;
+  importPetModelFromDialog(): Promise<{
+    canceled: boolean;
+    modelDir?: string;
+  }>;
   onStatus(listener: (status: AppStatus) => void): () => void;
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 

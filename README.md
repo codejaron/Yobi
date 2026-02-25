@@ -20,6 +20,19 @@ npm install
 npm run dev
 ```
 
+## macOS 打开后提示“移到垃圾桶”
+
+如果下载的 `.app` 还没签名公证，macOS 可能提示“已损坏/应移到垃圾桶”。
+
+1. 先把应用移动到 `/Applications`
+2. 执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Yobi.app
+```
+
+3. 回到 Finder 里右键应用，选择“打开”
+
 ## 必须配置
 
 ### 1) Provider 和模型路由（必配）
@@ -44,8 +57,10 @@ npm run dev
 
 由于授权原因，仓库不包含完整模型。用户 `clone` 后需自行下载模型并配置目录。
 
-- 在「设置 -> 后台与桌宠」填写 `Live2D 模型目录`
+- 在「设置 -> 后台与桌宠」点击 `导入模型`
 - 目录里至少要有一个 `*.model3.json`
+
+导入后会自动复制到 `~/.yobi/models/` 并写入配置，不需要手动填路径。
 
 容错行为：
 
@@ -68,6 +83,7 @@ npm run dev
 ~/.yobi/
 ├── config.json
 ├── characters/default.json
+├── models/
 ├── sessions/main/history.jsonl
 ├── sessions/main/memory.json
 ├── sessions/main/context.json

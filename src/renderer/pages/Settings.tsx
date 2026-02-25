@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { AppConfig } from "@shared/types";
+import { Button } from "@renderer/components/ui/button";
 import {
   Card,
   CardContent,
@@ -8,7 +10,6 @@ import {
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { Label } from "@renderer/components/ui/label";
-import { Select } from "@renderer/components/ui/select";
 import { Switch } from "@renderer/components/ui/switch";
 import { Textarea } from "@renderer/components/ui/textarea";
 
@@ -19,6 +20,12 @@ export function SettingsPage({
   config: AppConfig;
   setConfig: (next: AppConfig) => void;
 }) {
+  const [importingModel, setImportingModel] = useState(false);
+  const [modelImportNotice, setModelImportNotice] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
   const parseList = (raw: string): string[] =>
     raw
       .split(/[\n,]/)
@@ -26,6 +33,44 @@ export function SettingsPage({
       .filter(Boolean);
 
   const toListText = (values: string[]): string => values.join("\n");
+  const importModelDirectory = async (): Promise<void> => {
+    if (importingModel) {
+      return;
+    }
+
+    setImportingModel(true);
+    setModelImportNotice(null);
+    try {
+      const result = await window.companion.importPetModelFromDialog();
+      if (result.canceled || !result.modelDir) {
+        return;
+      }
+
+      const nextConfig: AppConfig = {
+        ...config,
+        pet: {
+          ...config.pet,
+          enabled: true,
+          modelDir: result.modelDir
+        }
+      };
+      const saved = await window.companion.saveConfig(nextConfig);
+      setConfig(saved);
+      setModelImportNotice({
+        type: "success",
+        message: "模型导入成功，桌宠已自动切换到新模型。"
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "模型导入失败，请稍后重试。";
+      setModelImportNotice({
+        type: "error",
+        message
+      });
+    } finally {
+      setImportingModel(false);
+    }
+  };
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
@@ -359,19 +404,34 @@ export function SettingsPage({
           </div>
 
           <div className="space-y-1.5">
-            <Label>Live2D 模型目录</Label>
-            <Input
-              value={config.pet.modelDir}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  pet: {
-                    ...config.pet,
-                    modelDir: event.target.value
-                  }
-                })
-              }
-            />
+            <Label>Live2D 模型</Label>
+            <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+              <div className="min-w-0 pr-3">
+                <p className="truncate text-sm">
+                  {config.pet.modelDir || "未导入模型"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  模型会导入到 ~/.yobi/models 并自动写入配置
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void importModelDirectory()}
+                disabled={importingModel}
+              >
+                {importingModel ? "导入中..." : "导入模型"}
+              </Button>
+            </div>
+            {modelImportNotice ? (
+              <p
+                className={`text-xs ${
+                  modelImportNotice.type === "success" ? "text-emerald-700" : "text-rose-700"
+                }`}
+              >
+                {modelImportNotice.message}
+              </p>
+            ) : null}
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
@@ -406,24 +466,6 @@ export function SettingsPage({
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Whisper 模式</Label>
-            <Select
-              value={config.realtimeVoice.whisperMode}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  realtimeVoice: {
-                    ...config.realtimeVoice,
-                    whisperMode: event.target.value as "local" | "api"
-                  }
-                })
-              }
-            >
-              <option value="api">Whisper API</option>
-              <option value="local">whisper.cpp (本地)</option>
-            </Select>
-          </div>
         </CardContent>
       </Card>
 

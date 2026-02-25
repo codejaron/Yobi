@@ -51,6 +51,12 @@ const api: CompanionApi = {
   getStatus(): Promise<AppStatus> {
     return ipcRenderer.invoke("status:get");
   },
+  importPetModelFromDialog(): Promise<{
+    canceled: boolean;
+    modelDir?: string;
+  }> {
+    return ipcRenderer.invoke("pet:model:import");
+  },
   onStatus(listener: (status: AppStatus) => void): () => void {
     const channel = "runtime:status";
     const wrapped = (_event: Electron.IpcRendererEvent, status: AppStatus) => {
