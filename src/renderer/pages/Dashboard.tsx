@@ -1,4 +1,4 @@
-import { Activity, Bot, Clock3, MessageSquare, Sparkles, AlarmClock, PawPrint } from "lucide-react";
+import { Activity, Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import {
   Card,
@@ -16,6 +16,16 @@ function formatDateTime(value: string | null): string {
   }
 
   return new Date(value).toLocaleString();
+}
+
+function formatPermission(value: "granted" | "denied" | "unknown" | undefined): string {
+  if (value === "granted") {
+    return "已授权";
+  }
+  if (value === "denied") {
+    return "未授权";
+  }
+  return "未知";
 }
 
 export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status" | "refreshStatus">) {
@@ -54,14 +64,17 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>历史规模</CardDescription>
+            <CardDescription>系统权限</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquare className="h-4 w-4" />
-              {status?.historyCount ?? 0} 条
+              <ShieldCheck className="h-4 w-4" />
+              辅助功能与屏幕录制
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">永久历史持续追加，便于回顾和记忆提取。</p>
+            <p className="text-sm text-muted-foreground">
+              辅助功能 {formatPermission(status?.macAccessibilityPermission)} · 屏幕录制{" "}
+              {formatPermission(status?.macScreenRecordingPermission)}
+            </p>
           </CardContent>
         </Card>
 

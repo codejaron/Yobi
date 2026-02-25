@@ -14,7 +14,13 @@ export interface ActiveWindowInfo {
 
 export async function getActiveWindow(): Promise<ActiveWindowInfo | null> {
   try {
-    const current = await activeWindow();
+    const current =
+      process.platform === "darwin"
+        ? await activeWindow({
+            accessibilityPermission: false,
+            screenRecordingPermission: false
+          })
+        : await activeWindow();
     if (!current) {
       return null;
     }

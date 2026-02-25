@@ -226,6 +226,8 @@ export interface AppStatus {
   keepAwakeActive: boolean;
   pendingReminders: number;
   petOnline: boolean;
+  macAccessibilityPermission: "granted" | "denied" | "unknown";
+  macScreenRecordingPermission: "granted" | "denied" | "unknown";
 }
 
 export interface ReminderItem {

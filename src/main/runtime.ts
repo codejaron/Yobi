@@ -2,7 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { app, powerMonitor } from "electron";
+import { app, powerMonitor, systemPreferences } from "electron";
 import type {
   ActivitySnapshot,
   AppConfig,
@@ -53,6 +53,8 @@ interface CommandHandleResult {
   handled: boolean;
   responseText?: string;
 }
+
+type MacPermissionState = "granted" | "denied" | "unknown";
 
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
@@ -123,6 +125,9 @@ export class CompanionRuntime {
   private lastActivity: ActivitySnapshot | null = null;
   private screenLocked = false;
   private idlePaused = false;
+  private promptedAccessibilityPermission = false;
+  private macAccessibilityPermission: MacPermissionState = "unknown";
+  private macScreenRecordingPermission: MacPermissionState = "unknown";
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
@@ -135,6 +140,9 @@ export class CompanionRuntime {
 
   async start(): Promise<void> {
     this.bindPowerMonitor();
+    this.refreshMacPerceptionPermissions({
+      promptIfMissing: true
+    });
     await this.reminderService.init();
     await this.startTelegram();
 
@@ -707,6 +715,7 @@ export class CompanionRuntime {
       const config = this.getConfig();
       const context = this.contextStore.get();
       const issues: string[] = [];
+      this.refreshMacPerceptionPermissions();
 
       if (!config.perception.enabled) {
         issues.push("设置页中的『启用桌面感知』为关闭状态");
@@ -1095,6 +1104,7 @@ export class CompanionRuntime {
   }
 
   private async syncPerceptionState(): Promise<void> {
+    this.refreshMacPerceptionPermissions();
     const shouldRun = this.shouldRunPerception();
     const running = this.activityMonitor.isRunning();
 
@@ -1158,6 +1168,7 @@ export class CompanionRuntime {
   }
 
   private async collectStatus(): Promise<AppStatus> {
+    this.refreshMacPerceptionPermissions();
     return {
       bootedAt: this.bootedAt,
       telegramConnected: this.telegram.isConnected(),
@@ -1169,7 +1180,9 @@ export class CompanionRuntime {
       perceptionRunning: this.activityMonitor.isRunning(),
       keepAwakeActive: this.keepAwake.isActive(),
       pendingReminders: this.reminderService.count(),
-      petOnline: this.pet.isOnline()
+      petOnline: this.pet.isOnline(),
+      macAccessibilityPermission: this.macAccessibilityPermission,
+      macScreenRecordingPermission: this.macScreenRecordingPermission
     };
   }
 
@@ -1205,6 +1218,64 @@ export class CompanionRuntime {
         .catch((error) => reject(error))
         .finally(() => clearTimeout(timer));
     });
+  }
+
+  private refreshMacPerceptionPermissions(options?: { promptIfMissing?: boolean }): void {
+    if (process.platform !== "darwin") {
+      this.macAccessibilityPermission = "granted";
+      this.macScreenRecordingPermission = "granted";
+      return;
+    }
+
+    const promptIfMissing = Boolean(options?.promptIfMissing);
+    let accessibilityGranted = false;
+    try {
+      accessibilityGranted = systemPreferences.isTrustedAccessibilityClient(false);
+    } catch {
+      accessibilityGranted = false;
+    }
+
+    if (
+      !accessibilityGranted &&
+      promptIfMissing &&
+      !this.promptedAccessibilityPermission &&
+      this.getConfig().perception.enabled
+    ) {
+      this.promptedAccessibilityPermission = true;
+      try {
+        systemPreferences.isTrustedAccessibilityClient(true);
+      } catch {
+        // ignore
+      }
+
+      try {
+        accessibilityGranted = systemPreferences.isTrustedAccessibilityClient(false);
+      } catch {
+        accessibilityGranted = false;
+      }
+    }
+
+    this.macAccessibilityPermission = accessibilityGranted ? "granted" : "denied";
+    this.macScreenRecordingPermission = this.readMacScreenRecordingPermission();
+  }
+
+  private readMacScreenRecordingPermission(): MacPermissionState {
+    if (process.platform !== "darwin") {
+      return "granted";
+    }
+
+    try {
+      const status = systemPreferences.getMediaAccessStatus("screen");
+      if (status === "granted") {
+        return "granted";
+      }
+      if (status === "denied" || status === "restricted") {
+        return "denied";
+      }
+      return "unknown";
+    } catch {
+      return "unknown";
+    }
   }
 
   private normalizeModelDirectoryName(name: string): string {
