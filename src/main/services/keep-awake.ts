@@ -1,13 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { powerSaveBlocker } from "electron";
 
 export class KeepAwakeService {
-  private proc: ChildProcess | null = null;
+  private blockerId: number | null = null;
 
   apply(enabled: boolean): void {
-    if (process.platform !== "darwin") {
-      return;
-    }
-
     if (enabled) {
       this.start();
       return;
@@ -17,36 +13,34 @@ export class KeepAwakeService {
   }
 
   isActive(): boolean {
-    return Boolean(this.proc && !this.proc.killed);
+    return this.blockerId !== null && powerSaveBlocker.isStarted(this.blockerId);
   }
 
   stop(): void {
-    if (!this.proc) {
+    if (this.blockerId === null) {
       return;
     }
 
-    this.proc.kill("SIGTERM");
-    this.proc = null;
+    if (powerSaveBlocker.isStarted(this.blockerId)) {
+      powerSaveBlocker.stop(this.blockerId);
+    }
+
+    this.blockerId = null;
   }
 
   private start(): void {
-    if (this.proc && !this.proc.killed) {
+    if (this.blockerId !== null && powerSaveBlocker.isStarted(this.blockerId)) {
       return;
     }
 
+    if (this.blockerId !== null && !powerSaveBlocker.isStarted(this.blockerId)) {
+      this.blockerId = null;
+    }
+
     try {
-      this.proc = spawn("caffeinate", ["-i"], {
-        stdio: "ignore"
-      });
-      const proc = this.proc;
-      proc.on("exit", () => {
-        this.proc = null;
-      });
-      proc.on("error", () => {
-        this.proc = null;
-      });
+      this.blockerId = powerSaveBlocker.start("prevent-app-suspension");
     } catch {
-      this.proc = null;
+      this.blockerId = null;
     }
   }
 }

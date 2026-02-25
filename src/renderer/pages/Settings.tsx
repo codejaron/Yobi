@@ -327,7 +327,7 @@ export function SettingsPage({
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>保持后台运行（caffeinate）</Label>
+            <Label>保持后台运行（防休眠）</Label>
             <Switch
               checked={config.background.keepAwake}
               onChange={(checked) =>

@@ -188,6 +188,7 @@
       const { ipcRenderer } = require("electron");
       const fs = require("node:fs");
       const path = require("node:path");
+      const { pathToFileURL } = require("node:url");
 
       const statusEl = document.getElementById("status");
       const fallbackEl = document.getElementById("fallback");
@@ -348,6 +349,18 @@
           document.head.appendChild(script);
         });
 
+      const toFileHref = (filePath) => {
+        if (!filePath) {
+          return "";
+        }
+
+        try {
+          return pathToFileURL(filePath).toString();
+        } catch {
+          return `file://${encodeURI(filePath)}`;
+        }
+      };
+
       const resolveCubismCoreCandidates = () => {
         const candidates = [
           path.join(modelDir, "live2dcubismcore.min.js"),
@@ -367,7 +380,7 @@
           }
 
           try {
-            await loadScript(`file://${encodeURI(filePath)}`);
+            await loadScript(toFileHref(filePath));
             if (window.Live2DCubismCore) {
               return { ok: true, source: filePath };
             }
@@ -463,7 +476,7 @@
           const stageHitArea = new PIXI.Rectangle(0, 0, app.renderer.width, app.renderer.height);
           app.stage.hitArea = stageHitArea;
 
-          const model = await Live2DModel.from(`file://${encodeURI(modelJsonPath)}`, {
+          const model = await Live2DModel.from(toFileHref(modelJsonPath), {
             autoInteract: false
           });
           model.interactive = true;
