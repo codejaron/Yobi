@@ -18,6 +18,10 @@ type ScreenshotsModule = Record<string, unknown> & {
   };
 };
 
+const BLACK_FRAME_MEAN_THRESHOLD = 6;
+const BLACK_FRAME_STDEV_THRESHOLD = 6;
+const BLACK_FRAME_MAX_CHANNEL_THRESHOLD = 20;
+
 function toNormalizedString(input: unknown): string {
   return (typeof input === "string" ? input : "").trim().toLowerCase();
 }
@@ -136,6 +140,30 @@ async function captureMonitorByWindowPoint(
   return captureFromTarget(monitor ?? null);
 }
 
+async function isLikelyBlackFrame(raw: Buffer): Promise<boolean> {
+  try {
+    const stats = await sharp(raw).stats();
+    const colorChannels = stats.channels.slice(0, 3);
+    if (colorChannels.length === 0) {
+      return false;
+    }
+
+    const mean =
+      colorChannels.reduce((total, channel) => total + channel.mean, 0) / colorChannels.length;
+    const stdev =
+      colorChannels.reduce((total, channel) => total + channel.stdev, 0) / colorChannels.length;
+    const maxChannel = Math.max(...colorChannels.map((channel) => channel.max));
+
+    return (
+      mean <= BLACK_FRAME_MEAN_THRESHOLD &&
+      stdev <= BLACK_FRAME_STDEV_THRESHOLD &&
+      maxChannel <= BLACK_FRAME_MAX_CHANNEL_THRESHOLD
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function captureCompressedScreenshot(options: {
   maxWidth: number;
   quality: number;
@@ -148,6 +176,14 @@ export async function captureCompressedScreenshot(options: {
   }
 
   let raw = await captureActiveWindowRaw(screenshots, options.windowInfo);
+  if (raw && (await isLikelyBlackFrame(raw))) {
+    console.warn("[perception] Active window capture returned a likely black frame, retrying by monitor.", {
+      appName: options.windowInfo.appName,
+      title: options.windowInfo.title
+    });
+    raw = null;
+  }
+
   if (!raw) {
     console.warn("[perception] Failed to capture active window, falling back to monitor capture.", {
       appName: options.windowInfo.appName,
