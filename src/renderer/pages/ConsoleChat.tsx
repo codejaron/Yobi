@@ -167,7 +167,7 @@ export function ConsoleChatPage() {
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [actions, setActions] = useState<ActionItem[]>([]);
-  const [logEnabled, setLogEnabled] = useState(true);
+  const [logEnabled, setLogEnabled] = useState(false);
   const [draft, setDraft] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);

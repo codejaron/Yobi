@@ -77,7 +77,6 @@ export class LlmRouter {
     const config = this.getConfig();
     const route = config.modelRouting.chat;
     const resolved = this.getModel(route, "chat");
-    const inlineSystem = resolved.providerKind === "custom-openai";
 
     const system = [
       input.characterPrompt,
@@ -86,9 +85,6 @@ export class LlmRouter {
       "- [voice]...[/voice] 表示这段适合语音发送。",
       "- [reminder]{\"time\":\"ISO8601\",\"text\":\"提醒内容\"}[/reminder] 创建提醒。",
       "- [happy]/[sad]/[shy]/[angry]/[surprised]/[excited]/[calm]/[idle] 用于桌宠情绪。",
-      "强规则1：只有当用户明确要求语音/朗读时，才允许输出 [voice]...[/voice]。",
-      "强规则1补充：用户没有明确要求语音时，严禁输出 [voice] 标签。",
-      "如果用户要求你打开网页、点击按钮、填表、执行系统命令或读写文件，你可以调用可用工具完成，再基于工具结果回复。",
       "执行浏览器任务时优先采用：navigate/open -> snapshot -> act 的节奏，保证动作可解释。",
       "除标记外不要解释标记含义。",
       `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
@@ -104,12 +100,9 @@ export class LlmRouter {
 
     const generationOptions: Record<string, unknown> = {
       model: resolved.model,
-      maxOutputTokens: 400
+      maxOutputTokens: 400,
+      system
     };
-
-    if (!inlineSystem) {
-      generationOptions.system = system;
-    }
 
     if (input.tools && Object.keys(input.tools).length > 0) {
       generationOptions.tools = input.tools;
@@ -132,7 +125,7 @@ export class LlmRouter {
     const content: Array<{ type: "text"; text: string } | { type: "image"; image: string }> = [
       {
         type: "text",
-        text: inlineSystem ? `${system}\n\n${prompt}` : prompt
+        text: prompt
       }
     ];
 
@@ -155,7 +148,7 @@ export class LlmRouter {
         } as any)
       : ({
           ...generationOptions,
-          prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
+          prompt
         } as any);
 
     if (!input.stream) {
@@ -267,14 +260,13 @@ export class LlmRouter {
   }): Promise<string> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.perception, "perception");
-    const inlineSystem = resolved.providerKind === "custom-openai";
     const system =
       "你是桌面活动观察器。输出一句中文，描述用户当前在做什么。不要夸张，不要建议。";
     const context = `当前窗口应用名: ${input.appName}; 窗口标题: ${input.windowTitle}`;
 
     const result = await generateText({
       model: resolved.model,
-      system: inlineSystem ? undefined : system,
+      system,
       maxOutputTokens: 80,
       messages: [
         {
@@ -282,7 +274,7 @@ export class LlmRouter {
           content: [
             {
               type: "text",
-              text: inlineSystem ? `${system}\n\n${context}` : context
+              text: context
             },
             {
               type: "image",
@@ -302,7 +294,6 @@ export class LlmRouter {
   }): Promise<Array<{ content: string; confidence: number }>> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.memory, "memory");
-    const inlineSystem = resolved.providerKind === "custom-openai";
     const system =
       "你负责提炼长期记忆。仅提炼相对稳定、对后续陪伴有帮助的用户事实。避免短期任务和敏感隐私。";
     const prompt = [
@@ -314,8 +305,8 @@ export class LlmRouter {
     const result = await generateObject({
       model: resolved.model,
       schema: memorySchema,
-      system: inlineSystem ? undefined : system,
-      prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
+      system,
+      prompt
     } as any);
 
     return memorySchema.parse(result.object ?? {}).facts;
@@ -328,7 +319,6 @@ export class LlmRouter {
   }> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.chat, "chat");
-    const inlineSystem = resolved.providerKind === "custom-openai";
     const system =
       "你是一个克制的陪伴助手。只有在有价值时才主动开口，避免打扰。若 shouldSpeak=false，不给 message。";
     const prompt = [
@@ -342,8 +332,8 @@ export class LlmRouter {
     const result = await generateObject({
       model: resolved.model,
       schema: proactiveSchema,
-      system: inlineSystem ? undefined : system,
-      prompt: inlineSystem ? `${system}\n\n${prompt}` : prompt
+      system,
+      prompt
     } as any);
 
     return proactiveSchema.parse(result.object ?? {});

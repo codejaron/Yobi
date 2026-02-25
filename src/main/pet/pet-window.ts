@@ -10,6 +10,20 @@ import {
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
+
+  private ensureRegularAppOnMac(): void {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    try {
+      app.setActivationPolicy("regular");
+      app.dock?.show();
+    } catch (error) {
+      console.warn("Failed to keep regular app policy on macOS:", error);
+    }
+  }
+
   private applyWindowPinning(alwaysOnTop: boolean): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
@@ -19,6 +33,7 @@ export class PetWindowController {
     this.window.setVisibleOnAllWorkspaces(alwaysOnTop, {
       visibleOnFullScreen: alwaysOnTop
     });
+    this.ensureRegularAppOnMac();
 
     if (alwaysOnTop) {
       this.window.moveTop();
