@@ -48,6 +48,7 @@
   "build": {
     "appId": "com.yobi.app",
     "productName": "Yobi",
+    "artifactName": "Yobi-${version}.${ext}",
     "icon": "build/icon.png",
     "directories": {
       "output": "release"
