@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CommandApprovalDecision, ConsoleChatEvent, HistoryMessage } from "@shared/types";
+import { Trash2 } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -10,6 +11,7 @@ import {
   CardTitle
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
+import { Switch } from "@renderer/components/ui/switch";
 
 type MessageRole = "user" | "assistant";
 type MessageState = "streaming" | "done" | "error";
@@ -39,6 +41,13 @@ interface PendingApproval {
   description: string;
 }
 
+interface SlashCommandOption {
+  command: string;
+  usage: string;
+  description: string;
+  applyValue: string;
+}
+
 function historyRoleToMessageRole(role: HistoryMessage["role"]): MessageRole {
   return role === "assistant" ? "assistant" : "user";
 }
@@ -47,6 +56,45 @@ const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string
   { decision: "allow-once", label: "同意一次" },
   { decision: "allow-always", label: "同意并记住" },
   { decision: "deny", label: "拒绝" }
+];
+
+const SLASH_COMMAND_OPTIONS: SlashCommandOption[] = [
+  {
+    command: "/help",
+    usage: "/help",
+    description: "查看可用命令",
+    applyValue: "/help"
+  },
+  {
+    command: "/eyes",
+    usage: "/eyes 或 /eyes status",
+    description: "查看桌面感知状态",
+    applyValue: "/eyes"
+  },
+  {
+    command: "/eyes on",
+    usage: "/eyes on",
+    description: "恢复桌面感知",
+    applyValue: "/eyes on"
+  },
+  {
+    command: "/eyes off",
+    usage: "/eyes off",
+    description: "暂停桌面感知",
+    applyValue: "/eyes off"
+  },
+  {
+    command: "/reminders",
+    usage: "/reminders",
+    description: "查看待提醒列表",
+    applyValue: "/reminders"
+  },
+  {
+    command: "/cancel",
+    usage: "/cancel <提醒ID前缀>",
+    description: "取消一个提醒",
+    applyValue: "/cancel "
+  }
 ];
 
 function makeId(prefix: string): string {
@@ -119,10 +167,12 @@ export function ConsoleChatPage() {
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [actions, setActions] = useState<ActionItem[]>([]);
+  const [logEnabled, setLogEnabled] = useState(true);
   const [draft, setDraft] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [approvalIndex, setApprovalIndex] = useState(0);
+  const [slashSuggestionIndex, setSlashSuggestionIndex] = useState(0);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
@@ -132,6 +182,10 @@ export function ConsoleChatPage() {
   const loadingMoreHistoryRef = useRef(false);
 
   const appendAction = useCallback((item: Omit<ActionItem, "id"> & { id?: string }) => {
+    if (!logEnabled) {
+      return;
+    }
+
     setActions((prev) => {
       const nextItem: ActionItem = {
         ...item,
@@ -140,9 +194,13 @@ export function ConsoleChatPage() {
 
       return [...prev, nextItem].slice(-90);
     });
-  }, []);
+  }, [logEnabled]);
 
   const upsertReasoningAction = useCallback((event: Extract<ConsoleChatEvent, { type: "reasoning-delta" }>) => {
+    if (!logEnabled) {
+      return;
+    }
+
     setActions((prev) => {
       const id = `reasoning-${event.requestId}`;
       const index = prev.findIndex((item) => item.id === id);
@@ -172,7 +230,7 @@ export function ConsoleChatPage() {
       };
       return next;
     });
-  }, []);
+  }, [logEnabled]);
 
   const upsertAssistantMessage = useCallback((requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
     setLiveMessages((prev) => {
@@ -366,6 +424,11 @@ export function ConsoleChatPage() {
     }
   }, [activeRequestId, appendAction, clearingHistory]);
 
+  const clearActionLogs = useCallback(() => {
+    setActions([]);
+    setExpandedActions({});
+  }, []);
+
   const loadMoreHistory = useCallback(async () => {
     if (!historyHasMore || !historyCursor || loadingMoreHistoryRef.current) {
       return;
@@ -491,6 +554,31 @@ export function ConsoleChatPage() {
     });
   }, [pendingApproval]);
 
+  const slashSuggestions = useMemo(() => {
+    const normalized = draft.trimStart().toLowerCase();
+    if (!normalized.startsWith("/")) {
+      return [];
+    }
+
+    return SLASH_COMMAND_OPTIONS.filter((item) => {
+      const command = item.command.toLowerCase();
+      const usage = item.usage.toLowerCase();
+      return command.startsWith(normalized) || usage.startsWith(normalized);
+    });
+  }, [draft]);
+
+  useEffect(() => {
+    setSlashSuggestionIndex(0);
+  }, [draft, slashSuggestions.length]);
+
+  const applySlashSuggestion = useCallback((option: SlashCommandOption) => {
+    setDraft(option.applyValue);
+    setSlashSuggestionIndex(0);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }, []);
+
   const handleSubmit = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -556,6 +644,34 @@ export function ConsoleChatPage() {
 
   const handleInputKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (!pendingApproval) {
+      if (slashSuggestions.length === 0) {
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSlashSuggestionIndex((current) =>
+          current <= 0 ? slashSuggestions.length - 1 : current - 1
+        );
+        return;
+      }
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSlashSuggestionIndex((current) =>
+          current >= slashSuggestions.length - 1 ? 0 : current + 1
+        );
+        return;
+      }
+
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const selected = slashSuggestions[slashSuggestionIndex] ?? slashSuggestions[0];
+        if (selected) {
+          applySlashSuggestion(selected);
+        }
+      }
+
       return;
     }
 
@@ -579,10 +695,11 @@ export function ConsoleChatPage() {
       event.preventDefault();
       void submitApproval(APPROVAL_OPTIONS[approvalIndex]?.decision ?? "allow-once");
     }
-  }, [approvalIndex, pendingApproval, submitApproval]);
+  }, [approvalIndex, applySlashSuggestion, pendingApproval, slashSuggestionIndex, slashSuggestions, submitApproval]);
 
   const busy = activeRequestId !== null;
   const inputDisabled = busy && !pendingApproval;
+  const showSlashSuggestions = !pendingApproval && slashSuggestions.length > 0;
   const messages = useMemo<ConsoleMessage[]>(() => {
     const historyMessages = persistedMessages
       .filter((item) => item.role === "user" || item.role === "assistant")
@@ -654,8 +771,8 @@ export function ConsoleChatPage() {
                   key={item.id}
                   className={
                     item.role === "user"
-                      ? "ml-auto max-w-[80%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground"
-                      : `mr-auto max-w-[88%] rounded-2xl border px-4 py-3 text-sm ${
+                      ? "ml-auto w-fit max-w-[80%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground"
+                      : `mr-auto w-fit max-w-[88%] rounded-2xl border px-4 py-3 text-sm ${
                           item.state === "error"
                             ? "border-rose-200 bg-rose-50 text-rose-900"
                             : "border-border/80 bg-white/88 text-foreground"
@@ -702,11 +819,40 @@ export function ConsoleChatPage() {
               </div>
             ) : null}
 
+            {showSlashSuggestions ? (
+              <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-border/70 bg-white/95 p-2 shadow-lg">
+                <p className="px-1 pb-2 text-xs text-muted-foreground">
+                  可用命令（↑↓ 选择，Tab 自动填充）
+                </p>
+                <div className="grid gap-1">
+                  {slashSuggestions.map((item, index) => (
+                    <button
+                      key={item.command}
+                      type="button"
+                      onClick={() => applySlashSuggestion(item)}
+                      onMouseEnter={() => setSlashSuggestionIndex(index)}
+                      className={`rounded-md border px-2 py-1.5 text-left text-xs transition ${
+                        slashSuggestionIndex === index
+                          ? "border-primary/40 bg-primary/10 text-foreground"
+                          : "border-border/60 bg-white/70 text-foreground/90 hover:bg-secondary/50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium">{item.command}</span>
+                        <span className="text-[11px] text-muted-foreground">{item.description}</span>
+                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">{item.usage}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <form onSubmit={handleSubmit} className="flex gap-2">
               <Input
                 ref={inputRef}
                 value={draft}
-                placeholder="和 Yobi 说点什么（例如：打开浏览器搜今天汇率）"
+                placeholder="和 Yobi 说点什么（输入 / 可查看命令）"
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleInputKeyDown}
                 disabled={inputDisabled}
@@ -724,9 +870,33 @@ export function ConsoleChatPage() {
       </Card>
 
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-        <CardHeader>
-          <CardTitle>动作日志</CardTitle>
-          <CardDescription>记录 Thinking、工具命令、审批与错误。</CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle>动作日志</CardTitle>
+            <CardDescription>
+              {logEnabled ? "记录 Thinking、工具命令、审批与错误。" : "日志采集已关闭（可随时恢复）。"}
+            </CardDescription>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="whitespace-nowrap text-xs text-muted-foreground">记录</span>
+            <Switch
+              checked={logEnabled}
+              onChange={setLogEnabled}
+              aria-label="启用动作日志采集"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
+              onClick={clearActionLogs}
+              disabled={actions.length === 0}
+              aria-label="清空动作日志"
+              title="清空动作日志"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-hidden">
           <div className="h-full min-h-0 space-y-2 overflow-y-auto pr-1">

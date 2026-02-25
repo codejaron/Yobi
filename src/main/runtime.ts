@@ -46,6 +46,13 @@ interface PendingConsoleApproval {
   resolve: (decision: CommandApprovalDecision) => void;
 }
 
+type CommandSource = "telegram" | "console";
+
+interface CommandHandleResult {
+  handled: boolean;
+  responseText?: string;
+}
+
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
   private static readonly PROACTIVE_DECISION_TIMEOUT_MS = 45_000;
@@ -392,6 +399,19 @@ export class CompanionRuntime {
     });
 
     try {
+      const commandResult = await this.tryHandleChatCommand(text, "console");
+      if (commandResult.handled) {
+        const displayText = commandResult.responseText?.trim() || "命令已执行。";
+        this.emitConsoleChatEvent({
+          requestId,
+          type: "final",
+          rawText: displayText,
+          displayText,
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
       const rawReply = await this.withTimeout(
         this.conversation.replyToUser({
           text,
@@ -547,8 +567,14 @@ export class CompanionRuntime {
     });
 
     if (inbound.kind === "text") {
-      const handled = await this.tryHandleTelegramCommand(inbound.text);
-      if (handled) {
+      const commandResult = await this.tryHandleChatCommand(inbound.text, "telegram");
+      if (commandResult.handled) {
+        if (commandResult.responseText) {
+          await this.telegram.send({
+            kind: "text",
+            text: commandResult.responseText
+          });
+        }
         return;
       }
     }
@@ -596,8 +622,36 @@ export class CompanionRuntime {
     });
   }
 
-  private async tryHandleTelegramCommand(text: string): Promise<boolean> {
+  private buildCommandHelpText(): string {
+    return [
+      "可用命令：",
+      "/help - 查看命令说明",
+      "/eyes - 查看桌面感知状态",
+      "/eyes on - 打开桌面感知命令",
+      "/eyes off - 关闭桌面感知命令",
+      "/reminders - 查看待提醒事项",
+      "/cancel <提醒ID前缀> - 取消提醒"
+    ].join("\n");
+  }
+
+  private async tryHandleChatCommand(
+    text: string,
+    _source: CommandSource
+  ): Promise<CommandHandleResult> {
     const command = text.trim();
+
+    if (!command.startsWith("/")) {
+      return {
+        handled: false
+      };
+    }
+
+    if (/^\/help$/i.test(command)) {
+      return {
+        handled: true,
+        responseText: this.buildCommandHelpText()
+      };
+    }
 
     if (/^\/eyes(\s+status)?$/i.test(command)) {
       const config = this.getConfig();
@@ -608,7 +662,7 @@ export class CompanionRuntime {
         issues.push("设置页中的『启用桌面感知』为关闭状态");
       }
       if (!context.eyesCommandEnabled) {
-        issues.push("命令开关为 OFF（发送 /eyes on 恢复）");
+        issues.push("命令开关为 OFF（输入 /eyes on 恢复）");
       }
       if (this.screenLocked) {
         issues.push("系统处于锁屏/休眠状态");
@@ -637,41 +691,37 @@ export class CompanionRuntime {
 
       lines.push("命令：/eyes on | /eyes off");
 
-      await this.telegram.send({
-        kind: "text",
-        text: lines.join("\n")
-      });
-      return true;
+      return {
+        handled: true,
+        responseText: lines.join("\n")
+      };
     }
 
     if (/^\/eyes\s+off$/i.test(command)) {
       await this.contextStore.patch({ eyesCommandEnabled: false });
       await this.syncPerceptionState();
-      await this.telegram.send({
-        kind: "text",
-        text: "已关闭屏幕感知（/eyes on 可恢复）。"
-      });
-      return true;
+      return {
+        handled: true,
+        responseText: "已关闭屏幕感知（/eyes on 可恢复）。"
+      };
     }
 
     if (/^\/eyes\s+on$/i.test(command)) {
       await this.contextStore.patch({ eyesCommandEnabled: true });
       await this.syncPerceptionState();
-      await this.telegram.send({
-        kind: "text",
-        text: "已恢复屏幕感知。"
-      });
-      return true;
+      return {
+        handled: true,
+        responseText: "已恢复屏幕感知。"
+      };
     }
 
     if (/^\/reminders$/i.test(command)) {
       const items = this.reminderService.list();
       if (items.length === 0) {
-        await this.telegram.send({
-          kind: "text",
-          text: "当前没有待提醒事项。"
-        });
-        return true;
+        return {
+          handled: true,
+          responseText: "当前没有待提醒事项。"
+        };
       }
 
       const lines = items
@@ -679,11 +729,17 @@ export class CompanionRuntime {
         .map((item) => `- ${item.id.slice(0, 8)} · ${new Date(item.at).toLocaleString()} · ${item.text}`)
         .join("\n");
 
-      await this.telegram.send({
-        kind: "text",
-        text: `待提醒事项（最多显示 30 条）:\n${lines}`
-      });
-      return true;
+      return {
+        handled: true,
+        responseText: `待提醒事项（最多显示 30 条）:\n${lines}`
+      };
+    }
+
+    if (/^\/cancel$/i.test(command)) {
+      return {
+        handled: true,
+        responseText: "用法：/cancel <提醒ID前缀>\n可先用 /reminders 查看。"
+      };
     }
 
     const cancelMatch = command.match(/^\/cancel\s+([a-zA-Z0-9-]+)/i);
@@ -694,22 +750,23 @@ export class CompanionRuntime {
         .find((item) => item.id === token || item.id.startsWith(token));
 
       if (!target) {
-        await this.telegram.send({
-          kind: "text",
-          text: "没有找到对应提醒 ID。可先用 /reminders 查看。"
-        });
-        return true;
+        return {
+          handled: true,
+          responseText: "没有找到对应提醒 ID。可先用 /reminders 查看。"
+        };
       }
 
       await this.reminderService.cancel(target.id);
-      await this.telegram.send({
-        kind: "text",
-        text: `已取消提醒：${target.text}`
-      });
-      return true;
+      return {
+        handled: true,
+        responseText: `已取消提醒：${target.text}`
+      };
     }
 
-    return false;
+    return {
+      handled: true,
+      responseText: `未识别命令：${command.split(/\s+/, 1)[0]}\n输入 /help 查看可用命令。`
+    };
   }
 
   private async deliverAssistantOutput(input: {
@@ -722,7 +779,7 @@ export class CompanionRuntime {
     const config = this.getConfig();
     const destination = input.destination ?? "telegram";
     const sendToTelegram = destination === "telegram";
-    const emitPetEvents = destination !== "console";
+    const emitPetEvents = destination === "telegram" || destination === "pet" || destination === "console";
     const parsed = parseAssistantOutput(input.rawText);
 
     const reminders = await this.reminderService.createBatch(
