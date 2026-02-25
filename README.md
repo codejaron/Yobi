@@ -1,39 +1,68 @@
 # Yobi
 
-桌面 AI 陪伴伴侣（Electron + Telegram + 屏幕感知）。
+桌面 AI 陪伴应用（Electron + Telegram + 屏幕感知 + Live2D 桌宠）。
 
-## 已实现能力
+## 主要功能
 
-- Telegram 双向对话（`grammy`）
-- 三层记忆（工作记忆 + 长期记忆 + 永久历史 JSONL）
-- 屏幕感知两层策略（`active-win` 标题检测 + `node-screenshots` + `sharp`）
-- 主动聊天决策（状态切换 / 沉默 / 回归）
-- 三层感知控制（全局开关 + `/eyes on/off` + 锁屏/空闲自动暂停）
-- 语音消息标记（`[voice]...[/voice]`，`edge-tts-universal` + 自动重试）
-- 提醒标记（`[reminder]{...}[/reminder]`，支持 `/reminders` 与 `/cancel`）
-- Telegram 图片输入（`message:photo` 多模态理解）
-- 后台保活（macOS `caffeinate -i`）
-- 桌宠透明窗口（Live2D 尝试加载 + fallback）
-- 多 Provider + 多模型路由（聊天 / 感知 / 记忆）
-- Electron 配置面板（Provider、角色、记忆、历史、参数）
+- 本地控制台聊天（支持流式回复）
+- Telegram 双向消息（文本、图片输入；文本、语音输出）
+- 屏幕感知（活动窗口 + 截图摘要）
+- 主动聊天（切换/沉默/回归触发）
+- 长期记忆（自动提炼 + 手动管理）
+- 提醒系统（创建、查看、取消）
+- Live2D 桌宠（情绪/说话/思考动作联动）
+- 可选工具能力：浏览器工具、系统工具、文件工具（带开关与审批）
 
-## 目录
-
-- `src/main`: 主进程 + 核心逻辑
-- `src/renderer`: 配置面板 UI（React + Tailwind + shadcn-style components）
-- `src/preload`: IPC 桥接
-- `src/shared`: 共享类型
-
-## 启动
+## 快速启动
 
 ```bash
 npm install
 npm run dev
 ```
 
+## 必须配置
+
+### 1) Provider 和模型路由（必配）
+
+在界面「Provider 与模型路由」中配置：
+
+- 至少 1 个可用 Provider（API Key）
+- 聊天 / 感知 / 记忆模型
+
+> 模型名是手动输入，兼容 OpenAI-compatible 服务。
+
+### 2) Telegram（可选）
+
+在「设置 -> Telegram 通道」填写：
+
+- `Bot Token`
+- `Chat ID`
+
+不填也能用（本地控制台可正常聊天）。
+
+### 3) Live2D 桌宠（可选）
+
+由于授权原因，仓库不包含完整模型。用户 `clone` 后需自行下载模型并配置目录。
+
+- 在「设置 -> 后台与桌宠」填写 `Live2D 模型目录`
+- 目录里至少要有一个 `*.model3.json`
+
+容错行为：
+
+- 路径为空/不存在：桌宠关闭，不影响主程序
+- 找不到 `model3.json`：桌宠走 fallback，不会崩
+- 动作不完整：自动兜底匹配，不会因缺动作直接报错
+
+## 常用命令
+
+- `/help`
+- `/eyes` / `/eyes on` / `/eyes off`
+- `/reminders`
+- `/cancel <提醒ID前缀>`
+
 ## 数据目录
 
-应用运行后会在本机创建：
+运行后会在本机创建：
 
 ```text
 ~/.yobi/
@@ -42,11 +71,22 @@ npm run dev
 ├── sessions/main/history.jsonl
 ├── sessions/main/memory.json
 ├── sessions/main/context.json
-└── sessions/main/reminders.json
+├── sessions/main/reminders.json
+└── logs/
 ```
 
-## 说明
+按功能启用后还可能出现：
 
-- 未配置 Telegram token/chatId 时，Bot 不会连接。
-- 模型名采用手动输入，便于兼容 OpenAI-compatible 服务（DeepSeek、Moonshot、智谱、Ollama、LM Studio 等）。
-- Edge TTS 使用微软在线语音服务（无需额外 API Key），网络波动时会自动重试。
+```text
+~/.yobi/
+├── browser-profile/   # 启用浏览器工具后
+└── tool-media/        # 浏览器/系统截图等工具产物
+```
+
+## 开发命令
+
+```bash
+npm run dev
+npm run typecheck
+npm run build
+```
