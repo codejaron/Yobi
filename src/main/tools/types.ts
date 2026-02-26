@@ -1,6 +1,6 @@
 import type { ToolSet } from "ai";
 import type { z } from "zod";
-import type { ActivitySnapshot, AppConfig, CommandApprovalDecision } from "@shared/types";
+import type { AppConfig, CommandApprovalDecision } from "@shared/types";
 
 export interface ToolMediaAttachment {
   type: "image" | "file";
@@ -31,7 +31,6 @@ export interface ToolResult {
 export interface ToolExecutionContext {
   channel: "telegram" | "system";
   userMessage: string;
-  activity: ActivitySnapshot | null;
   getConfig: () => AppConfig;
   requestApproval?: ToolApprovalHandler;
 }

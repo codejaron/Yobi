@@ -440,7 +440,7 @@ export class CompanionRuntime {
       return { replyText: "" };
     }
 
-    const activity = this.activityMonitor.getCurrentSnapshot();
+    const activity: ActivitySnapshot | null = null;
 
     this.pet.emitEvent({
       type: "thinking",
@@ -452,8 +452,7 @@ export class CompanionRuntime {
       rawReply = await this.withTimeout(
         this.conversation.replyToUser({
           text: normalized,
-          channel: "system",
-          activity
+          channel: "system"
         }),
         CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
         "LLM 回复超时"
@@ -552,7 +551,7 @@ export class CompanionRuntime {
   }
 
   private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
-    const activity = this.activityMonitor.getCurrentSnapshot();
+    const activity: ActivitySnapshot | null = null;
     this.emitConsoleChatEvent({
       requestId,
       type: "thinking",
@@ -578,7 +577,6 @@ export class CompanionRuntime {
         this.conversation.replyToUser({
           text,
           channel: "system",
-          activity,
           stream: {
             onReasoningDelta: (delta) => {
               this.emitConsoleChatEvent({
@@ -763,7 +761,6 @@ export class CompanionRuntime {
         this.conversation.replyToUser({
           text: inbound.text,
           channel: "telegram",
-          activity: this.activityMonitor.getCurrentSnapshot(),
           photoUrl: inbound.photoUrl
         }),
         CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
@@ -782,7 +779,7 @@ export class CompanionRuntime {
 
     await this.deliverAssistantOutput({
       rawText: reply,
-      activity: this.activityMonitor.getCurrentSnapshot(),
+      activity: null,
       proactive: false,
       destination: "telegram",
       telegramChatId: inbound.chatId
@@ -828,6 +825,9 @@ export class CompanionRuntime {
 
       if (!config.perception.enabled) {
         issues.push("设置页中的『启用桌面感知』为关闭状态");
+      }
+      if (!config.proactive.enabled) {
+        issues.push("主动聊天开关为 OFF");
       }
       if (!context.eyesCommandEnabled) {
         issues.push("命令开关为 OFF（输入 /eyes on 恢复）");
@@ -1258,6 +1258,7 @@ export class CompanionRuntime {
     const context = this.contextStore.get();
 
     return (
+      config.proactive.enabled &&
       config.perception.enabled &&
       context.eyesCommandEnabled &&
       !this.screenLocked &&

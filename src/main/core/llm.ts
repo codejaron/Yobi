@@ -18,7 +18,6 @@ interface ChatReplyInput {
   userMessage: string;
   recentHistory: HistoryMessage[];
   memoryFacts: MemoryFact[];
-  activity?: ActivitySnapshot | null;
   userPhotoUrl?: string;
   tools?: ToolSet;
   stream?: ChatReplyStreamListener;
@@ -80,17 +79,14 @@ export class LlmRouter {
 
     const system = [
       input.characterPrompt,
-      "你会根据长期记忆和最近上下文回复，简短自然。",
+      "你会根据长期记忆和最近上下文回复。",
       "你可以在需要时输出这些标记：",
       "- [voice]...[/voice] 表示这段适合语音发送。",
       "- [reminder]{\"time\":\"ISO8601\",\"text\":\"提醒内容\"}[/reminder] 创建提醒。",
       "- [happy]/[sad]/[shy]/[angry]/[surprised]/[excited]/[calm]/[idle] 用于桌宠情绪。",
       "执行浏览器任务时优先采用：navigate/open -> snapshot -> act 的节奏，保证动作可解释。",
       "除标记外不要解释标记含义。",
-      `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
-      input.activity
-        ? `当前屏幕状态: ${input.activity.summary} (应用: ${input.activity.app} / 标题: ${input.activity.title})`
-        : "当前屏幕状态: 未知"
+      `长期记忆:\n${this.formatFacts(input.memoryFacts)}`
     ].join("\n\n");
 
     const prompt = [

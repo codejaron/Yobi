@@ -21,7 +21,6 @@ export class ConversationEngine {
   async replyToUser(input: {
     text: string;
     channel: "telegram" | "system";
-    activity: ActivitySnapshot | null;
     photoUrl?: string;
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
@@ -37,7 +36,6 @@ export class ConversationEngine {
     const tools = this.toolRegistry.getToolSet({
       channel: input.channel,
       userMessage: input.text,
-      activity: input.activity,
       requestApproval: input.requestApproval
     });
 
@@ -46,7 +44,6 @@ export class ConversationEngine {
       userMessage: input.text,
       recentHistory,
       memoryFacts: this.memoryManager.listFacts(),
-      activity: input.activity,
       userPhotoUrl: input.photoUrl,
       tools,
       stream: input.stream

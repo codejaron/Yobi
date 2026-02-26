@@ -50,6 +50,7 @@ export class ActivityMonitor {
 
   stop(): void {
     this.active = false;
+    this.latestSnapshot = null;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
