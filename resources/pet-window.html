@@ -628,6 +628,7 @@
       const loadRuntime = async () => {
         let PIXI = null;
         let Live2DModel = null;
+        let live2dModule = null;
 
         try {
           PIXI = require("pixi.js");
@@ -637,12 +638,14 @@
         try {
           const mod = require("pixi-live2d-display/cubism4");
           Live2DModel = mod?.Live2DModel || null;
+          live2dModule = mod || null;
         } catch {}
 
         if (!Live2DModel) {
           try {
             const mod = require("pixi-live2d-display");
             Live2DModel = mod?.Live2DModel || mod?.default?.Live2DModel || null;
+            live2dModule = mod || null;
           } catch {}
         }
 
@@ -659,6 +662,7 @@
             await loadScript("../node_modules/pixi-live2d-display/dist/cubism4.min.js");
             PIXI = window.PIXI;
             Live2DModel = window.PIXI?.live2d?.Live2DModel || null;
+            live2dModule = window.PIXI?.live2d || null;
           } catch (error) {
             return {
               error: error && error.message ? String(error.message) : "script-load-failed"
@@ -672,7 +676,26 @@
           };
         }
 
-        return { PIXI, Live2DModel };
+        return { PIXI, Live2DModel, live2dModule };
+      };
+
+      const disableModelEmbeddedMotionSound = (live2dModule) => {
+        const candidates = [
+          live2dModule?.config,
+          live2dModule?.default?.config,
+          live2dModule?.live2d?.config,
+          window.PIXI?.live2d?.config
+        ];
+
+        for (const config of candidates) {
+          if (!config || typeof config !== "object") {
+            continue;
+          }
+
+          try {
+            config.sound = false;
+          } catch {}
+        }
       };
 
       async function boot() {
@@ -689,7 +712,8 @@
             showFallback(`missing-deps:${reason}`);
             return;
           }
-          const { PIXI, Live2DModel } = runtime;
+          const { PIXI, Live2DModel, live2dModule } = runtime;
+          disableModelEmbeddedMotionSound(live2dModule);
 
           const app = new PIXI.Application({
             width: window.innerWidth,
