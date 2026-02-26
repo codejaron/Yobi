@@ -39,53 +39,22 @@ export class MemoryManager {
 
     const existingFacts = this.memoryStore.listFacts();
 
-    const extracted = await this.llm.extractFacts({
+    const merged = await this.llm.extractFacts({
       recentHistory,
       existingFacts
     });
 
-    const merged = this.mergeFacts(existingFacts, extracted);
-    await this.memoryStore.replaceFacts(merged);
+    await this.memoryStore.replaceFacts(
+      merged.map((fact) => ({
+        id: existingFacts.find((existing) => existing.content === fact.content)?.id ?? randomUUID(),
+        content: fact.content,
+        confidence: fact.confidence,
+        updatedAt: new Date().toISOString()
+      }))
+    );
   }
 
   async onConversationTurn(): Promise<void> {
     // 记忆提炼由 RecallService 周期驱动，这里保留扩展位。
-  }
-
-  private mergeFacts(
-    existing: MemoryFact[],
-    extracted: Array<{ content: string; confidence: number }>
-  ): MemoryFact[] {
-    const index = new Map<string, MemoryFact>();
-
-    for (const fact of existing) {
-      index.set(fact.content.trim().toLowerCase(), fact);
-    }
-
-    for (const fact of extracted) {
-      const key = fact.content.trim().toLowerCase();
-      const previous = index.get(key);
-      const now = new Date().toISOString();
-
-      if (!previous) {
-        index.set(key, {
-          id: randomUUID(),
-          content: fact.content.trim(),
-          confidence: fact.confidence,
-          updatedAt: now
-        });
-        continue;
-      }
-
-      index.set(key, {
-        ...previous,
-        confidence: Math.max(previous.confidence, fact.confidence),
-        updatedAt: now
-      });
-    }
-
-    return Array.from(index.values())
-      .sort((a, b) => (a.updatedAt > b.updatedAt ? -1 : 1))
-      .slice(0, 80);
   }
 }

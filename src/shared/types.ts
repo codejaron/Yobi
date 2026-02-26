@@ -104,7 +104,8 @@ export const appConfigSchema = z.object({
     silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000)
   }),
   memory: z.object({
-    workingSetSize: z.number().int().min(10).max(100).default(30)
+    workingSetSize: z.number().int().min(10).max(100).default(30),
+    maxFacts: z.number().int().min(10).max(500).default(80)
   }),
   tools: z.object({
     browser: z.object({
@@ -355,7 +356,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     silenceThresholdMs: 40 * 60 * 1000
   },
   memory: {
-    workingSetSize: 30
+    workingSetSize: 30,
+    maxFacts: 80
   },
   tools: {
     browser: {

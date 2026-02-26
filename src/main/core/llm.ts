@@ -53,13 +53,9 @@ interface ProactiveDecisionInput {
   topicHints: string;
 }
 
-const memorySchema = z.object({
-  facts: z.array(
-    z.object({
-      content: z.string().min(1),
-      confidence: z.number().min(0).max(1)
-    })
-  )
+const memoryFactItemSchema = z.object({
+  content: z.string().min(1),
+  confidence: z.number().min(0).max(1)
 });
 
 const proactiveSchema = z.object({
@@ -254,12 +250,19 @@ export class LlmRouter {
   }): Promise<Array<{ content: string; confidence: number }>> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.memory, "memory");
-    const system =
-      "你负责提炼长期记忆。仅提炼相对稳定、对后续陪伴有帮助的用户事实。避免短期任务和敏感隐私。";
+    const maxFacts = Math.max(10, Math.min(500, Math.round(config.memory.maxFacts || 80)));
+    const memorySchema = z.object({
+      facts: z.array(memoryFactItemSchema).max(maxFacts)
+    });
+    const system = `你负责维护用户的长期记忆。下面是现有记忆和最近对话。
+请输出一份更新后的完整记忆列表（最多 ${maxFacts} 条）：
+- 如果新对话中出现了和现有记忆语义相同的信息，合并为一条，根据新信息调整置信度
+- 如果某条现有记忆被新对话否定了（比如用户说换了工作），更新内容或降低置信度
+- 如果新对话中有值得记住的新事实，新增
+- 没有变化的现有记忆原样保留`;
     const prompt = [
       `现有记忆:\n${this.formatFacts(input.existingFacts)}`,
-      `最近对话:\n${this.formatHistory(input.recentHistory)}`,
-      "输出最多 8 条事实。"
+      `最近对话:\n${this.formatHistory(input.recentHistory)}`
     ].join("\n\n");
 
     const result = await generateObject({

@@ -291,6 +291,21 @@ export class ConfigStore {
       ...merged.ptt,
       hotkey: normalizeHotkey(merged.ptt?.hotkey, DEFAULT_CONFIG.ptt.hotkey)
     };
+    merged.memory = {
+      ...merged.memory,
+      workingSetSize: clampInt(
+        merged.memory?.workingSetSize,
+        10,
+        100,
+        DEFAULT_CONFIG.memory.workingSetSize
+      ),
+      maxFacts: clampInt(
+        merged.memory?.maxFacts,
+        10,
+        500,
+        DEFAULT_CONFIG.memory.maxFacts
+      )
+    };
 
     merged.tools = {
       browser: {
@@ -354,6 +369,21 @@ export class ConfigStore {
       ptt: {
         ...nextConfig.ptt,
         hotkey: normalizeHotkey(nextConfig.ptt.hotkey, DEFAULT_CONFIG.ptt.hotkey)
+      },
+      memory: {
+        ...nextConfig.memory,
+        workingSetSize: clampInt(
+          nextConfig.memory.workingSetSize,
+          10,
+          100,
+          DEFAULT_CONFIG.memory.workingSetSize
+        ),
+        maxFacts: clampInt(
+          nextConfig.memory.maxFacts,
+          10,
+          500,
+          DEFAULT_CONFIG.memory.maxFacts
+        )
       },
       tools: {
         browser: {

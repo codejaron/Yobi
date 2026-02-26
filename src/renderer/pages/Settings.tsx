@@ -964,7 +964,7 @@ export function SettingsPage({
       <Card>
         <CardHeader>
           <CardTitle>记忆策略</CardTitle>
-          <CardDescription>工作记忆窗口用于控制上下文长度。</CardDescription>
+          <CardDescription>工作记忆窗口控制上下文长度；长期记忆上限控制提炼总条数。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1.5">
@@ -977,6 +977,25 @@ export function SettingsPage({
                   memory: {
                     ...config.memory,
                     workingSetSize: Number(event.target.value) || config.memory.workingSetSize
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>长期记忆上限（条）</Label>
+            <Input
+              value={String(config.memory.maxFacts)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    maxFacts:
+                      Number.isFinite(Number(event.target.value))
+                        ? Math.max(10, Math.min(500, Number(event.target.value)))
+                        : config.memory.maxFacts
                   }
                 })
               }
