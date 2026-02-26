@@ -42,7 +42,6 @@ export const appConfigSchema = z.object({
     ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
     ttsRate: z.string().default("+0%"),
     ttsPitch: z.string().default("+0Hz"),
-    proxy: z.string().default(""),
     requestTimeoutMs: z.number().int().min(3000).max(30000).default(15000),
     retryCount: z.number().int().min(0).max(2).default(1)
   }),
@@ -317,7 +316,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     ttsVoice: "zh-CN-XiaoxiaoNeural",
     ttsRate: "+0%",
     ttsPitch: "+0Hz",
-    proxy: "",
     requestTimeoutMs: 15000,
     retryCount: 1
   },

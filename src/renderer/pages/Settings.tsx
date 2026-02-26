@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AppConfig } from "@shared/types";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -13,6 +13,278 @@ import { Label } from "@renderer/components/ui/label";
 import { Switch } from "@renderer/components/ui/switch";
 import { Textarea } from "@renderer/components/ui/textarea";
 
+const DEFAULT_PTT_HOTKEY = "Alt+Space";
+const MODIFIER_KEY_NAMES = new Set(["alt", "control", "ctrl", "shift", "meta", "os"]);
+
+function normalizeModifierToken(token: string): "Ctrl" | "Alt" | "Shift" | "Meta" | null {
+  const lower = token.trim().toLowerCase();
+  if (!lower) {
+    return null;
+  }
+
+  if (["ctrl", "control", "ctl"].includes(lower)) {
+    return "Ctrl";
+  }
+
+  if (["alt", "option", "opt"].includes(lower)) {
+    return "Alt";
+  }
+
+  if (lower === "shift") {
+    return "Shift";
+  }
+
+  if (["meta", "cmd", "command", "super", "win", "windows"].includes(lower)) {
+    return "Meta";
+  }
+
+  return null;
+}
+
+function normalizePrimaryKeyToken(token: string): string {
+  const normalized = token.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized === "space" || normalized === "spacebar" || normalized === "空格") {
+    return "Space";
+  }
+
+  if (normalized === "enter" || normalized === "return" || normalized === "回车") {
+    return "Enter";
+  }
+
+  if (normalized === "tab") {
+    return "Tab";
+  }
+
+  if (normalized === "esc" || normalized === "escape") {
+    return "Esc";
+  }
+
+  if (normalized === "backspace") {
+    return "Backspace";
+  }
+
+  if (/^[a-z]$/.test(normalized)) {
+    return normalized.toUpperCase();
+  }
+
+  if (/^[0-9]$/.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^f([1-9]|1[0-2])$/.test(normalized)) {
+    return normalized.toUpperCase();
+  }
+
+  return token.trim().toUpperCase();
+}
+
+function normalizeHotkeyString(raw: string): string {
+  const tokens = raw
+    .split("+")
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) {
+    return "";
+  }
+
+  const modifiers = {
+    Ctrl: false,
+    Alt: false,
+    Shift: false,
+    Meta: false
+  };
+  let keyToken = "";
+
+  for (const token of tokens) {
+    const modifier = normalizeModifierToken(token);
+    if (modifier) {
+      modifiers[modifier] = true;
+      continue;
+    }
+
+    if (!keyToken) {
+      keyToken = normalizePrimaryKeyToken(token);
+    }
+  }
+
+  if (!keyToken) {
+    return "";
+  }
+
+  const normalizedParts: string[] = [];
+  if (modifiers.Ctrl) {
+    normalizedParts.push("Ctrl");
+  }
+  if (modifiers.Alt) {
+    normalizedParts.push("Alt");
+  }
+  if (modifiers.Shift) {
+    normalizedParts.push("Shift");
+  }
+  if (modifiers.Meta) {
+    normalizedParts.push("Meta");
+  }
+  normalizedParts.push(keyToken);
+  return normalizedParts.join("+");
+}
+
+function keyFromKeyboardEvent(event: KeyboardEvent): string {
+  const code = event.code;
+
+  if (code === "Space") {
+    return "Space";
+  }
+  if (code === "Enter" || code === "NumpadEnter") {
+    return "Enter";
+  }
+  if (code === "Tab") {
+    return "Tab";
+  }
+  if (code === "Escape") {
+    return "Esc";
+  }
+  if (code === "Backspace") {
+    return "Backspace";
+  }
+
+  if (/^Key[A-Z]$/.test(code)) {
+    return code.slice(3);
+  }
+
+  if (/^Digit[0-9]$/.test(code)) {
+    return code.slice(5);
+  }
+
+  if (/^F([1-9]|1[0-2])$/.test(code)) {
+    return code;
+  }
+
+  const normalized = event.key.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.length === 1 && /[a-z0-9]/i.test(normalized)) {
+    return normalized.toUpperCase();
+  }
+
+  if (["Space", "Enter", "Tab", "Esc", "Backspace"].includes(normalized)) {
+    return normalized;
+  }
+
+  return "";
+}
+
+function hotkeyFromKeyboardEvent(
+  event: KeyboardEvent
+): {
+  hotkey: string | null;
+  error: string | null;
+} {
+  const keyToken = keyFromKeyboardEvent(event);
+  if (!keyToken) {
+    return {
+      hotkey: null,
+      error: null
+    };
+  }
+
+  if (MODIFIER_KEY_NAMES.has(keyToken.toLowerCase())) {
+    return {
+      hotkey: null,
+      error: null
+    };
+  }
+
+  const modifiers: string[] = [];
+  if (event.ctrlKey) {
+    modifiers.push("Ctrl");
+  }
+  if (event.altKey) {
+    modifiers.push("Alt");
+  }
+  if (event.shiftKey) {
+    modifiers.push("Shift");
+  }
+  if (event.metaKey) {
+    modifiers.push("Meta");
+  }
+
+  if (modifiers.length === 0) {
+    return {
+      hotkey: null,
+      error: "快捷键至少需要一个修饰键（Ctrl/Option/Shift/Command）。"
+    };
+  }
+
+  return {
+    hotkey: normalizeHotkeyString([...modifiers, keyToken].join("+")),
+    error: null
+  };
+}
+
+function formatHotkeyText(raw: string, isMac: boolean): string {
+  const normalized = normalizeHotkeyString(raw) || DEFAULT_PTT_HOTKEY;
+  const parts = normalized.split("+");
+  const mapped = parts.map((part) => {
+    if (part === "Ctrl") {
+      return isMac ? "Control" : "Ctrl";
+    }
+    if (part === "Alt") {
+      return isMac ? "Option" : "Alt";
+    }
+    if (part === "Shift") {
+      return "Shift";
+    }
+    if (part === "Meta") {
+      return isMac ? "Command" : "Meta";
+    }
+    if (part === "Esc") {
+      return "Esc";
+    }
+    if (part === "Space") {
+      return "Space";
+    }
+    return part;
+  });
+
+  return mapped.join("+");
+}
+
+function formatHotkeySymbol(raw: string, isMac: boolean): string {
+  const normalized = normalizeHotkeyString(raw) || DEFAULT_PTT_HOTKEY;
+  const parts = normalized.split("+");
+  if (!isMac) {
+    return parts.join("+");
+  }
+
+  const mapped = parts.map((part) => {
+    if (part === "Ctrl") {
+      return "⌃";
+    }
+    if (part === "Alt") {
+      return "⌥";
+    }
+    if (part === "Shift") {
+      return "⇧";
+    }
+    if (part === "Meta") {
+      return "⌘";
+    }
+    if (part === "Space") {
+      return "Space";
+    }
+    return part;
+  });
+
+  return mapped.join(" ");
+}
+
 export function SettingsPage({
   config,
   setConfig
@@ -20,11 +292,16 @@ export function SettingsPage({
   config: AppConfig;
   setConfig: (next: AppConfig) => void;
 }) {
+  const isMac =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad|iPod/.test(navigator.platform);
   const [importingModel, setImportingModel] = useState(false);
   const [modelImportNotice, setModelImportNotice] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [isRecordingPttHotkey, setIsRecordingPttHotkey] = useState(false);
+  const [pttHotkeyNotice, setPttHotkeyNotice] = useState("");
 
   const parseList = (raw: string): string[] =>
     raw
@@ -33,6 +310,54 @@ export function SettingsPage({
       .filter(Boolean);
 
   const toListText = (values: string[]): string => values.join("\n");
+
+  useEffect(() => {
+    if (!isRecordingPttHotkey) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setIsRecordingPttHotkey(false);
+        setPttHotkeyNotice("已取消快捷键录制。");
+        return;
+      }
+
+      const captured = hotkeyFromKeyboardEvent(event);
+      if (captured.error) {
+        setPttHotkeyNotice(captured.error);
+        return;
+      }
+
+      if (!captured.hotkey) {
+        return;
+      }
+
+      const normalized = normalizeHotkeyString(captured.hotkey) || DEFAULT_PTT_HOTKEY;
+      setConfig({
+        ...config,
+        ptt: {
+          ...config.ptt,
+          hotkey: normalized
+        }
+      });
+      setPttHotkeyNotice(`已设置为 ${formatHotkeyText(normalized, isMac)}。`);
+      setIsRecordingPttHotkey(false);
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [config, isMac, isRecordingPttHotkey, setConfig]);
+
   const importModelDirectory = async (): Promise<void> => {
     if (importingModel) {
       return;
@@ -152,239 +477,6 @@ export function SettingsPage({
                 })
               }
             />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>阿里百炼语音</CardTitle>
-          <CardDescription>
-            开启且填写 API Key 后，语音识别和语音合成都会走阿里 WebSocket。
-            未满足条件时会关闭语音识别并回退到 Edge TTS。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>启用阿里语音（STT + TTS）</Label>
-            <Switch
-              checked={config.alibabaVoice.enabled}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  alibabaVoice: {
-                    ...config.alibabaVoice,
-                    enabled: checked
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>DashScope API Key</Label>
-            <Input
-              type="password"
-              value={config.alibabaVoice.apiKey}
-              placeholder="sk-xxxx"
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  alibabaVoice: {
-                    ...config.alibabaVoice,
-                    apiKey: event.target.value
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>区域</Label>
-            <select
-              className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              value={config.alibabaVoice.region}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  alibabaVoice: {
-                    ...config.alibabaVoice,
-                    region: event.target.value === "intl" ? "intl" : "cn"
-                  }
-                })
-              }
-            >
-              <option value="cn">中国内地（dashscope.aliyuncs.com）</option>
-              <option value="intl">国际站（dashscope-intl.aliyuncs.com）</option>
-            </select>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>ASR 模型</Label>
-              <Input
-                value={config.alibabaVoice.asrModel}
-                placeholder="fun-asr-realtime"
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    alibabaVoice: {
-                      ...config.alibabaVoice,
-                      asrModel: event.target.value
-                    }
-                  })
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>TTS 模型</Label>
-              <Input
-                value={config.alibabaVoice.ttsModel}
-                placeholder="cosyvoice-v3-flash"
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    alibabaVoice: {
-                      ...config.alibabaVoice,
-                      ttsModel: event.target.value
-                    }
-                  })
-                }
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>TTS 音色</Label>
-            <Input
-              value={config.alibabaVoice.ttsVoice}
-              placeholder="longxiaochun_v3"
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  alibabaVoice: {
-                    ...config.alibabaVoice,
-                    ttsVoice: event.target.value
-                  }
-                })
-              }
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>语音参数</CardTitle>
-          <CardDescription>Edge TTS 回退参数（阿里语音未启用时生效）。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>Voice 名称</Label>
-            <Input
-              value={config.voice.ttsVoice}
-              placeholder="zh-CN-XiaoxiaoNeural"
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  voice: {
-                    ...config.voice,
-                    ttsVoice: event.target.value
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>TTS 代理（可选）</Label>
-            <Input
-              value={config.voice.proxy}
-              placeholder="http://127.0.0.1:7890"
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  voice: {
-                    ...config.voice,
-                    proxy: event.target.value
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>语速</Label>
-              <Input
-                value={config.voice.ttsRate}
-                placeholder="+0%"
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    voice: {
-                      ...config.voice,
-                      ttsRate: event.target.value
-                    }
-                  })
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>音高</Label>
-              <Input
-                value={config.voice.ttsPitch}
-                placeholder="+0Hz"
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    voice: {
-                      ...config.voice,
-                      ttsPitch: event.target.value
-                    }
-                  })
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>合成超时（毫秒）</Label>
-              <Input
-                value={String(config.voice.requestTimeoutMs)}
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    voice: {
-                      ...config.voice,
-                      requestTimeoutMs:
-                        Number.isFinite(Number(event.target.value))
-                          ? Math.max(3000, Math.min(30000, Number(event.target.value)))
-                          : config.voice.requestTimeoutMs
-                    }
-                  })
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>失败重试次数</Label>
-              <Input
-                value={String(config.voice.retryCount)}
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    voice: {
-                      ...config.voice,
-                      retryCount:
-                        Number.isFinite(Number(event.target.value))
-                          ? Math.max(0, Math.min(2, Number(event.target.value)))
-                          : config.voice.retryCount
-                    }
-                  })
-                }
-              />
-            </div>
           </div>
         </CardContent>
       </Card>
@@ -585,27 +677,64 @@ export function SettingsPage({
             </div>
             <div className="mt-3 space-y-1.5">
               <Label>按住说话快捷键</Label>
-              <Input
-                value={config.ptt.hotkey}
-                placeholder="Alt+Space"
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    ptt: {
-                      ...config.ptt,
-                      hotkey: event.target.value
-                    }
-                  })
-                }
-              />
-              <p className="text-xs text-muted-foreground">
-                例如 Alt+Space、Ctrl+Shift+Space。按下开始录音，松开后自动发送。
-              </p>
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-background px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {formatHotkeySymbol(config.ptt.hotkey, isMac)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatHotkeyText(config.ptt.hotkey, isMac)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant={isRecordingPttHotkey ? "default" : "outline"}
+                    onClick={() => {
+                      if (isRecordingPttHotkey) {
+                        setIsRecordingPttHotkey(false);
+                        setPttHotkeyNotice("已取消快捷键录制。");
+                        return;
+                      }
+
+                      setPttHotkeyNotice(
+                        isMac
+                          ? "请按下快捷键组合，例如 Option+Space。按 Esc 取消。"
+                          : "请按下快捷键组合，例如 Alt+Space。按 Esc 取消。"
+                      );
+                      setIsRecordingPttHotkey(true);
+                    }}
+                  >
+                    {isRecordingPttHotkey ? "等待按键..." : "点击录制快捷键"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      const normalized = DEFAULT_PTT_HOTKEY;
+                      setConfig({
+                        ...config,
+                        ptt: {
+                          ...config.ptt,
+                          hotkey: normalized
+                        }
+                      });
+                      setPttHotkeyNotice(`已恢复默认：${formatHotkeyText(normalized, isMac)}。`);
+                      setIsRecordingPttHotkey(false);
+                    }}
+                  >
+                    恢复默认
+                  </Button>
+                </div>
+              </div>
+              {pttHotkeyNotice ? (
+                <p className="text-xs text-muted-foreground">{pttHotkeyNotice}</p>
+              ) : null}
             </div>
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>实时语音模式（实验）</Label>
+            <Label>实时语音模式</Label>
             <Switch
               checked={config.realtimeVoice.enabled}
               onChange={(checked) =>
@@ -619,7 +748,228 @@ export function SettingsPage({
               }
             />
           </div>
+          <p className="text-xs text-muted-foreground">
+            语音模型与参数请到阿里百炼或 Edge TTS 设置中调整。
+          </p>
 
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>阿里百炼语音</CardTitle>
+          <CardDescription>
+            开启且填写 API Key 后，语音识别和语音合成都会走阿里 WebSocket。
+            未满足条件时会关闭语音识别并回退到 Edge TTS。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+            <Label>启用阿里语音（STT + TTS）</Label>
+            <Switch
+              checked={config.alibabaVoice.enabled}
+              onChange={(checked) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    enabled: checked
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>DashScope API Key</Label>
+            <Input
+              type="password"
+              value={config.alibabaVoice.apiKey}
+              placeholder="sk-xxxx"
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    apiKey: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>区域</Label>
+            <select
+              className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              value={config.alibabaVoice.region}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    region: event.target.value === "intl" ? "intl" : "cn"
+                  }
+                })
+              }
+            >
+              <option value="cn">中国内地（dashscope.aliyuncs.com）</option>
+              <option value="intl">国际站（dashscope-intl.aliyuncs.com）</option>
+            </select>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>ASR 模型</Label>
+              <Input
+                value={config.alibabaVoice.asrModel}
+                placeholder="fun-asr-realtime"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    alibabaVoice: {
+                      ...config.alibabaVoice,
+                      asrModel: event.target.value
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>TTS 模型</Label>
+              <Input
+                value={config.alibabaVoice.ttsModel}
+                placeholder="cosyvoice-v3-flash"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    alibabaVoice: {
+                      ...config.alibabaVoice,
+                      ttsModel: event.target.value
+                    }
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>TTS 音色</Label>
+            <Input
+              value={config.alibabaVoice.ttsVoice}
+              placeholder="longxiaochun_v3"
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    ttsVoice: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Edge TTS 设置</CardTitle>
+          <CardDescription>
+            仅在阿里语音未启用时生效；语速、音高等参数只作用于 Edge TTS。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Edge Voice 名称</Label>
+            <Input
+              value={config.voice.ttsVoice}
+              placeholder="zh-CN-XiaoxiaoNeural"
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  voice: {
+                    ...config.voice,
+                    ttsVoice: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Edge 语速</Label>
+              <Input
+                value={config.voice.ttsRate}
+                placeholder="+0%"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    voice: {
+                      ...config.voice,
+                      ttsRate: event.target.value
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Edge 音高</Label>
+              <Input
+                value={config.voice.ttsPitch}
+                placeholder="+0Hz"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    voice: {
+                      ...config.voice,
+                      ttsPitch: event.target.value
+                    }
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Edge 合成超时（毫秒）</Label>
+              <Input
+                value={String(config.voice.requestTimeoutMs)}
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    voice: {
+                      ...config.voice,
+                      requestTimeoutMs:
+                        Number.isFinite(Number(event.target.value))
+                          ? Math.max(3000, Math.min(30000, Number(event.target.value)))
+                          : config.voice.requestTimeoutMs
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Edge 失败重试次数</Label>
+              <Input
+                value={String(config.voice.retryCount)}
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    voice: {
+                      ...config.voice,
+                      retryCount:
+                        Number.isFinite(Number(event.target.value))
+                          ? Math.max(0, Math.min(2, Number(event.target.value)))
+                          : config.voice.retryCount
+                    }
+                  })
+                }
+              />
+            </div>
+          </div>
         </CardContent>
       </Card>
 

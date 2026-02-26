@@ -134,7 +134,6 @@ export class ConfigStore {
 
     merged.voice = {
       ...merged.voice,
-      proxy: normalizeString(merged.voice?.proxy, ""),
       requestTimeoutMs: clampInt(
         merged.voice?.requestTimeoutMs,
         3000,
@@ -190,7 +189,6 @@ export class ConfigStore {
       ...nextConfig,
       voice: {
         ...nextConfig.voice,
-        proxy: normalizeString(nextConfig.voice.proxy, ""),
         requestTimeoutMs: clampInt(
           nextConfig.voice.requestTimeoutMs,
           3000,

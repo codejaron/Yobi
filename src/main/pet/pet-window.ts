@@ -11,16 +11,19 @@ import {
 export class PetWindowController {
   private window: BrowserWindow | null = null;
 
-  private ensureRegularAppOnMac(): void {
-    if (process.platform !== "darwin") {
+  private showWindowWithoutFocus(): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    if (this.window.isVisible()) {
       return;
     }
 
     try {
-      app.setActivationPolicy("regular");
-      app.dock?.show();
-    } catch (error) {
-      console.warn("Failed to keep regular app policy on macOS:", error);
+      this.window.showInactive();
+    } catch {
+      this.window.show();
     }
   }
 
@@ -33,11 +36,6 @@ export class PetWindowController {
     this.window.setVisibleOnAllWorkspaces(alwaysOnTop, {
       visibleOnFullScreen: alwaysOnTop
     });
-    this.ensureRegularAppOnMac();
-
-    if (alwaysOnTop) {
-      this.window.moveTop();
-    }
   }
 
   private readonly moveWindowByListener = (event: IpcMainEvent, payload: unknown): void => {
@@ -135,8 +133,7 @@ export class PetWindowController {
   open(input: { modelDir: string; alwaysOnTop: boolean }): void {
     if (this.window && !this.window.isDestroyed()) {
       this.applyWindowPinning(input.alwaysOnTop);
-      this.window.show();
-      this.window.focus();
+      this.showWindowWithoutFocus();
       return;
     }
 
@@ -148,6 +145,7 @@ export class PetWindowController {
     this.window = new BrowserWindow({
       width: 380,
       height: 460,
+      show: false,
       frame: false,
       transparent: true,
       hasShadow: false,
@@ -162,6 +160,9 @@ export class PetWindowController {
       }
     });
     this.applyWindowPinning(input.alwaysOnTop);
+    this.window.once("ready-to-show", () => {
+      this.showWindowWithoutFocus();
+    });
 
     this.window.loadURL(targetUrl.toString()).catch(() => undefined);
     this.window.on("closed", () => {

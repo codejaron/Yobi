@@ -6,7 +6,6 @@ export interface VoiceConfig {
   pitch: string;
   requestTimeoutMs: number;
   retryCount: number;
-  proxy?: string;
 }
 
 type WsLike = {
@@ -53,28 +52,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       .catch((error) => reject(error))
       .finally(() => clearTimeout(timer));
   });
-}
-
-function resolveProxyFromEnv(): string | undefined {
-  const candidates = [
-    process.env.HTTPS_PROXY,
-    process.env.HTTP_PROXY,
-    process.env.ALL_PROXY,
-    process.env.https_proxy,
-    process.env.http_proxy,
-    process.env.all_proxy
-  ];
-
-  const hit = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
-  return hit?.trim();
-}
-
-function resolveProxy(configuredProxy: string | undefined): string | undefined {
-  if (typeof configuredProxy === "string" && configuredProxy.trim().length > 0) {
-    return configuredProxy.trim();
-  }
-
-  return resolveProxyFromEnv();
 }
 
 function generateSecMsGec(nowMs = Date.now()): string {
@@ -189,7 +166,6 @@ function splitBinaryFrame(raw: Buffer): [Record<string, string>, Buffer] {
 
 async function createWebSocket(input: {
   url: string;
-  proxy?: string;
   connectionTimeoutMs: number;
   headers: Record<string, string>;
 }): Promise<WsLike> {
@@ -205,22 +181,6 @@ async function createWebSocket(input: {
     timeout: input.connectionTimeoutMs,
     handshakeTimeout: input.connectionTimeoutMs
   };
-
-  if (input.proxy) {
-    const proxyModule = await dynamicImport("https-proxy-agent");
-    const maybeCtorOrFactory =
-      proxyModule?.HttpsProxyAgent ?? proxyModule?.default ?? proxyModule;
-
-    if (typeof maybeCtorOrFactory === "function") {
-      try {
-        options.agent = new maybeCtorOrFactory(input.proxy);
-      } catch {
-        options.agent = maybeCtorOrFactory(input.proxy);
-      }
-    } else {
-      throw new Error("https-proxy-agent 模块不可用");
-    }
-  }
 
   return new WebSocketCtor(input.url, options);
 }
@@ -299,10 +259,8 @@ export class VoiceService {
 
   private async synthesizeOnce(input: { text: string; config: VoiceConfig }): Promise<Buffer> {
     const connectionTimeoutMs = Math.max(3000, Math.min(120_000, input.config.requestTimeoutMs));
-    const proxy = resolveProxy(input.config.proxy);
     const ws = await createWebSocket({
       url: buildWebSocketUrl(),
-      proxy,
       connectionTimeoutMs,
       headers: buildWebSocketHeaders()
     });

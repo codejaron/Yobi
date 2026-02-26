@@ -299,16 +299,35 @@ export class CompanionRuntime {
   }
 
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
+    const previousConfig = this.configStore.getConfig();
     const saved = await this.configStore.saveConfig(nextConfig);
-    await this.restartTelegram();
-    this.keepAwake.apply(saved.background.keepAwake);
-    this.syncPetWindow();
-    await this.syncGlobalPetPushToTalk();
-    this.syncRealtimeVoice();
-    await this.syncPerceptionState();
+    const petConfigChanged = this.hasPetConfigChanged(previousConfig, saved);
+    const globalPttConfigChanged = this.hasGlobalPttConfigChanged(previousConfig, saved);
+    const keepAwakeChanged =
+      previousConfig.background.keepAwake !== saved.background.keepAwake;
+    const realtimeVoiceChanged = this.hasRealtimeVoiceConfigChanged(previousConfig, saved);
+
+    if (keepAwakeChanged) {
+      this.keepAwake.apply(saved.background.keepAwake);
+    }
+
+    if (petConfigChanged) {
+      this.syncPetWindow();
+    }
+
+    if (petConfigChanged || globalPttConfigChanged) {
+      await this.syncGlobalPetPushToTalk();
+    }
+
+    if (realtimeVoiceChanged) {
+      this.syncRealtimeVoice();
+    }
+
     this.startSilenceLoop();
     this.startIdleLoop();
     await this.emitStatus();
+
+    void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
     return saved;
   }
 
@@ -939,7 +958,6 @@ export class CompanionRuntime {
       voice: config.voice.ttsVoice,
       rate: config.voice.ttsRate,
       pitch: config.voice.ttsPitch,
-      proxy: config.voice.proxy,
       requestTimeoutMs: config.voice.requestTimeoutMs,
       retryCount: config.voice.retryCount
     };
@@ -1428,6 +1446,73 @@ export class CompanionRuntime {
 
     for (const listener of this.consoleChatListeners) {
       listener(event);
+    }
+  }
+
+  private hasPetConfigChanged(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    return (
+      previousConfig.pet.enabled !== nextConfig.pet.enabled ||
+      previousConfig.pet.alwaysOnTop !== nextConfig.pet.alwaysOnTop ||
+      previousConfig.pet.modelDir.trim() !== nextConfig.pet.modelDir.trim()
+    );
+  }
+
+  private hasGlobalPttConfigChanged(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    const previousAlibabaSttReady =
+      previousConfig.alibabaVoice.enabled && previousConfig.alibabaVoice.apiKey.trim().length > 0;
+    const nextAlibabaSttReady =
+      nextConfig.alibabaVoice.enabled && nextConfig.alibabaVoice.apiKey.trim().length > 0;
+
+    return (
+      previousConfig.ptt.enabled !== nextConfig.ptt.enabled ||
+      previousConfig.ptt.hotkey.trim() !== nextConfig.ptt.hotkey.trim() ||
+      previousAlibabaSttReady !== nextAlibabaSttReady
+    );
+  }
+
+  private hasRealtimeVoiceConfigChanged(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    return (
+      previousConfig.realtimeVoice.enabled !== nextConfig.realtimeVoice.enabled ||
+      previousConfig.realtimeVoice.whisperMode !== nextConfig.realtimeVoice.whisperMode ||
+      previousConfig.realtimeVoice.autoInterrupt !== nextConfig.realtimeVoice.autoInterrupt
+    );
+  }
+
+  private async refreshRuntimeAfterConfigSave(
+    previousConfig: AppConfig,
+    nextConfig: AppConfig
+  ): Promise<void> {
+    if (this.shouldRestartTelegram(previousConfig, nextConfig)) {
+      await this.runConfigSideEffect("重启 Telegram", 8_000, async () => {
+        await this.restartTelegram();
+      });
+    }
+
+    await this.runConfigSideEffect("同步屏幕感知", 8_000, async () => {
+      await this.syncPerceptionState();
+    });
+
+    await this.runConfigSideEffect("刷新运行状态", 4_000, async () => {
+      await this.emitStatus();
+    });
+  }
+
+  private shouldRestartTelegram(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    return (
+      previousConfig.telegram.botToken !== nextConfig.telegram.botToken ||
+      previousConfig.telegram.chatId !== nextConfig.telegram.chatId
+    );
+  }
+
+  private async runConfigSideEffect(
+    label: string,
+    timeoutMs: number,
+    task: () => void | Promise<void>
+  ): Promise<void> {
+    try {
+      await this.withTimeout(Promise.resolve().then(task), timeoutMs, label);
+    } catch (error) {
+      console.warn(`[runtime] ${label} 失败:`, error);
     }
   }
 
