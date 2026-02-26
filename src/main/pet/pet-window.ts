@@ -11,6 +11,8 @@ import {
 export class PetWindowController {
   private window: BrowserWindow | null = null;
   private dockRepairTimer: NodeJS.Timeout | null = null;
+  private lastAlwaysOnTop: boolean | null = null;
+  private macWorkspacePinned = false;
 
   private ensureDockIconVisibleOnMac(): void {
     if (process.platform !== "darwin") {
@@ -60,13 +62,24 @@ export class PetWindowController {
       return;
     }
 
-    this.window.setAlwaysOnTop(alwaysOnTop, alwaysOnTop ? "screen-saver" : "normal");
+    const alwaysOnTopChanged = this.lastAlwaysOnTop !== alwaysOnTop;
+    if (alwaysOnTopChanged) {
+      this.window.setAlwaysOnTop(alwaysOnTop, alwaysOnTop ? "screen-saver" : "normal");
+      this.lastAlwaysOnTop = alwaysOnTop;
+    }
 
     if (process.platform === "darwin") {
-      this.window.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true
-      });
-      this.scheduleDockRepairOnMac();
+      if (!this.macWorkspacePinned) {
+        this.window.setVisibleOnAllWorkspaces(true, {
+          visibleOnFullScreen: true
+        });
+        this.macWorkspacePinned = true;
+        this.scheduleDockRepairOnMac();
+      }
+      return;
+    }
+
+    if (!alwaysOnTopChanged) {
       return;
     }
 
@@ -196,7 +209,8 @@ export class PetWindowController {
         nodeIntegration: true
       }
     });
-    this.applyWindowPinning(input.alwaysOnTop);
+    this.lastAlwaysOnTop = input.alwaysOnTop;
+    this.macWorkspacePinned = false;
     this.window.once("ready-to-show", () => {
       this.applyWindowPinning(input.alwaysOnTop);
       this.showWindowWithoutFocus();
@@ -205,6 +219,8 @@ export class PetWindowController {
     this.window.loadURL(targetUrl.toString()).catch(() => undefined);
     this.window.on("closed", () => {
       this.window = null;
+      this.lastAlwaysOnTop = null;
+      this.macWorkspacePinned = false;
     });
   }
 
@@ -216,11 +232,15 @@ export class PetWindowController {
 
     if (!this.window || this.window.isDestroyed()) {
       this.window = null;
+      this.lastAlwaysOnTop = null;
+      this.macWorkspacePinned = false;
       return;
     }
 
     this.window.close();
     this.window = null;
+    this.lastAlwaysOnTop = null;
+    this.macWorkspacePinned = false;
   }
 
   emitEvent(

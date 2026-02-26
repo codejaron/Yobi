@@ -9,19 +9,6 @@ const PET_ENABLED_CHANNEL = "runtime:pet-enabled";
 
 let mainWindow: BrowserWindow | null = null;
 
-function ensureDockIconVisibleOnMac(): void {
-  if (process.platform !== "darwin") {
-    return;
-  }
-
-  try {
-    app.setActivationPolicy("regular");
-    app.dock?.show();
-  } catch (error) {
-    console.warn("Failed to ensure dock icon on macOS:", error);
-  }
-}
-
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -144,8 +131,6 @@ function registerShellMenuIpc(): void {
 }
 
 app.whenReady().then(async () => {
-  ensureDockIconVisibleOnMac();
-
   registerShellMenuIpc();
   registerIpcHandlers();
 
@@ -156,8 +141,6 @@ app.whenReady().then(async () => {
   });
 
   app.on("activate", () => {
-    ensureDockIconVisibleOnMac();
-
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }

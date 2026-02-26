@@ -1079,13 +1079,20 @@
           };
 
           const cancelPushToTalkCapture = async (reason) => {
-            if (pttRecorder.isRecording()) {
+            const wasRecording = pttRecorder.isRecording();
+            const wasProcessing = pttProcessing;
+            if (wasRecording) {
               await pttRecorder.cancel();
             }
 
             pttProcessing = false;
-            if (typeof reason === "string" && reason.trim().length > 0) {
-              updateStatus(reason.trim());
+            const normalizedReason = typeof reason === "string" ? reason.trim() : "";
+            if (!wasRecording && !wasProcessing && !normalizedReason) {
+              return;
+            }
+
+            if (normalizedReason) {
+              updateStatus(normalizedReason);
               scheduleStatusBackToBaseline(1400);
               return;
             }
