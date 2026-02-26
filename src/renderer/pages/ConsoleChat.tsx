@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CommandApprovalDecision, ConsoleChatEvent, HistoryMessage } from "@shared/types";
-import { Trash2 } from "lucide-react";
+import type { AppConfig, CommandApprovalDecision, ConsoleChatEvent, HistoryMessage } from "@shared/types";
+import { Loader2, Mic, Square, Trash2 } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { Switch } from "@renderer/components/ui/switch";
+import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 
 type MessageRole = "user" | "assistant";
 type MessageState = "streaming" | "done" | "error";
@@ -134,6 +135,28 @@ function singleLine(value: string, maxLength = 108): string {
   return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
 }
 
+function isAlibabaSttReady(config: AppConfig | null): boolean {
+  if (!config) {
+    return false;
+  }
+
+  return config.alibabaVoice.enabled && config.alibabaVoice.apiKey.trim().length > 0;
+}
+
+function appendRecognizedText(currentDraft: string, recognizedText: string): string {
+  const normalized = recognizedText.trim();
+  if (!normalized) {
+    return currentDraft;
+  }
+
+  const current = currentDraft.trim();
+  if (!current) {
+    return normalized;
+  }
+
+  return `${current} ${normalized}`;
+}
+
 function actionColor(kind: ActionKind): string {
   if (kind === "thinking") {
     return "border-sky-200 bg-sky-50/90";
@@ -169,6 +192,9 @@ export function ConsoleChatPage() {
   const [actions, setActions] = useState<ActionItem[]>([]);
   const [logEnabled, setLogEnabled] = useState(false);
   const [draft, setDraft] = useState("");
+  const [sttReady, setSttReady] = useState(false);
+  const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [micHint, setMicHint] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [approvalIndex, setApprovalIndex] = useState(0);
@@ -180,6 +206,7 @@ export function ConsoleChatPage() {
   const actionBottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const loadingMoreHistoryRef = useRef(false);
+  const recorderRef = useRef<Pcm16Recorder | null>(null);
 
   const appendAction = useCallback((item: Omit<ActionItem, "id"> & { id?: string }) => {
     if (!logEnabled) {
@@ -384,6 +411,96 @@ export function ConsoleChatPage() {
     }
   }, []);
 
+  const refreshSttAvailability = useCallback(async (): Promise<boolean> => {
+    try {
+      const config = await window.companion.getConfig();
+      const ready = isAlibabaSttReady(config);
+      setSttReady(ready);
+      return ready;
+    } catch {
+      setSttReady(false);
+      return false;
+    }
+  }, []);
+
+  const startMicRecording = useCallback(async () => {
+    if (micState !== "idle") {
+      return;
+    }
+
+    const ready = await refreshSttAvailability();
+    if (!ready) {
+      setMicHint("阿里语音识别未启用，请先在设置里打开开关并填写 API Key。");
+      return;
+    }
+
+    try {
+      const recorder = new Pcm16Recorder();
+      await recorder.start();
+      recorderRef.current = recorder;
+      setMicState("recording");
+      setMicHint("录音中，再点一次结束。");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "无法启动录音，请检查麦克风权限。";
+      setMicHint(message);
+      setMicState("idle");
+    }
+  }, [micState, refreshSttAvailability]);
+
+  const stopMicRecording = useCallback(async () => {
+    if (micState !== "recording") {
+      return;
+    }
+
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    if (!recorder) {
+      setMicState("idle");
+      return;
+    }
+
+    setMicState("transcribing");
+    setMicHint("正在识别语音...");
+    try {
+      const captured = await recorder.stop(16_000);
+      if (!captured.pcm16Base64 || captured.durationMs < 280) {
+        setMicHint("录音太短，未识别到有效语音。");
+        return;
+      }
+
+      const transcribed = await window.companion.transcribeVoice({
+        pcm16Base64: captured.pcm16Base64,
+        sampleRate: captured.sampleRate
+      });
+
+      const recognizedText = transcribed.text.trim();
+      if (!recognizedText) {
+        setMicHint("未识别到有效语音。");
+        return;
+      }
+
+      setDraft((current) => appendRecognizedText(current, recognizedText));
+      setMicHint("识别完成，按回车发送。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "语音识别失败，请稍后重试。";
+      setMicHint(message);
+    } finally {
+      setMicState("idle");
+    }
+  }, [micState]);
+
+  const toggleMicRecording = useCallback(() => {
+    if (micState === "recording") {
+      void stopMicRecording();
+      return;
+    }
+
+    if (micState === "idle") {
+      void startMicRecording();
+    }
+  }, [micState, startMicRecording, stopMicRecording]);
+
   const clearHistory = useCallback(async () => {
     if (activeRequestId || clearingHistory) {
       return;
@@ -516,6 +633,21 @@ export function ConsoleChatPage() {
   }, [loadLatestHistory]);
 
   useEffect(() => {
+    void refreshSttAvailability();
+  }, [refreshSttAvailability]);
+
+  useEffect(() => {
+    if (!sttReady && micState === "idle") {
+      setMicHint("阿里语音识别未启用，请先到设置页开启并填写 API Key。");
+      return;
+    }
+
+    if (sttReady && micState === "idle" && micHint.startsWith("阿里语音识别未启用")) {
+      setMicHint("");
+    }
+  }, [micHint, micState, sttReady]);
+
+  useEffect(() => {
     if (!historyLoaded) {
       return;
     }
@@ -538,6 +670,16 @@ export function ConsoleChatPage() {
 
     inputRef.current?.focus();
   }, [pendingApproval]);
+
+  useEffect(() => {
+    return () => {
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder) {
+        void recorder.cancel();
+      }
+    };
+  }, []);
 
   const submitApproval = useCallback(async (decision: CommandApprovalDecision) => {
     if (!pendingApproval) {
@@ -698,7 +840,15 @@ export function ConsoleChatPage() {
   }, [approvalIndex, applySlashSuggestion, pendingApproval, slashSuggestionIndex, slashSuggestions, submitApproval]);
 
   const busy = activeRequestId !== null;
-  const inputDisabled = busy && !pendingApproval;
+  const recording = micState === "recording";
+  const transcribing = micState === "transcribing";
+  const inputDisabled = (busy && !pendingApproval) || transcribing;
+  const micButtonDisabled =
+    (pendingApproval !== null && !recording) ||
+    transcribing ||
+    busy ||
+    (!sttReady && !recording);
+  const micButtonLabel = transcribing ? "识别中" : recording ? "结束" : "语音";
   const showSlashSuggestions = !pendingApproval && slashSuggestions.length > 0;
   const messages = useMemo<ConsoleMessage[]>(() => {
     const historyMessages = persistedMessages
@@ -858,13 +1008,47 @@ export function ConsoleChatPage() {
                 disabled={inputDisabled}
               />
               <Button
+                type="button"
+                variant="outline"
+                onClick={toggleMicRecording}
+                disabled={micButtonDisabled}
+                className={`h-11 min-w-[88px] shrink-0 whitespace-nowrap ${
+                  recording ? "border-rose-400 text-rose-700 hover:border-rose-500 hover:bg-rose-50" : ""
+                }`}
+                title={
+                  sttReady
+                    ? "单击开始录音，再次单击结束识别"
+                    : "请先在设置里启用阿里语音并填写 API Key"
+                }
+              >
+                {transcribing ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    {micButtonLabel}
+                  </>
+                ) : recording ? (
+                  <>
+                    <Square className="mr-1.5 h-4 w-4" />
+                    {micButtonLabel}
+                  </>
+                ) : (
+                  <>
+                    <Mic className="mr-1.5 h-4 w-4" />
+                    {micButtonLabel}
+                  </>
+                )}
+              </Button>
+              <Button
                 type="submit"
-                disabled={busy || draft.trim().length === 0}
+                disabled={busy || recording || transcribing || draft.trim().length === 0}
                 className="h-11 min-w-[92px] shrink-0 whitespace-nowrap"
               >
                 {busy ? "处理中..." : "发送"}
               </Button>
             </form>
+            {micHint ? (
+              <p className="mt-2 text-xs text-muted-foreground">{micHint}</p>
+            ) : null}
           </div>
         </CardContent>
       </Card>

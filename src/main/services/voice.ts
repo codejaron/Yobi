@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
-interface VoiceConfig {
+export interface VoiceConfig {
   voice: string;
   rate: string;
   pitch: string;

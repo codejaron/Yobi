@@ -46,6 +46,14 @@ export const appConfigSchema = z.object({
     requestTimeoutMs: z.number().int().min(3000).max(30000).default(15000),
     retryCount: z.number().int().min(0).max(2).default(1)
   }),
+  alibabaVoice: z.object({
+    enabled: z.boolean().default(false),
+    apiKey: z.string().default(""),
+    region: z.enum(["cn", "intl"]).default("cn"),
+    asrModel: z.string().default("fun-asr-realtime"),
+    ttsModel: z.string().default("cosyvoice-v3-flash"),
+    ttsVoice: z.string().default("longxiaochun_v3")
+  }),
   background: z.object({
     keepAwake: z.boolean().default(true)
   }),
@@ -53,6 +61,10 @@ export const appConfigSchema = z.object({
     enabled: z.boolean().default(true),
     modelDir: z.string().default(""),
     alwaysOnTop: z.boolean().default(true)
+  }),
+  ptt: z.object({
+    enabled: z.boolean().default(true),
+    hotkey: z.string().default("Alt+Space")
   }),
   realtimeVoice: z.object({
     enabled: z.boolean().default(false),
@@ -309,6 +321,14 @@ export const DEFAULT_CONFIG: AppConfig = {
     requestTimeoutMs: 15000,
     retryCount: 1
   },
+  alibabaVoice: {
+    enabled: false,
+    apiKey: "",
+    region: "cn",
+    asrModel: "fun-asr-realtime",
+    ttsModel: "cosyvoice-v3-flash",
+    ttsVoice: "longxiaochun_v3"
+  },
   background: {
     keepAwake: true
   },
@@ -316,6 +336,10 @@ export const DEFAULT_CONFIG: AppConfig = {
     enabled: true,
     modelDir: "",
     alwaysOnTop: true
+  },
+  ptt: {
+    enabled: true,
+    hotkey: "Alt+Space"
   },
   realtimeVoice: {
     enabled: false,

@@ -158,8 +158,125 @@ export function SettingsPage({
 
       <Card>
         <CardHeader>
+          <CardTitle>阿里百炼语音</CardTitle>
+          <CardDescription>
+            开启且填写 API Key 后，语音识别和语音合成都会走阿里 WebSocket。
+            未满足条件时会关闭语音识别并回退到 Edge TTS。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+            <Label>启用阿里语音（STT + TTS）</Label>
+            <Switch
+              checked={config.alibabaVoice.enabled}
+              onChange={(checked) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    enabled: checked
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>DashScope API Key</Label>
+            <Input
+              type="password"
+              value={config.alibabaVoice.apiKey}
+              placeholder="sk-xxxx"
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    apiKey: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>区域</Label>
+            <select
+              className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              value={config.alibabaVoice.region}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    region: event.target.value === "intl" ? "intl" : "cn"
+                  }
+                })
+              }
+            >
+              <option value="cn">中国内地（dashscope.aliyuncs.com）</option>
+              <option value="intl">国际站（dashscope-intl.aliyuncs.com）</option>
+            </select>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>ASR 模型</Label>
+              <Input
+                value={config.alibabaVoice.asrModel}
+                placeholder="fun-asr-realtime"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    alibabaVoice: {
+                      ...config.alibabaVoice,
+                      asrModel: event.target.value
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>TTS 模型</Label>
+              <Input
+                value={config.alibabaVoice.ttsModel}
+                placeholder="cosyvoice-v3-flash"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    alibabaVoice: {
+                      ...config.alibabaVoice,
+                      ttsModel: event.target.value
+                    }
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>TTS 音色</Label>
+            <Input
+              value={config.alibabaVoice.ttsVoice}
+              placeholder="longxiaochun_v3"
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  alibabaVoice: {
+                    ...config.alibabaVoice,
+                    ttsVoice: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>语音参数</CardTitle>
-          <CardDescription>用于 [voice] 标记的 Edge TTS 合成。</CardDescription>
+          <CardDescription>Edge TTS 回退参数（阿里语音未启用时生效）。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1.5">
@@ -448,6 +565,43 @@ export function SettingsPage({
                 })
               }
             />
+          </div>
+
+          <div className="rounded-md border border-border/70 bg-white/70 px-3 py-3">
+            <div className="flex items-center justify-between">
+              <Label>桌宠按住说话（全局）</Label>
+              <Switch
+                checked={config.ptt.enabled}
+                onChange={(checked) =>
+                  setConfig({
+                    ...config,
+                    ptt: {
+                      ...config.ptt,
+                      enabled: checked
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="mt-3 space-y-1.5">
+              <Label>按住说话快捷键</Label>
+              <Input
+                value={config.ptt.hotkey}
+                placeholder="Alt+Space"
+                onChange={(event) =>
+                  setConfig({
+                    ...config,
+                    ptt: {
+                      ...config.ptt,
+                      hotkey: event.target.value
+                    }
+                  })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                例如 Alt+Space、Ctrl+Shift+Space。按下开始录音，松开后自动发送。
+              </p>
+            </div>
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">

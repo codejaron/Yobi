@@ -25,7 +25,30 @@
       }
 
       #status {
-        display: none;
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-6px);
+        max-width: calc(100% - 24px);
+        border-radius: 999px;
+        padding: 6px 12px;
+        background: rgba(16, 18, 26, 0.84);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: rgba(255, 255, 255, 0.96);
+        font-size: 12px;
+        letter-spacing: 0.2px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 140ms ease, transform 140ms ease;
+        z-index: 24;
+      }
+
+      #status.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
       }
 
       #chat-panel {
@@ -204,9 +227,30 @@
       const modelDir = params.get("modelDir") || "";
       const appPath = params.get("appPath") || "";
       const PET_SCALE_STORAGE_KEY = "yobi.pet.scale.v1";
+      const STATUS_TEXT = {
+        idle: "",
+        thinking: "思考中...",
+        talking: "正在说话...",
+        "ptt-recording": "正在录音，松开快捷键发送",
+        "ptt-transcribing": "识别中...",
+        "ptt-empty": "录音太短，请重试",
+        "ptt-sent": "已发送",
+        "ptt-cancel": "已取消录音",
+        "ptt-mic-error": "麦克风不可用",
+        "ptt-failed": "语音处理失败",
+        "speech-error": "语音播放失败",
+        "speech-blocked": "浏览器阻止自动播放"
+      };
 
       const updateStatus = (text) => {
-        statusEl.textContent = text;
+        const raw = typeof text === "string" ? text.trim() : "";
+        const label = STATUS_TEXT[raw] ?? raw;
+        if (!statusEl) {
+          return;
+        }
+
+        statusEl.textContent = label;
+        statusEl.classList.toggle("visible", label.length > 0);
       };
 
       const isElement = (value) => value && typeof value === "object" && "closest" in value;
@@ -359,6 +403,190 @@
         } catch {
           return `file://${encodeURI(filePath)}`;
         }
+      };
+
+      const mergeFloatChunks = (chunks) => {
+        if (!Array.isArray(chunks) || chunks.length === 0) {
+          return new Float32Array(0);
+        }
+
+        let totalLength = 0;
+        for (const chunk of chunks) {
+          totalLength += chunk.length;
+        }
+
+        const merged = new Float32Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        return merged;
+      };
+
+      const downsampleToRate = (input, inputRate, outputRate) => {
+        if (!input || input.length === 0 || inputRate === outputRate) {
+          return input || new Float32Array(0);
+        }
+
+        const ratio = inputRate / outputRate;
+        const outputLength = Math.max(1, Math.floor(input.length / ratio));
+        const output = new Float32Array(outputLength);
+        let inputOffset = 0;
+
+        for (let index = 0; index < outputLength; index += 1) {
+          const nextOffset = Math.min(input.length, Math.floor((index + 1) * ratio));
+          let total = 0;
+          let count = 0;
+
+          for (let offset = inputOffset; offset < nextOffset; offset += 1) {
+            total += input[offset];
+            count += 1;
+          }
+
+          output[index] = count > 0 ? total / count : 0;
+          inputOffset = nextOffset;
+        }
+
+        return output;
+      };
+
+      const floatToInt16 = (input) => {
+        const output = new Int16Array(input.length);
+        for (let index = 0; index < input.length; index += 1) {
+          const value = Math.max(-1, Math.min(1, input[index] || 0));
+          output[index] = value < 0 ? Math.round(value * 0x8000) : Math.round(value * 0x7fff);
+        }
+        return output;
+      };
+
+      const uint8ToBase64 = (bytes) => {
+        if (!bytes || bytes.length === 0) {
+          return "";
+        }
+
+        const chunkSize = 0x8000;
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          const slice = bytes.subarray(offset, offset + chunkSize);
+          binary += String.fromCharCode(...slice);
+        }
+        return btoa(binary);
+      };
+
+      const createPcm16Recorder = () => {
+        let stream = null;
+        let audioContext = null;
+        let sourceNode = null;
+        let processorNode = null;
+        let chunks = [];
+        let inputRate = 44100;
+        let startedAt = 0;
+
+        const teardown = async (preserveChunks) => {
+          const snapshotChunks = preserveChunks ? chunks.slice() : [];
+          const elapsedMs = startedAt > 0 ? Date.now() - startedAt : 0;
+          const sampleRate = inputRate;
+
+          if (processorNode) {
+            processorNode.onaudioprocess = null;
+            try {
+              processorNode.disconnect();
+            } catch {}
+          }
+
+          if (sourceNode) {
+            try {
+              sourceNode.disconnect();
+            } catch {}
+          }
+
+          if (stream) {
+            const tracks = stream.getTracks();
+            for (const track of tracks) {
+              track.stop();
+            }
+          }
+
+          if (audioContext) {
+            try {
+              await audioContext.close();
+            } catch {}
+          }
+
+          stream = null;
+          audioContext = null;
+          sourceNode = null;
+          processorNode = null;
+          chunks = [];
+          startedAt = 0;
+
+          return {
+            chunks: snapshotChunks,
+            elapsedMs,
+            sampleRate
+          };
+        };
+
+        return {
+          isRecording() {
+            return Boolean(stream);
+          },
+          async start() {
+            if (stream) {
+              return;
+            }
+
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                channelCount: 1,
+                noiseSuppression: true,
+                echoCancellation: true,
+                autoGainControl: true
+              }
+            });
+
+            audioContext = new AudioContext();
+            if (audioContext.state === "suspended") {
+              await audioContext.resume();
+            }
+
+            sourceNode = audioContext.createMediaStreamSource(stream);
+            processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+            chunks = [];
+            inputRate = audioContext.sampleRate;
+            startedAt = Date.now();
+
+            processorNode.onaudioprocess = (event) => {
+              const channel = event.inputBuffer.getChannelData(0);
+              chunks.push(new Float32Array(channel));
+            };
+
+            sourceNode.connect(processorNode);
+            processorNode.connect(audioContext.destination);
+          },
+          async stop(outputRate = 16000) {
+            const snapshot = await teardown(true);
+            const merged = mergeFloatChunks(snapshot.chunks);
+            const downsampled = downsampleToRate(merged, snapshot.sampleRate, outputRate);
+            const pcm16 = floatToInt16(downsampled);
+            const pcm16Base64 = uint8ToBase64(new Uint8Array(pcm16.buffer));
+            const durationMs =
+              pcm16.length > 0
+                ? Math.round((pcm16.length / outputRate) * 1000)
+                : Math.max(0, snapshot.elapsedMs);
+
+            return {
+              pcm16Base64,
+              sampleRate: outputRate,
+              durationMs
+            };
+          },
+          async cancel() {
+            await teardown(false);
+          }
+        };
       };
 
       const resolveCubismCoreCandidates = () => {
@@ -645,6 +873,8 @@
           let lastPointerClientY = 0;
           let cursorPollTimer = 0;
           let cursorPollInFlight = false;
+          let pttProcessing = false;
+          const pttRecorder = createPcm16Recorder();
 
           const MOUTH_PARAMETER_ID = "PARAM_MOUTH_OPEN_Y";
           const MOTION_PRIORITY_FORCE = 3;
@@ -730,6 +960,114 @@
             if (hasPointerSample) {
               syncPointerHitMode(lastPointerClientX, lastPointerClientY);
             }
+          };
+
+          const startPushToTalkCapture = async () => {
+            if (pttProcessing || pttRecorder.isRecording()) {
+              return;
+            }
+
+            try {
+              await pttRecorder.start();
+              updateStatus("ptt-recording");
+            } catch (error) {
+              const message =
+                error && typeof error === "object" && "message" in error
+                  ? String(error.message)
+                  : "ptt-mic-error";
+              updateStatus(message);
+              scheduleStatusBackToBaseline(1400);
+            }
+          };
+
+          const stopPushToTalkCapture = async () => {
+            if (pttProcessing || !pttRecorder.isRecording()) {
+              return;
+            }
+
+            pttProcessing = true;
+            updateStatus("ptt-transcribing");
+            clearStatusTimer();
+
+            try {
+              const recorded = await pttRecorder.stop(16000);
+              if (!recorded.pcm16Base64 || recorded.durationMs < 280) {
+                updateStatus("ptt-empty");
+                scheduleStatusBackToBaseline(900);
+                return;
+              }
+
+              const result = await ipcRenderer.invoke("pet:voice:transcribe-and-send", {
+                pcm16Base64: recorded.pcm16Base64,
+                sampleRate: recorded.sampleRate
+              });
+
+              const sent = Boolean(result && typeof result === "object" && result.sent === true);
+              if (!sent) {
+                const message =
+                  result &&
+                  typeof result === "object" &&
+                  typeof result.message === "string" &&
+                  result.message.trim()
+                    ? result.message.trim()
+                    : "未识别到有效语音";
+                updateStatus(message);
+                scheduleStatusBackToBaseline(1000);
+                return;
+              }
+
+              const transcribedText =
+                result &&
+                typeof result === "object" &&
+                typeof result.text === "string" &&
+                result.text.trim()
+                  ? result.text.trim()
+                  : "";
+              const replyText =
+                result &&
+                typeof result === "object" &&
+                typeof result.replyText === "string" &&
+                result.replyText.trim()
+                  ? result.replyText.trim()
+                  : "";
+
+              if (isChatVisible()) {
+                if (transcribedText) {
+                  appendChatMessage("user", transcribedText);
+                }
+                if (replyText) {
+                  appendChatMessage("assistant", replyText);
+                }
+              }
+
+              updateStatus("ptt-sent");
+              scheduleStatusBackToBaseline(900);
+            } catch (error) {
+              const message =
+                error && typeof error === "object" && "message" in error
+                  ? String(error.message)
+                  : "ptt-failed";
+              updateStatus(message);
+              scheduleStatusBackToBaseline(1200);
+            } finally {
+              pttProcessing = false;
+            }
+          };
+
+          const cancelPushToTalkCapture = async (reason) => {
+            if (pttRecorder.isRecording()) {
+              await pttRecorder.cancel();
+            }
+
+            pttProcessing = false;
+            if (typeof reason === "string" && reason.trim().length > 0) {
+              updateStatus(reason.trim());
+              scheduleStatusBackToBaseline(1400);
+              return;
+            }
+
+            updateStatus("ptt-cancel");
+            scheduleStatusBackToBaseline(900);
           };
 
           const clearStatusTimer = () => {
@@ -1437,6 +1775,7 @@
           window.addEventListener("blur", () => {
             stopDragging();
             clearPendingSingleTap();
+            void cancelPushToTalkCapture("");
             setMousePassthrough(true);
           });
           window.addEventListener("mouseleave", (event) => {
@@ -1497,6 +1836,7 @@
           startCursorPolling();
           window.addEventListener("beforeunload", () => {
             stopCursorPolling();
+            void cancelPushToTalkCapture("");
             setMousePassthrough(false);
           });
 
@@ -1593,6 +1933,25 @@
 
           ipcRenderer.on("pet:event", (_event, data) => {
             if (!data || typeof data !== "object") {
+              return;
+            }
+
+            if (data.type === "ptt") {
+              const state = typeof data.state === "string" ? data.state : "";
+              if (state === "start") {
+                void startPushToTalkCapture();
+                return;
+              }
+
+              if (state === "stop") {
+                void stopPushToTalkCapture();
+                return;
+              }
+
+              if (state === "cancel") {
+                const reason = typeof data.reason === "string" ? data.reason : "";
+                void cancelPushToTalkCapture(reason);
+              }
               return;
             }
 

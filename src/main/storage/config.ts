@@ -15,6 +15,20 @@ function normalizeString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+function normalizeHotkey(value: unknown, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value
+    .split("+")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join("+");
+
+  return normalized || fallback;
+}
+
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -60,6 +74,10 @@ export class ConfigStore {
         ...DEFAULT_CONFIG.voice,
         ...raw.voice
       },
+      alibabaVoice: {
+        ...DEFAULT_CONFIG.alibabaVoice,
+        ...raw.alibabaVoice
+      },
       background: {
         ...DEFAULT_CONFIG.background,
         ...raw.background
@@ -67,6 +85,10 @@ export class ConfigStore {
       pet: {
         ...DEFAULT_CONFIG.pet,
         ...raw.pet
+      },
+      ptt: {
+        ...DEFAULT_CONFIG.ptt,
+        ...raw.ptt
       },
       realtimeVoice: {
         ...DEFAULT_CONFIG.realtimeVoice,
@@ -126,6 +148,18 @@ export class ConfigStore {
         DEFAULT_CONFIG.voice.retryCount
       )
     };
+    merged.alibabaVoice = {
+      ...merged.alibabaVoice,
+      apiKey: normalizeString(merged.alibabaVoice?.apiKey, ""),
+      region: merged.alibabaVoice?.region === "intl" ? "intl" : "cn",
+      asrModel: normalizeString(merged.alibabaVoice?.asrModel, DEFAULT_CONFIG.alibabaVoice.asrModel),
+      ttsModel: normalizeString(merged.alibabaVoice?.ttsModel, DEFAULT_CONFIG.alibabaVoice.ttsModel),
+      ttsVoice: normalizeString(merged.alibabaVoice?.ttsVoice, DEFAULT_CONFIG.alibabaVoice.ttsVoice)
+    };
+    merged.ptt = {
+      ...merged.ptt,
+      hotkey: normalizeHotkey(merged.ptt?.hotkey, DEFAULT_CONFIG.ptt.hotkey)
+    };
 
     merged.tools = {
       browser: {
@@ -164,6 +198,18 @@ export class ConfigStore {
           DEFAULT_CONFIG.voice.requestTimeoutMs
         ),
         retryCount: clampInt(nextConfig.voice.retryCount, 0, 2, DEFAULT_CONFIG.voice.retryCount)
+      },
+      alibabaVoice: {
+        ...nextConfig.alibabaVoice,
+        apiKey: normalizeString(nextConfig.alibabaVoice.apiKey, ""),
+        region: nextConfig.alibabaVoice.region === "intl" ? "intl" : "cn",
+        asrModel: normalizeString(nextConfig.alibabaVoice.asrModel, DEFAULT_CONFIG.alibabaVoice.asrModel),
+        ttsModel: normalizeString(nextConfig.alibabaVoice.ttsModel, DEFAULT_CONFIG.alibabaVoice.ttsModel),
+        ttsVoice: normalizeString(nextConfig.alibabaVoice.ttsVoice, DEFAULT_CONFIG.alibabaVoice.ttsVoice)
+      },
+      ptt: {
+        ...nextConfig.ptt,
+        hotkey: normalizeHotkey(nextConfig.ptt.hotkey, DEFAULT_CONFIG.ptt.hotkey)
       },
       tools: {
         browser: {

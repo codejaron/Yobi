@@ -29,10 +29,12 @@ import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage, OutboundMessage } from "@main/channels/types";
 import { parseAssistantOutput, mergeVoiceIntoText } from "@main/services/output-parser";
 import { VoiceService } from "@main/services/voice";
+import { VoiceProviderRouter } from "@main/services/voice-router";
 import { KeepAwakeService } from "@main/services/keep-awake";
 import { ReminderService } from "@main/services/reminders";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
+import { GlobalPetPushToTalkService, type GlobalPttPhase } from "@main/services/global-ptt";
 import { createDefaultToolRegistry } from "@main/tools/bootstrap";
 import type { ToolApprovalRequest } from "@main/tools/types";
 
@@ -104,9 +106,14 @@ export class CompanionRuntime {
 
   private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
   private readonly voiceService = new VoiceService();
+  private readonly voiceRouter = new VoiceProviderRouter(
+    () => this.configStore.getConfig(),
+    this.voiceService
+  );
   private readonly keepAwake = new KeepAwakeService();
   private readonly pet = new PetWindowController();
   private readonly realtimeVoice = new RealtimeVoiceService();
+  private readonly globalPtt = new GlobalPetPushToTalkService();
   private readonly reminderService = new ReminderService(this.reminderStore, {
     sendReminder: async (item) => {
       await this.telegram.send({
@@ -119,6 +126,7 @@ export class CompanionRuntime {
   private statusListeners = new Set<(status: AppStatus) => void>();
   private consoleChatListeners = new Set<(event: ConsoleChatEvent) => void>();
   private pendingConsoleApprovals = new Map<string, PendingConsoleApproval>();
+  private petPttRecording = false;
   private silenceTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private lastSilenceHandledAt: string | null = null;
@@ -126,6 +134,7 @@ export class CompanionRuntime {
   private screenLocked = false;
   private idlePaused = false;
   private promptedAccessibilityPermission = false;
+  private promptedGlobalPttPermission = false;
   private macAccessibilityPermission: MacPermissionState = "unknown";
   private macScreenRecordingPermission: MacPermissionState = "unknown";
 
@@ -182,6 +191,7 @@ export class CompanionRuntime {
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
     this.syncPetWindow();
+    await this.syncGlobalPetPushToTalk();
     this.syncRealtimeVoice();
     this.idlePaused =
       powerMonitor.getSystemIdleTime() >= this.getConfig().perception.idlePauseSeconds;
@@ -207,6 +217,8 @@ export class CompanionRuntime {
 
     this.keepAwake.stop();
     this.pet.close();
+    this.globalPtt.stop();
+    this.petPttRecording = false;
     this.realtimeVoice.stop();
     for (const pending of this.pendingConsoleApprovals.values()) {
       pending.resolve("deny");
@@ -291,6 +303,7 @@ export class CompanionRuntime {
     await this.restartTelegram();
     this.keepAwake.apply(saved.background.keepAwake);
     this.syncPetWindow();
+    await this.syncGlobalPetPushToTalk();
     this.syncRealtimeVoice();
     await this.syncPerceptionState();
     this.startSilenceLoop();
@@ -444,6 +457,78 @@ export class CompanionRuntime {
     await this.emitStatus();
     return {
       replyText: delivered.displayText
+    };
+  }
+
+  async transcribeVoiceInput(input: {
+    pcm16Base64?: string;
+    sampleRate?: number;
+  }): Promise<{
+    text: string;
+  }> {
+    const pcm16Base64 = typeof input.pcm16Base64 === "string" ? input.pcm16Base64.trim() : "";
+    if (!pcm16Base64) {
+      throw new Error("录音数据为空。");
+    }
+
+    if (!this.voiceRouter.isAlibabaSttReady()) {
+      throw new Error("阿里语音识别未启用，请在设置里先打开开关并填写 API Key。");
+    }
+
+    let pcm: Buffer;
+    try {
+      pcm = Buffer.from(pcm16Base64, "base64");
+    } catch {
+      throw new Error("录音数据格式不合法。");
+    }
+
+    if (pcm.length === 0) {
+      throw new Error("录音数据为空。");
+    }
+
+    const sampleRate = Number.isFinite(input.sampleRate) ? Number(input.sampleRate) : 16_000;
+    const text = await this.voiceRouter.transcribePcm16({
+      pcm,
+      sampleRate
+    });
+
+    return {
+      text
+    };
+  }
+
+  async transcribeAndSendFromPet(input: {
+    pcm16Base64?: string;
+    sampleRate?: number;
+  }): Promise<{
+    sent: boolean;
+    text: string;
+    replyText?: string;
+    message?: string;
+  }> {
+    if (!this.voiceRouter.isAlibabaSttReady()) {
+      return {
+        sent: false,
+        text: "",
+        message: "阿里语音识别未启用"
+      };
+    }
+
+    const transcribed = await this.transcribeVoiceInput(input);
+    const text = transcribed.text.trim();
+    if (!text) {
+      return {
+        sent: false,
+        text: "",
+        message: "未识别到有效语音"
+      };
+    }
+
+    const replied = await this.chatFromPet(text);
+    return {
+      sent: true,
+      text,
+      replyText: replied.replyText
     };
   }
 
@@ -862,9 +947,9 @@ export class CompanionRuntime {
     if (sendToTelegram && config.messaging.allowVoiceMessages && parsed.voiceTexts.length > 0) {
       for (const voiceText of parsed.voiceTexts) {
         try {
-          const audio = await this.voiceService.synthesize({
+          const audio = await this.voiceRouter.synthesize({
             text: voiceText,
-            config: ttsConfig
+            edgeConfig: ttsConfig
           });
           synthesizedVoiceByText.set(voiceText, audio);
 
@@ -953,9 +1038,9 @@ export class CompanionRuntime {
         const cachedAudio = synthesizedVoiceByText.get(petSpeechText);
         const speechAudio =
           cachedAudio ??
-          (await this.voiceService.synthesize({
+          (await this.voiceRouter.synthesize({
             text: petSpeechText,
-            config: ttsConfig
+            edgeConfig: ttsConfig
           }));
 
         this.pet.emitEvent({
@@ -1156,6 +1241,145 @@ export class CompanionRuntime {
       modelDir,
       alwaysOnTop: config.alwaysOnTop
     });
+  }
+
+  private async syncGlobalPetPushToTalk(): Promise<void> {
+    if (!this.shouldEnableGlobalPetPushToTalk()) {
+      this.globalPtt.stop();
+      if (this.petPttRecording) {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "桌宠语音已关闭"
+        });
+      }
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (!this.ensureGlobalPttPermission()) {
+      this.globalPtt.stop();
+      this.petPttRecording = false;
+      if (this.pet.isOnline()) {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "请在系统设置中为 Yobi 打开辅助功能权限后再试。"
+        });
+      }
+      return;
+    }
+
+    try {
+      await this.globalPtt.start({
+        hotkey: this.getConfig().ptt.hotkey,
+        onPhase: (phase) => {
+          void this.handleGlobalPetPushToTalkPhase(phase);
+        }
+      });
+    } catch (error) {
+      this.globalPtt.stop();
+      this.petPttRecording = false;
+
+      const reason = error instanceof Error ? error.message : "全局按住说话启动失败";
+      if (this.pet.isOnline()) {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason
+        });
+      }
+    }
+  }
+
+  private shouldEnableGlobalPetPushToTalk(): boolean {
+    const config = this.getConfig();
+    return config.pet.enabled && config.ptt.enabled && this.pet.isOnline();
+  }
+
+  private async handleGlobalPetPushToTalkPhase(phase: GlobalPttPhase): Promise<void> {
+    if (!this.shouldEnableGlobalPetPushToTalk()) {
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (!this.ensureGlobalPttPermission()) {
+      if (phase === "down") {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "缺少辅助功能权限，无法监听全局快捷键。"
+        });
+      }
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (!this.voiceRouter.isAlibabaSttReady()) {
+      if (phase === "down") {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "阿里语音识别未启用"
+        });
+      }
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (phase === "down") {
+      if (this.petPttRecording) {
+        return;
+      }
+
+      this.petPttRecording = true;
+      this.pet.emitEvent({
+        type: "ptt",
+        state: "start"
+      });
+      return;
+    }
+
+    if (!this.petPttRecording) {
+      return;
+    }
+
+    this.petPttRecording = false;
+    this.pet.emitEvent({
+      type: "ptt",
+      state: "stop"
+    });
+  }
+
+  private ensureGlobalPttPermission(): boolean {
+    if (process.platform !== "darwin") {
+      return true;
+    }
+
+    let granted = false;
+    try {
+      granted = systemPreferences.isTrustedAccessibilityClient(false);
+    } catch {
+      granted = false;
+    }
+
+    if (!granted && !this.promptedGlobalPttPermission) {
+      this.promptedGlobalPttPermission = true;
+      try {
+        systemPreferences.isTrustedAccessibilityClient(true);
+      } catch {
+        // ignore
+      }
+
+      try {
+        granted = systemPreferences.isTrustedAccessibilityClient(false);
+      } catch {
+        granted = false;
+      }
+    }
+
+    this.macAccessibilityPermission = granted ? "granted" : "denied";
+    return granted;
   }
 
   private syncRealtimeVoice(): void {

@@ -64,8 +64,28 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("pet:chat:send", (_, payload: { text?: string }) =>
     runtime.chatFromPet(payload?.text ?? "")
   );
+  ipcMain.handle(
+    "pet:voice:transcribe-and-send",
+    (
+      _,
+      payload: {
+        pcm16Base64?: string;
+        sampleRate?: number;
+      }
+    ) => runtime.transcribeAndSendFromPet(payload)
+  );
   ipcMain.handle("console:chat:send", (_, payload: { text?: string }) =>
     runtime.startConsoleChat(payload?.text ?? "")
+  );
+  ipcMain.handle(
+    "voice:transcribe",
+    (
+      _,
+      payload: {
+        pcm16Base64?: string;
+        sampleRate?: number;
+      }
+    ) => runtime.transcribeVoiceInput(payload)
   );
   ipcMain.handle(
     "console:chat:history",

@@ -39,6 +39,10 @@ export interface CompanionApi {
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 
   sendConsoleChat(text: string): Promise<{ requestId: string }>;
+  transcribeVoice(input: {
+    pcm16Base64: string;
+    sampleRate: number;
+  }): Promise<{ text: string }>;
   listConsoleHistory(input?: {
     cursor?: string;
     limit?: number;

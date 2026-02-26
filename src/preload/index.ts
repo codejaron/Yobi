@@ -88,6 +88,12 @@ const api: CompanionApi = {
       text
     });
   },
+  transcribeVoice(input: {
+    pcm16Base64: string;
+    sampleRate: number;
+  }): Promise<{ text: string }> {
+    return ipcRenderer.invoke("voice:transcribe", input);
+  },
   listConsoleHistory(input?: {
     cursor?: string;
     limit?: number;
