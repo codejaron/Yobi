@@ -96,6 +96,16 @@ export class TopicPool {
     return this.cached.topics.filter((topic) => topicStillActive(topic, now)).slice(0, limit);
   }
 
+  listActive(limit?: number): PendingTopic[] {
+    const now = Date.now();
+    const active = this.cached.topics.filter((topic) => topicStillActive(topic, now));
+    if (typeof limit === "number") {
+      return active.slice(0, Math.max(0, limit));
+    }
+
+    return active;
+  }
+
   async markUsed(id: string): Promise<void> {
     const topic = this.cached.topics.find((item) => item.id === id);
     if (!topic) {

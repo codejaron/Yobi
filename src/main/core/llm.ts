@@ -313,6 +313,71 @@ export class LlmRouter {
     });
   }
 
+  async filterNovelTopics(input: {
+    candidates: string[];
+    existingTopics: string[];
+  }): Promise<string[]> {
+    const candidates = input.candidates
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const uniqueCandidates: string[] = [];
+    const seenCandidateKeys = new Set<string>();
+    for (const candidate of candidates) {
+      const key = candidate.toLowerCase();
+      if (seenCandidateKeys.has(key)) {
+        continue;
+      }
+      seenCandidateKeys.add(key);
+      uniqueCandidates.push(candidate);
+    }
+
+    const existingTopics = input.existingTopics
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (existingTopics.length === 0) {
+      return uniqueCandidates;
+    }
+
+    const config = this.getConfig();
+    const resolved = this.getModel(config.modelRouting.memory, "memory");
+    const schema = z.object({
+      keepIndexes: z.array(z.number().int().min(1).max(uniqueCandidates.length)).max(uniqueCandidates.length)
+    });
+    const system = `你是话题去重器。你会根据已有话题和候选话题，判断哪些候选可以保留。
+要求：
+- 语义相似就算重复（即使措辞不同）
+- 候选之间也要去重
+- 只返回“应该保留”的候选序号
+- 不要改写话题文本，不要新增候选
+- 序号从 1 开始`;
+    const prompt = [
+      `已有话题:\n${existingTopics.map((topic, index) => `${index + 1}. ${topic}`).join("\n")}`,
+      `候选话题:\n${uniqueCandidates.map((topic, index) => `${index + 1}. ${topic}`).join("\n")}`,
+      "返回 keepIndexes。若都重复，返回空数组。"
+    ].join("\n\n");
+
+    const result = await generateObject({
+      model: resolved.model,
+      schema,
+      system,
+      prompt
+    } as any);
+
+    const parsed = schema.parse(result.object ?? {
+      keepIndexes: []
+    });
+    const keepIndexes = Array.from(new Set(parsed.keepIndexes))
+      .filter((index) => index >= 1 && index <= uniqueCandidates.length)
+      .sort((a, b) => a - b);
+
+    return keepIndexes.map((index) => uniqueCandidates[index - 1]);
+  }
+
   async planWander(input: {
     facts: MemoryFact[];
   }): Promise<{ query: string; reason: string } | null> {

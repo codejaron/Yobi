@@ -68,8 +68,16 @@ export class WanderService {
         return;
       }
 
+      const dedupedTopics = await this.llm.filterNovelTopics({
+        candidates: [topic],
+        existingTopics: this.topicPool.listActive(80).map((item) => item.text)
+      });
+      if (dedupedTopics.length === 0) {
+        return;
+      }
+
       await this.topicPool.add({
-        text: topic,
+        text: dedupedTopics[0],
         source: "wander",
         expiresAt: new Date(Date.now() + WANDER_TOPIC_TTL_MS).toISOString()
       });

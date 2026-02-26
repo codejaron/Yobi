@@ -54,7 +54,12 @@ export class RecallService {
         currentTime: new Date().toISOString()
       });
 
-      for (const topic of result.topics) {
+      const dedupedTopics = await this.llm.filterNovelTopics({
+        candidates: result.topics,
+        existingTopics: this.topicPool.listActive(80).map((topic) => topic.text)
+      });
+
+      for (const topic of dedupedTopics) {
         await this.topicPool.add({
           text: topic,
           source: "recall",
