@@ -6,8 +6,11 @@
 
 - 本地控制台聊天（支持流式回复）
 - Telegram 双向消息（文本、图片输入；文本、语音输出）
-- 主动聊天（沉默触发）
-- 长期记忆（自动提炼 + 手动管理）
+- 主动聊天（沉默触发 + 话题池驱动）
+- 长期记忆（自动提炼 + 手动管理，支持长期记忆条数上限配置）
+- 回想服务（后台定时提炼记忆，并生成可跟进话题）
+- 闲逛服务（基于用户记忆规划搜索，沉淀时效话题）
+- MCP 工具能力（支持 stdio / remote Server，内置 Exa 远程 MCP 搜索）
 - 提醒系统（创建、查看、取消）
 - Live2D 桌宠（情绪/说话/思考动作联动）
 - 可选工具能力：浏览器工具、系统工具、文件工具（带开关与审批）
@@ -67,6 +70,13 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 - 找不到 `model3.json`：桌宠走 fallback，不会崩
 - 动作不完整：自动兜底匹配，不会因缺动作直接报错
 
+### 4) MCP 工具中心（可选）
+
+- 在侧边栏 `MCP` 页面可查看/管理 MCP Server
+- 支持 JSON 导入导出（导入为追加/按 id 更新）
+- 内置 `exa` Server 默认可用（remote：`https://mcp.exa.ai/mcp`）
+- 非内置 Server 支持单独开关
+
 ## 常用命令
 
 - `/help`
@@ -86,6 +96,7 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 ├── sessions/main/memory.json
 ├── sessions/main/context.json
 ├── sessions/main/reminders.json
+├── sessions/main/topics.json
 └── logs/
 ```
 
