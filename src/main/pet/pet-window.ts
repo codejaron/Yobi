@@ -153,7 +153,7 @@ export class PetWindowController {
       resizable: false,
       movable: true,
       alwaysOnTop: input.alwaysOnTop,
-      skipTaskbar: true,
+      skipTaskbar: process.platform !== "darwin",
       webPreferences: {
         contextIsolation: false,
         nodeIntegration: true

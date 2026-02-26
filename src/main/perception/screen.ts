@@ -177,18 +177,10 @@ export async function captureCompressedScreenshot(options: {
 
   let raw = await captureActiveWindowRaw(screenshots, options.windowInfo);
   if (raw && (await isLikelyBlackFrame(raw))) {
-    console.warn("[perception] Active window capture returned a likely black frame, retrying by monitor.", {
-      appName: options.windowInfo.appName,
-      title: options.windowInfo.title
-    });
     raw = null;
   }
 
   if (!raw) {
-    console.warn("[perception] Failed to capture active window, falling back to monitor capture.", {
-      appName: options.windowInfo.appName,
-      title: options.windowInfo.title
-    });
     raw = await captureMonitorByWindowPoint(screenshots, options.windowInfo);
   }
 
