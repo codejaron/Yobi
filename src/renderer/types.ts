@@ -11,6 +11,7 @@ export type PageId =
   | "providers"
   | "character"
   | "memory"
+  | "mcp"
   | "settings";
 
 export interface PageProps {

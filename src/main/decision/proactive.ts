@@ -4,6 +4,7 @@ import { LlmRouter } from "@main/core/llm";
 import { MemoryManager } from "@main/core/memory";
 import { HistoryStore } from "@main/storage/history";
 import { ContextStore } from "@main/storage/context-store";
+import type { TopicPool } from "@main/services/topic-pool";
 
 export type ProactiveTrigger =
   | { type: "silence"; detail: string };
@@ -15,6 +16,7 @@ export class ProactiveDecisionEngine {
     private readonly memoryManager: MemoryManager,
     private readonly characterStore: CharacterStore,
     private readonly contextStore: ContextStore,
+    private readonly topicPool: TopicPool,
     private readonly getConfig: () => AppConfig
   ) {}
 
@@ -29,15 +31,28 @@ export class ProactiveDecisionEngine {
       };
     }
 
+    const hour = new Date().getHours();
+    if (hour >= 1 && hour < 7) {
+      return {
+        speak: false,
+        reason: "nighttime"
+      };
+    }
+
     const config = this.getConfig();
     const character = await this.characterStore.getCharacter(config.characterId);
     const recentHistory = await this.historyStore.getRecent(config.memory.workingSetSize);
+    const pendingTopics = this.topicPool.peek(3);
+    const topicHints = pendingTopics.length > 0
+      ? pendingTopics.map((topic, index) => `${index + 1}. [${topic.source}] ${topic.text}`).join("\n")
+      : "（暂无积攒的话题）";
 
     const decision = await this.llm.decideProactive({
       characterPrompt: character.systemPrompt,
       recentHistory,
       memoryFacts: this.memoryManager.listFacts(),
-      reason: `${input.trigger.type}: ${input.trigger.detail}`
+      reason: `${input.trigger.type}: ${input.trigger.detail}`,
+      topicHints
     });
 
     if (!decision.shouldSpeak || !decision.message) {
@@ -45,6 +60,14 @@ export class ProactiveDecisionEngine {
         speak: false,
         reason: decision.reason
       };
+    }
+
+    for (const topic of pendingTopics) {
+      const sample = topic.text.slice(0, Math.min(10, topic.text.length));
+      if (sample && decision.message.includes(sample)) {
+        await this.topicPool.markUsed(topic.id);
+        break;
+      }
     }
 
     await this.contextStore.patch({

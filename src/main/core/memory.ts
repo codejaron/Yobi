@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AppConfig, MemoryFact } from "@shared/types";
+import type { MemoryFact } from "@shared/types";
 import { LlmRouter } from "./llm";
 import { MemoryStore } from "@main/storage/memory-store";
 import { HistoryStore } from "@main/storage/history";
@@ -8,8 +8,7 @@ export class MemoryManager {
   constructor(
     private readonly memoryStore: MemoryStore,
     private readonly historyStore: HistoryStore,
-    private readonly llm: LlmRouter,
-    private readonly getConfig: () => AppConfig
+    private readonly llm: LlmRouter
   ) {}
 
   listFacts(): MemoryFact[] {
@@ -32,15 +31,12 @@ export class MemoryManager {
     await this.memoryStore.removeFact(id);
   }
 
-  async onConversationTurn(): Promise<void> {
-    const turnsSinceSummary = await this.memoryStore.incrementTurns();
-    const summarizeEveryTurns = this.getConfig().memory.summarizeEveryTurns;
-
-    if (turnsSinceSummary < summarizeEveryTurns) {
+  async extractAndMerge(): Promise<void> {
+    const recentHistory = await this.historyStore.getRecent(120);
+    if (recentHistory.length === 0) {
       return;
     }
 
-    const recentHistory = await this.historyStore.getRecent(120);
     const existingFacts = this.memoryStore.listFacts();
 
     const extracted = await this.llm.extractFacts({
@@ -50,7 +46,10 @@ export class MemoryManager {
 
     const merged = this.mergeFacts(existingFacts, extracted);
     await this.memoryStore.replaceFacts(merged);
-    await this.memoryStore.markSummary(0);
+  }
+
+  async onConversationTurn(): Promise<void> {
+    // 记忆提炼由 RecallService 周期驱动，这里保留扩展位。
   }
 
   private mergeFacts(

@@ -30,6 +30,10 @@ import { VoiceService } from "@main/services/voice";
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { KeepAwakeService } from "@main/services/keep-awake";
 import { ReminderService } from "@main/services/reminders";
+import { RecallService } from "@main/services/recall";
+import { TopicPool } from "@main/services/topic-pool";
+import { WanderService } from "@main/services/wander";
+import { McpManager } from "@main/services/mcp-manager";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
 import { GlobalPetPushToTalkService, type GlobalPttPhase } from "@main/services/global-ptt";
@@ -67,14 +71,15 @@ export class CompanionRuntime {
   private readonly contextStore = new ContextStore(this.paths);
   private readonly reminderStore = new ReminderStore(this.paths);
   private readonly characterStore = new CharacterStore(this.paths);
+  private readonly topicPool = new TopicPool(this.paths.topicsPath);
 
   private readonly llm = new LlmRouter(() => this.configStore.getConfig());
   private readonly toolRegistry = createDefaultToolRegistry(() => this.configStore.getConfig());
+  private readonly mcpManager = new McpManager(() => this.configStore.getConfig());
   private readonly memoryManager = new MemoryManager(
     this.memoryStore,
     this.historyStore,
-    this.llm,
-    () => this.configStore.getConfig()
+    this.llm
   );
 
   private readonly conversation = new ConversationEngine(
@@ -93,7 +98,22 @@ export class CompanionRuntime {
     this.memoryManager,
     this.characterStore,
     this.contextStore,
+    this.topicPool,
     () => this.configStore.getConfig()
+  );
+
+  private readonly recall = new RecallService(
+    this.llm,
+    this.memoryManager,
+    this.historyStore,
+    this.topicPool
+  );
+
+  private readonly wander = new WanderService(
+    this.llm,
+    this.memoryManager,
+    this.topicPool,
+    async (query) => this.searchWithExa(query)
   );
 
   private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
@@ -127,10 +147,12 @@ export class CompanionRuntime {
   async init(): Promise<void> {
     this.paths.ensureLayout();
     await this.configStore.init();
+    await this.topicPool.init();
     await this.memoryStore.init();
     await this.contextStore.init();
     await this.reminderStore.init();
     await this.characterStore.init();
+    await this.mcpManager.init(this.toolRegistry);
   }
 
   async start(): Promise<void> {
@@ -143,6 +165,8 @@ export class CompanionRuntime {
     this.syncRealtimeVoice();
 
     this.startSilenceLoop();
+    this.recall.start();
+    this.wander.start();
     await this.emitStatus();
   }
 
@@ -152,6 +176,8 @@ export class CompanionRuntime {
       this.silenceTimer = null;
     }
 
+    this.recall.stop();
+    this.wander.stop();
     this.keepAwake.stop();
     this.pet.close();
     this.globalPtt.stop();
@@ -161,6 +187,7 @@ export class CompanionRuntime {
       pending.resolve("deny");
     }
     this.pendingConsoleApprovals.clear();
+    await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
     await this.telegram.stop();
   }
@@ -1031,6 +1058,31 @@ export class CompanionRuntime {
     });
   }
 
+  private async searchWithExa(query: string): Promise<string> {
+    const normalized = query.trim();
+    if (!normalized) {
+      return "";
+    }
+
+    const candidates = ["web_search_exa", "web_search", "search"];
+    for (const toolName of candidates) {
+      try {
+        const result = await this.mcpManager.callServerTool("exa", toolName, {
+          query: normalized,
+          numResults: 5
+        });
+        const text = this.mcpManager.resultToText(result).trim();
+        if (text) {
+          return text;
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+
+    return "";
+  }
+
   private syncPetWindow(): void {
     const config = this.getConfig().pet;
     if (!config.enabled) {
@@ -1273,6 +1325,10 @@ export class CompanionRuntime {
     );
   }
 
+  private hasMcpConfigChanged(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    return JSON.stringify(previousConfig.tools.mcp) !== JSON.stringify(nextConfig.tools.mcp);
+  }
+
   private async refreshRuntimeAfterConfigSave(
     previousConfig: AppConfig,
     nextConfig: AppConfig
@@ -1280,6 +1336,14 @@ export class CompanionRuntime {
     if (this.shouldRestartTelegram(previousConfig, nextConfig)) {
       await this.runConfigSideEffect("重启 Telegram", 8_000, async () => {
         await this.restartTelegram();
+      });
+    }
+
+    if (this.hasMcpConfigChanged(previousConfig, nextConfig)) {
+      await this.runConfigSideEffect("重连 MCP 工具", 20_000, async () => {
+        await this.toolRegistry.unregisterBySource("mcp");
+        await this.mcpManager.dispose();
+        await this.mcpManager.init(this.toolRegistry);
       });
     }
 

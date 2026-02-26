@@ -74,24 +74,6 @@ export class MemoryStore {
     await this.persist();
   }
 
-  async markSummary(turnsSinceSummary: number): Promise<void> {
-    this.cached = {
-      ...this.cached,
-      turnsSinceSummary,
-      lastSummarizedAt: new Date().toISOString()
-    };
-    await this.persist();
-  }
-
-  async incrementTurns(): Promise<number> {
-    this.cached = {
-      ...this.cached,
-      turnsSinceSummary: this.cached.turnsSinceSummary + 1
-    };
-    await this.persist();
-    return this.cached.turnsSinceSummary;
-  }
-
   async replaceFacts(facts: MemoryFact[]): Promise<void> {
     this.cached = {
       ...this.cached,

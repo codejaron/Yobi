@@ -37,6 +37,19 @@ export class DefaultToolRegistry implements ToolRegistry {
     this.tools.set(toolDefinition.name, toolDefinition);
   }
 
+  async unregisterBySource(source: NonNullable<ToolDefinition["source"]>): Promise<void> {
+    for (const [name, definition] of this.tools.entries()) {
+      if (definition.source !== source) {
+        continue;
+      }
+
+      if (definition.dispose) {
+        await definition.dispose();
+      }
+      this.tools.delete(name);
+    }
+  }
+
   list(): ToolDefinition<any>[] {
     return [...this.tools.values()];
   }
@@ -135,6 +148,10 @@ export class DefaultToolRegistry implements ToolRegistry {
 
   private isToolEnabled(name: string): boolean {
     const config = this.getConfig();
+    const definition = this.tools.get(name);
+    if (definition?.source === "mcp") {
+      return true;
+    }
 
     if (name === "browser") {
       return config.tools.browser.enabled;

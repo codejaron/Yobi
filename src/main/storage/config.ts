@@ -2,6 +2,17 @@ import { appConfigSchema, DEFAULT_CONFIG, type AppConfig } from "@shared/types";
 import { CompanionPaths } from "./paths";
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 
+type McpServerList = AppConfig["tools"]["mcp"]["servers"];
+
+const EXA_LOCKED_SERVER: Extract<McpServerList[number], { transport: "remote" }> = {
+  id: "exa",
+  label: "Exa Search",
+  enabled: true,
+  transport: "remote",
+  url: "https://mcp.exa.ai/mcp",
+  headers: {}
+};
+
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -37,6 +48,126 @@ function normalizeStringList(value: unknown): string[] {
   return value
     .map((item) => (typeof item === "string" ? item.trim() : ""))
     .filter(Boolean);
+}
+
+function normalizeStringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = normalizeString(rawKey);
+    const mappedValue = normalizeString(rawValue);
+    if (!key || !mappedValue) {
+      continue;
+    }
+    normalized[key] = mappedValue;
+  }
+
+  return normalized;
+}
+
+function cloneMcpServers(servers: McpServerList): McpServerList {
+  const cloned: McpServerList = [];
+  for (const server of servers) {
+    if (server.transport === "stdio") {
+      cloned.push({
+        ...server,
+        args: [...server.args],
+        env: {
+          ...server.env
+        }
+      });
+      continue;
+    }
+
+    cloned.push({
+      ...server,
+      headers: {
+        ...server.headers
+      }
+    });
+  }
+
+  return cloned;
+}
+
+function normalizeMcpServers(
+  value: unknown,
+  fallback: McpServerList
+): McpServerList {
+  if (!Array.isArray(value)) {
+    return cloneMcpServers(fallback);
+  }
+
+  if (value.length === 0) {
+    return [];
+  }
+
+  const normalized: McpServerList = [];
+  for (const [index, candidate] of value.entries()) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+
+    const server = candidate as Record<string, unknown>;
+    const id = normalizeString(server.id, `mcp-${index + 1}`);
+    const label = normalizeString(server.label, id || `MCP Server ${index + 1}`);
+    const enabled =
+      typeof server.enabled === "boolean"
+        ? server.enabled
+        : typeof server.disabled === "boolean"
+          ? !server.disabled
+          : true;
+
+    if (server.transport === "stdio") {
+      const command = normalizeString(server.command);
+      if (!command) {
+        continue;
+      }
+
+      normalized.push({
+        id,
+        label,
+        enabled,
+        transport: "stdio",
+        command,
+        args: normalizeStringList(server.args),
+        env: normalizeStringMap(server.env)
+      });
+      continue;
+    }
+
+    const url = normalizeString(server.url);
+    if (!url) {
+      continue;
+    }
+
+    normalized.push({
+      id,
+      label,
+      enabled,
+      transport: "remote",
+      url,
+      headers: normalizeStringMap(server.headers)
+    });
+  }
+
+  return normalized;
+}
+
+function ensureLockedExaServer(servers: McpServerList): McpServerList {
+  const others = servers.filter((server) => server.id !== EXA_LOCKED_SERVER.id);
+  return [
+    {
+      ...EXA_LOCKED_SERVER,
+      headers: {
+        ...EXA_LOCKED_SERVER.headers
+      }
+    },
+    ...others
+  ];
 }
 
 export class ConfigStore {
@@ -110,6 +241,10 @@ export class ConfigStore {
         file: {
           ...DEFAULT_CONFIG.tools.file,
           ...raw.tools?.file
+        },
+        mcp: {
+          ...DEFAULT_CONFIG.tools.mcp,
+          ...raw.tools?.mcp
         }
       },
       modelRouting: {
@@ -170,6 +305,15 @@ export class ConfigStore {
       file: {
         ...merged.tools.file,
         allowedPaths: normalizeStringList(merged.tools.file.allowedPaths)
+      },
+      mcp: {
+        ...merged.tools.mcp,
+        servers: ensureLockedExaServer(
+          normalizeMcpServers(
+            merged.tools.mcp?.servers,
+            DEFAULT_CONFIG.tools.mcp.servers
+          )
+        )
       }
     };
 
@@ -224,6 +368,15 @@ export class ConfigStore {
         file: {
           ...nextConfig.tools.file,
           allowedPaths: normalizeStringList(nextConfig.tools.file.allowedPaths)
+        },
+        mcp: {
+          ...nextConfig.tools.mcp,
+          servers: ensureLockedExaServer(
+            normalizeMcpServers(
+              nextConfig.tools.mcp.servers,
+              DEFAULT_CONFIG.tools.mcp.servers
+            )
+          )
         }
       }
     };

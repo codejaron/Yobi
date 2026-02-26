@@ -13,6 +13,7 @@ import { ConsoleChatPage } from "@renderer/pages/ConsoleChat";
 import { ProvidersPage } from "@renderer/pages/Providers";
 import { CharacterPage } from "@renderer/pages/Character";
 import { MemoryPage } from "@renderer/pages/Memory";
+import { McpPage } from "@renderer/pages/Mcp";
 import { SettingsPage } from "@renderer/pages/Settings";
 import type { PageId } from "./types";
 
@@ -28,6 +29,8 @@ function pageTitle(page: PageId): string {
       return "角色人设";
     case "memory":
       return "长期记忆";
+    case "mcp":
+      return "MCP 工具中心";
     case "settings":
       return "行为与通道设置";
     default:
@@ -187,6 +190,10 @@ export default function App() {
           }}
         />
       );
+    }
+
+    if (activePage === "mcp") {
+      return <McpPage config={config} setConfig={setConfig} />;
     }
 
     return <SettingsPage config={config} setConfig={setConfig} />;

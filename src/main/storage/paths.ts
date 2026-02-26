@@ -41,6 +41,10 @@ export class CompanionPaths {
     return path.join(this.sessionDir, "reminders.json");
   }
 
+  get topicsPath(): string {
+    return path.join(this.sessionDir, "topics.json");
+  }
+
   get logsDir(): string {
     return path.join(this.baseDir, "logs");
   }

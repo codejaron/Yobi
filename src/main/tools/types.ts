@@ -39,6 +39,7 @@ export interface ToolDefinition<TInput extends Record<string, unknown> = Record<
   name: string;
   description: string;
   parameters: z.ZodType<TInput>;
+  source?: "builtin" | "mcp";
   requiresApproval?: (params: TInput) => boolean;
   approvalText?: (params: TInput) => string;
   execute(params: TInput, context: ToolExecutionContext): Promise<ToolResult>;
@@ -53,6 +54,7 @@ export interface FunctionSchema {
 
 export interface ToolRegistry {
   register(tool: ToolDefinition<any>): void;
+  unregisterBySource(source: NonNullable<ToolDefinition["source"]>): Promise<void>;
   list(): ToolDefinition<any>[];
   getSchemas(): FunctionSchema[];
   getToolSet(

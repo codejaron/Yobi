@@ -964,7 +964,7 @@ export function SettingsPage({
       <Card>
         <CardHeader>
           <CardTitle>记忆策略</CardTitle>
-          <CardDescription>工作记忆窗口和长期记忆提炼节奏。</CardDescription>
+          <CardDescription>工作记忆窗口用于控制上下文长度。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1.5">
@@ -977,23 +977,6 @@ export function SettingsPage({
                   memory: {
                     ...config.memory,
                     workingSetSize: Number(event.target.value) || config.memory.workingSetSize
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>每多少轮提炼一次</Label>
-            <Input
-              value={String(config.memory.summarizeEveryTurns)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  memory: {
-                    ...config.memory,
-                    summarizeEveryTurns:
-                      Number(event.target.value) || config.memory.summarizeEveryTurns
                   }
                 })
               }
@@ -1276,6 +1259,7 @@ export function SettingsPage({
           </div>
         </CardContent>
       </Card>
+
     </div>
   );
 }

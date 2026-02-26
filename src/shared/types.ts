@@ -15,6 +15,41 @@ export const modelRouteSchema = z.object({
   model: z.string().min(1)
 });
 
+export const mcpRemoteServerSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  enabled: z.boolean().default(true),
+  transport: z.literal("remote"),
+  url: z.string().url(),
+  headers: z.record(z.string(), z.string()).default({})
+});
+
+export const mcpStdioServerSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  enabled: z.boolean().default(true),
+  transport: z.literal("stdio"),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  env: z.record(z.string(), z.string()).default({})
+});
+
+export const mcpServerSchema = z.discriminatedUnion("transport", [
+  mcpRemoteServerSchema,
+  mcpStdioServerSchema
+]);
+
+export const DEFAULT_MCP_SERVERS: Array<z.output<typeof mcpServerSchema>> = [
+  {
+    id: "exa",
+    label: "Exa Search",
+    enabled: true,
+    transport: "remote",
+    url: "https://mcp.exa.ai/mcp",
+    headers: {}
+  }
+] as const;
+
 export const appConfigSchema = z.object({
   characterId: z.string().default("default"),
   telegram: z.object({
@@ -69,8 +104,7 @@ export const appConfigSchema = z.object({
     silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000)
   }),
   memory: z.object({
-    workingSetSize: z.number().int().min(10).max(100).default(30),
-    summarizeEveryTurns: z.number().int().min(10).max(500).default(50)
+    workingSetSize: z.number().int().min(10).max(100).default(30)
   }),
   tools: z.object({
     browser: z.object({
@@ -91,6 +125,9 @@ export const appConfigSchema = z.object({
       readEnabled: z.boolean().default(true),
       writeEnabled: z.boolean().default(false),
       allowedPaths: z.array(z.string().min(1)).default([])
+    }),
+    mcp: z.object({
+      servers: z.array(mcpServerSchema).default(DEFAULT_MCP_SERVERS)
     })
   })
 });
@@ -103,13 +140,12 @@ export const memoryFactSchema = z.object({
 });
 
 export const memoryDocumentSchema = z.object({
-  facts: z.array(memoryFactSchema).default([]),
-  lastSummarizedAt: z.string().datetime().nullable().default(null),
-  turnsSinceSummary: z.number().int().min(0).default(0)
+  facts: z.array(memoryFactSchema).default([])
 });
 
 export type ProviderConfig = z.infer<typeof providerSchema>;
 export type ModelRoute = z.infer<typeof modelRouteSchema>;
+export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type MemoryFact = z.infer<typeof memoryFactSchema>;
 export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
@@ -319,8 +355,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     silenceThresholdMs: 40 * 60 * 1000
   },
   memory: {
-    workingSetSize: 30,
-    summarizeEveryTurns: 50
+    workingSetSize: 30
   },
   tools: {
     browser: {
@@ -341,14 +376,30 @@ export const DEFAULT_CONFIG: AppConfig = {
       readEnabled: true,
       writeEnabled: false,
       allowedPaths: []
+    },
+    mcp: {
+      servers: DEFAULT_MCP_SERVERS.map((server) =>
+        server.transport === "stdio"
+          ? {
+              ...server,
+              args: [...server.args],
+              env: {
+                ...server.env
+              }
+            }
+          : {
+              ...server,
+              headers: {
+                ...server.headers
+              }
+            }
+      )
     }
   }
 };
 
 export const DEFAULT_MEMORY: MemoryDocument = {
-  facts: [],
-  lastSummarizedAt: null,
-  turnsSinceSummary: 0
+  facts: []
 };
 
 export const DEFAULT_REMINDERS: ReminderDocument = {

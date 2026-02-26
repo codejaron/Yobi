@@ -50,6 +50,7 @@ interface ProactiveDecisionInput {
   recentHistory: HistoryMessage[];
   memoryFacts: MemoryFact[];
   reason: string;
+  topicHints: string;
 }
 
 const memorySchema = z.object({
@@ -271,6 +272,107 @@ export class LlmRouter {
     return memorySchema.parse(result.object ?? {}).facts;
   }
 
+  async recall(input: {
+    facts: MemoryFact[];
+    recentHistory: HistoryMessage[];
+    currentTime: string;
+  }): Promise<{ topics: string[] }> {
+    const config = this.getConfig();
+    const resolved = this.getModel(config.modelRouting.memory, "memory");
+    const system = `你是 Yobi。现在用户不在线，你有一段独处时间。
+回顾你对用户的记忆和最近对话，想想：
+1. 有没有用户提过但你还没跟进的事（考试、面试、约会、旅行计划等）
+2. 最近对话中你注意到的情绪或状态变化
+3. 有没有想下次聊天时自然提起的话题
+输出 0-2 个最值得说的话题。每个话题是一句你会直接发给用户的话，口语化、简短。
+没有就返回空数组，不要硬凑。`;
+
+    const prompt = [
+      `当前时间: ${input.currentTime}`,
+      `记忆:\n${this.formatFacts(input.facts)}`,
+      `最近对话:\n${this.formatHistory(input.recentHistory)}`
+    ].join("\n\n");
+
+    const schema = z.object({
+      topics: z.array(z.string()).max(2)
+    });
+
+    const result = await generateObject({
+      model: resolved.model,
+      schema,
+      system,
+      prompt
+    } as any);
+
+    return schema.parse(result.object ?? {
+      topics: []
+    });
+  }
+
+  async planWander(input: {
+    facts: MemoryFact[];
+  }): Promise<{ query: string; reason: string } | null> {
+    const config = this.getConfig();
+    const resolved = this.getModel(config.modelRouting.memory, "memory");
+    const system = `你是 Yobi。根据你对用户的了解，想一个用户可能感兴趣的搜索关键词。
+要求：和用户的兴趣/近况相关，具体（不要太泛），中文。
+如果用户记忆太少或没什么好搜的，返回 null。`;
+
+    const prompt = `用户记忆:\n${this.formatFacts(input.facts)}`;
+    const schema = z.object({
+      query: z.string().nullable(),
+      reason: z.string()
+    });
+
+    const result = await generateObject({
+      model: resolved.model,
+      schema,
+      system,
+      prompt
+    } as any);
+
+    const parsed = schema.parse(result.object ?? {
+      query: null,
+      reason: ""
+    });
+
+    if (!parsed.query) {
+      return null;
+    }
+
+    return {
+      query: parsed.query,
+      reason: parsed.reason
+    };
+  }
+
+  async digestWander(input: {
+    query: string;
+    reason: string;
+    searchSnippets: string;
+  }): Promise<string | null> {
+    const config = this.getConfig();
+    const resolved = this.getModel(config.modelRouting.memory, "memory");
+    const system = `你是 Yobi。你刚搜了一个和用户兴趣相关的话题，从搜索结果里挑一个最有意思的点，
+用一句口语化的话概括，像是朋友闲聊时会说的那种。
+如果搜索结果没什么有价值的，返回空字符串。`;
+
+    const prompt = `搜索词: ${input.query}
+原因: ${input.reason}
+结果摘要:
+${input.searchSnippets}`;
+
+    const result = await generateText({
+      model: resolved.model,
+      system,
+      prompt,
+      maxOutputTokens: 100
+    } as any);
+
+    const text = result.text.trim();
+    return text || null;
+  }
+
   async decideProactive(input: ProactiveDecisionInput): Promise<{
     shouldSpeak: boolean;
     reason: string;
@@ -278,11 +380,18 @@ export class LlmRouter {
   }> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.chat, "chat");
-    const system =
-      "你是一个克制的陪伴助手。只有在有价值时才主动开口，避免打扰。若 shouldSpeak=false，不给 message。";
+    const system = `你是 Yobi。现在你有机会主动给用户发一条消息。
+大多数时候不发才是对的。如果要发，可以是：
+- 用下面积攒的话题（如果有的话）
+- 根据时间说点应景的
+- 纯粹闲聊
+不要为了说话而说话。不要每次都问"你在干嘛"。
+做出判断就行，不要解释原因。`;
     const prompt = [
       input.characterPrompt,
       `触发原因: ${input.reason}`,
+      `当前时间: ${new Date().toLocaleString("zh-CN")}`,
+      `积攒的话题:\n${input.topicHints}`,
       `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
       `最近对话:\n${this.formatHistory(input.recentHistory)}`
     ].join("\n\n");

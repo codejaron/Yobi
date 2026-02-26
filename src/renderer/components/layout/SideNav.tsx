@@ -4,6 +4,7 @@ import {
   Gauge,
   MessageSquare,
   MessageCircleHeart,
+  Plug,
   Settings2
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -20,6 +21,7 @@ const items: Array<{
   { id: "providers", label: "Provider", icon: Bot },
   { id: "character", label: "角色", icon: MessageCircleHeart },
   { id: "memory", label: "记忆", icon: Brain },
+  { id: "mcp", label: "MCP", icon: Plug },
   { id: "settings", label: "设置", icon: Settings2 }
 ];
 
