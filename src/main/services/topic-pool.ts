@@ -15,6 +15,7 @@ interface TopicDocument {
 }
 
 const MAX_TOPICS = 120;
+const USED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function createDefaultDoc(): TopicDocument {
   return {
@@ -33,6 +34,26 @@ function topicStillActive(topic: PendingTopic, now = Date.now()): boolean {
 
   const expiresAt = new Date(topic.expiresAt).getTime();
   return Number.isFinite(expiresAt) && expiresAt > now;
+}
+
+function topicShouldRetain(topic: PendingTopic, now = Date.now()): boolean {
+  if (topic.expiresAt) {
+    const expiresAt = new Date(topic.expiresAt).getTime();
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+      return false;
+    }
+  }
+
+  if (!topic.used) {
+    return true;
+  }
+
+  const createdAt = new Date(topic.createdAt).getTime();
+  if (!Number.isFinite(createdAt)) {
+    return false;
+  }
+
+  return now - createdAt < USED_RETENTION_MS;
 }
 
 export class TopicPool {
@@ -118,7 +139,7 @@ export class TopicPool {
 
   async cleanup(): Promise<void> {
     const now = Date.now();
-    this.cached.topics = this.cached.topics.filter((topic) => topicStillActive(topic, now));
+    this.cached.topics = this.cached.topics.filter((topic) => topicShouldRetain(topic, now));
     await this.persist();
   }
 
