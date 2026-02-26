@@ -709,7 +709,8 @@ export class CompanionRuntime {
           error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
         await this.telegram.send({
           kind: "text",
-          text: message
+          text: message,
+          chatId: inbound.chatId
         });
       }
       await this.emitStatus();
@@ -734,7 +735,8 @@ export class CompanionRuntime {
         if (commandResult.responseText) {
           await this.telegram.send({
             kind: "text",
-            text: commandResult.responseText
+            text: commandResult.responseText,
+            chatId: inbound.chatId
           });
         }
         return;
@@ -744,7 +746,8 @@ export class CompanionRuntime {
     if (inbound.kind === "photo" && !this.getConfig().messaging.allowPhotoInput) {
       await this.telegram.send({
         kind: "text",
-        text: "当前已关闭图片输入理解，你可以在设置中开启『允许图片输入』。"
+        text: "当前已关闭图片输入理解，你可以在设置中开启『允许图片输入』。",
+        chatId: inbound.chatId
       });
       return;
     }
@@ -780,7 +783,9 @@ export class CompanionRuntime {
     await this.deliverAssistantOutput({
       rawText: reply,
       activity: this.activityMonitor.getCurrentSnapshot(),
-      proactive: false
+      proactive: false,
+      destination: "telegram",
+      telegramChatId: inbound.chatId
     });
   }
 
@@ -936,11 +941,12 @@ export class CompanionRuntime {
     rawText: string;
     activity: ActivitySnapshot | null;
     proactive: boolean;
-    destination?: "telegram" | "pet" | "console";
+    destination: "telegram" | "pet" | "console";
     historyChannel?: HistoryMessage["channel"];
+    telegramChatId?: string;
   }): Promise<{ displayText: string }> {
     const config = this.getConfig();
-    const destination = input.destination ?? "telegram";
+    const destination = input.destination;
     const sendToTelegram = destination === "telegram";
     const emitPetEvents = destination === "telegram" || destination === "pet" || destination === "console";
     const parsed = parseAssistantOutput(input.rawText);
@@ -1028,7 +1034,10 @@ export class CompanionRuntime {
 
     if (sendToTelegram) {
       for (const message of messages) {
-        await this.telegram.send(message);
+        await this.telegram.send({
+          ...message,
+          chatId: input.telegramChatId
+        });
       }
     }
 
@@ -1148,6 +1157,12 @@ export class CompanionRuntime {
   }
 
   private async checkSilence(): Promise<void> {
+    const proactiveConfig = this.configStore.getConfig().proactive;
+    if (!proactiveConfig.enabled) {
+      this.lastSilenceHandledAt = null;
+      return;
+    }
+
     const context = this.contextStore.get();
     if (!context.lastUserAt) {
       return;
@@ -1155,7 +1170,7 @@ export class CompanionRuntime {
 
     const now = Date.now();
     const silenceMs = now - new Date(context.lastUserAt).getTime();
-    const threshold = this.configStore.getConfig().proactive.silenceThresholdMs;
+    const threshold = proactiveConfig.silenceThresholdMs;
 
     if (silenceMs < threshold) {
       this.lastSilenceHandledAt = null;
@@ -1186,6 +1201,11 @@ export class CompanionRuntime {
     trigger: { type: "activity-switch" | "silence" | "comeback"; detail: string };
     activity: ActivitySnapshot | null;
   }): Promise<void> {
+    const proactiveConfig = this.getConfig().proactive;
+    if (!proactiveConfig.enabled) {
+      return;
+    }
+
     const decision = await this.withTimeout(
       this.proactive.evaluate({
         trigger: input.trigger,
@@ -1199,10 +1219,15 @@ export class CompanionRuntime {
       return;
     }
 
+    const proactivePushToTelegram = proactiveConfig.pushToTelegram;
+    const destination = proactivePushToTelegram ? "telegram" : "pet";
+
     await this.deliverAssistantOutput({
       rawText: decision.message,
       activity: input.activity,
-      proactive: true
+      proactive: true,
+      destination,
+      historyChannel: proactivePushToTelegram ? "telegram" : "system"
     });
   }
 

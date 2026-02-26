@@ -71,6 +71,8 @@ export const appConfigSchema = z.object({
     autoInterrupt: z.boolean().default(true)
   }),
   proactive: z.object({
+    enabled: z.boolean().default(false),
+    pushToTelegram: z.boolean().default(false),
     cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
     silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000),
     comebackGraceMs: z.number().int().min(5_000).default(2 * 60 * 1000)
@@ -345,6 +347,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     autoInterrupt: true
   },
   proactive: {
+    enabled: false,
+    pushToTelegram: false,
     cooldownMs: 25 * 60 * 1000,
     silenceThresholdMs: 40 * 60 * 1000,
     comebackGraceMs: 2 * 60 * 1000

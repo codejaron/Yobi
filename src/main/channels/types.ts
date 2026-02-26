@@ -1,28 +1,33 @@
 export interface InboundMessage {
   kind: "text" | "photo";
+  chatId: string;
   text: string;
   fromUserId: string;
   sentAt: string;
   photoUrl?: string;
 }
 
+type OutboundBase = {
+  chatId?: string;
+};
+
 export type OutboundMessage =
-  | {
+  | (OutboundBase & {
       kind: "text";
       text: string;
-    }
-  | {
+    })
+  | (OutboundBase & {
       kind: "voice";
       audio: Buffer;
       caption?: string;
       filename?: string;
-    }
-  | {
+    })
+  | (OutboundBase & {
       kind: "photo";
       photoUrl?: string;
       photoPath?: string;
       caption?: string;
-    };
+    });
 
 export interface ChatChannel {
   start(onMessage: (message: InboundMessage) => Promise<void>): Promise<void>;

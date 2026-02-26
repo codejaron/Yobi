@@ -155,6 +155,11 @@ export class ConfigStore {
       ttsModel: normalizeString(merged.alibabaVoice?.ttsModel, DEFAULT_CONFIG.alibabaVoice.ttsModel),
       ttsVoice: normalizeString(merged.alibabaVoice?.ttsVoice, DEFAULT_CONFIG.alibabaVoice.ttsVoice)
     };
+    merged.telegram = {
+      ...merged.telegram,
+      botToken: normalizeString(merged.telegram?.botToken, ""),
+      chatId: normalizeString(merged.telegram?.chatId, "")
+    };
     merged.ptt = {
       ...merged.ptt,
       hotkey: normalizeHotkey(merged.ptt?.hotkey, DEFAULT_CONFIG.ptt.hotkey)
@@ -187,6 +192,11 @@ export class ConfigStore {
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
     const normalized = {
       ...nextConfig,
+      telegram: {
+        ...nextConfig.telegram,
+        botToken: normalizeString(nextConfig.telegram.botToken, ""),
+        chatId: normalizeString(nextConfig.telegram.chatId, "")
+      },
       voice: {
         ...nextConfig.voice,
         requestTimeoutMs: clampInt(

@@ -404,7 +404,7 @@ export function SettingsPage({
           <CardTitle>Telegram 通道</CardTitle>
           <CardDescription>填入 Bot Token 和目标 Chat ID，保存后自动重连。</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label>Bot Token</Label>
             <Input
@@ -433,6 +433,22 @@ export function SettingsPage({
                   telegram: {
                     ...config.telegram,
                     chatId: event.target.value
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+            <Label>主动消息推送到 Telegram</Label>
+            <Switch
+              checked={config.proactive.pushToTelegram}
+              onChange={(checked) =>
+                setConfig({
+                  ...config,
+                  proactive: {
+                    ...config.proactive,
+                    pushToTelegram: checked
                   }
                 })
               }
@@ -976,9 +992,27 @@ export function SettingsPage({
       <Card>
         <CardHeader>
           <CardTitle>主动聊天参数</CardTitle>
-          <CardDescription>事件驱动触发 + 冷却，避免机器人感。</CardDescription>
+          <CardDescription>
+            关闭时只被动回复；开启后按冷却、沉默、回归规则触发主动消息。
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+            <Label>启用主动聊天</Label>
+            <Switch
+              checked={config.proactive.enabled}
+              onChange={(checked) =>
+                setConfig({
+                  ...config,
+                  proactive: {
+                    ...config.proactive,
+                    enabled: checked
+                  }
+                })
+              }
+            />
+          </div>
+
           <div className="space-y-1.5">
             <Label>冷却时间（毫秒）</Label>
             <Input

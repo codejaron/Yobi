@@ -9,28 +9,42 @@ export class TelegramChannel implements ChatChannel {
 
   constructor(private readonly getConfig: () => AppConfig) {}
 
+  private shouldAcceptInboundChat(chatId: number): boolean {
+    const expected = this.targetChatId;
+    if (!expected) {
+      return true;
+    }
+
+    if (/^-?\d+$/.test(expected)) {
+      return String(chatId) === expected;
+    }
+
+    return true;
+  }
+
   async start(onMessage: (message: InboundMessage) => Promise<void>): Promise<void> {
     const { telegram } = this.getConfig();
-    this.targetChatId = telegram.chatId;
+    const botToken = telegram.botToken.trim();
+    this.targetChatId = telegram.chatId.trim();
 
-    if (!telegram.botToken) {
+    if (!botToken) {
       this.connected = false;
       return;
     }
 
-    this.bot = new Bot(telegram.botToken);
+    this.bot = new Bot(botToken);
     this.bot.catch((error) => {
       console.error("Telegram bot middleware error:", error.error);
     });
 
     this.bot.on("message:text", async (ctx) => {
-      const expected = this.targetChatId;
-      if (expected && String(ctx.chat.id) !== expected) {
+      if (!this.shouldAcceptInboundChat(ctx.chat.id)) {
         return;
       }
 
       await onMessage({
         kind: "text",
+        chatId: String(ctx.chat.id),
         text: ctx.message.text,
         fromUserId: String(ctx.from?.id ?? "unknown"),
         sentAt: new Date(ctx.message.date * 1000).toISOString()
@@ -38,8 +52,7 @@ export class TelegramChannel implements ChatChannel {
     });
 
     this.bot.on("message:photo", async (ctx) => {
-      const expected = this.targetChatId;
-      if (expected && String(ctx.chat.id) !== expected) {
+      if (!this.shouldAcceptInboundChat(ctx.chat.id)) {
         return;
       }
 
@@ -59,6 +72,7 @@ export class TelegramChannel implements ChatChannel {
 
       await onMessage({
         kind: "photo",
+        chatId: String(ctx.chat.id),
         text: ctx.message.caption ?? "用户发送了一张图片",
         fromUserId: String(ctx.from?.id ?? "unknown"),
         sentAt: new Date(ctx.message.date * 1000).toISOString(),
@@ -78,12 +92,15 @@ export class TelegramChannel implements ChatChannel {
 
   async send(message: OutboundMessage): Promise<void> {
     const { telegram } = this.getConfig();
-    if (!this.bot || !telegram.chatId) {
+    const resolvedChatId =
+      (typeof message.chatId === "string" ? message.chatId.trim() : "") || telegram.chatId.trim();
+
+    if (!this.bot || !resolvedChatId) {
       return;
     }
 
     if (message.kind === "text") {
-      await this.bot.api.sendMessage(telegram.chatId, message.text);
+      await this.bot.api.sendMessage(resolvedChatId, message.text);
       return;
     }
 
@@ -92,27 +109,27 @@ export class TelegramChannel implements ChatChannel {
       const input = new InputFile(message.audio, filename);
 
       if (/\.(ogg|opus|mp3|m4a)$/.test(filename)) {
-        await this.bot.api.sendVoice(telegram.chatId, input, {
+        await this.bot.api.sendVoice(resolvedChatId, input, {
           caption: message.caption
         });
         return;
       }
 
-      await this.bot.api.sendAudio(telegram.chatId, input, {
+      await this.bot.api.sendAudio(resolvedChatId, input, {
         caption: message.caption
       });
       return;
     }
 
     if (message.photoUrl) {
-      await this.bot.api.sendPhoto(telegram.chatId, message.photoUrl, {
+      await this.bot.api.sendPhoto(resolvedChatId, message.photoUrl, {
         caption: message.caption
       });
       return;
     }
 
     if (message.photoPath) {
-      await this.bot.api.sendPhoto(telegram.chatId, new InputFile(message.photoPath), {
+      await this.bot.api.sendPhoto(resolvedChatId, new InputFile(message.photoPath), {
         caption: message.caption
       });
     }
