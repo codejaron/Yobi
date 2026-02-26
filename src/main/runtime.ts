@@ -2,9 +2,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { app, powerMonitor, systemPreferences } from "electron";
+import { app, systemPreferences } from "electron";
 import type {
-  ActivitySnapshot,
   AppConfig,
   AppStatus,
   CharacterProfile,
@@ -23,7 +22,6 @@ import { CharacterStore } from "@main/core/character";
 import { LlmRouter } from "@main/core/llm";
 import { MemoryManager } from "@main/core/memory";
 import { ConversationEngine } from "@main/core/conversation";
-import { ActivityMonitor } from "@main/perception/activity";
 import { ProactiveDecisionEngine } from "@main/decision/proactive";
 import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage, OutboundMessage } from "@main/channels/types";
@@ -89,12 +87,6 @@ export class CompanionRuntime {
     () => this.configStore.getConfig()
   );
 
-  private readonly activityMonitor = new ActivityMonitor(
-    this.llm,
-    this.contextStore,
-    () => this.configStore.getConfig()
-  );
-
   private readonly proactive = new ProactiveDecisionEngine(
     this.llm,
     this.historyStore,
@@ -128,15 +120,9 @@ export class CompanionRuntime {
   private pendingConsoleApprovals = new Map<string, PendingConsoleApproval>();
   private petPttRecording = false;
   private silenceTimer: NodeJS.Timeout | null = null;
-  private idleTimer: NodeJS.Timeout | null = null;
   private lastSilenceHandledAt: string | null = null;
-  private lastActivity: ActivitySnapshot | null = null;
-  private screenLocked = false;
-  private idlePaused = false;
-  private promptedAccessibilityPermission = false;
   private promptedGlobalPttPermission = false;
   private macAccessibilityPermission: MacPermissionState = "unknown";
-  private macScreenRecordingPermission: MacPermissionState = "unknown";
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
@@ -148,71 +134,22 @@ export class CompanionRuntime {
   }
 
   async start(): Promise<void> {
-    this.bindPowerMonitor();
-    this.refreshMacPerceptionPermissions({
-      promptIfMissing: true
-    });
     await this.reminderService.init();
     await this.startTelegram();
-
-    this.activityMonitor.onChange(async ({ snapshot }) => {
-      try {
-        const previous = this.lastActivity;
-        this.lastActivity = snapshot;
-
-        await this.handleProactive({
-          trigger: {
-            type: "activity-switch",
-            detail: snapshot.summary
-          },
-          activity: snapshot
-        });
-
-        if (previous) {
-          const gap =
-            new Date(snapshot.changedAt).getTime() - new Date(previous.changedAt).getTime();
-
-          if (gap > this.configStore.getConfig().proactive.comebackGraceMs) {
-            await this.handleProactive({
-              trigger: {
-                type: "comeback",
-                detail: "检测到用户重新活跃"
-              },
-              activity: snapshot
-            });
-          }
-        }
-
-        await this.emitStatus();
-      } catch (error) {
-        console.warn("Activity callback failed:", error);
-      }
-    });
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
     this.syncPetWindow();
     await this.syncGlobalPetPushToTalk();
     this.syncRealtimeVoice();
-    this.idlePaused =
-      powerMonitor.getSystemIdleTime() >= this.getConfig().perception.idlePauseSeconds;
-    await this.syncPerceptionState();
 
     this.startSilenceLoop();
-    this.startIdleLoop();
     await this.emitStatus();
   }
 
   async stop(): Promise<void> {
-    this.activityMonitor.stop();
-
     if (this.silenceTimer) {
       clearInterval(this.silenceTimer);
       this.silenceTimer = null;
-    }
-
-    if (this.idleTimer) {
-      clearInterval(this.idleTimer);
-      this.idleTimer = null;
     }
 
     this.keepAwake.stop();
@@ -324,7 +261,6 @@ export class CompanionRuntime {
     }
 
     this.startSilenceLoop();
-    this.startIdleLoop();
     await this.emitStatus();
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
@@ -440,8 +376,6 @@ export class CompanionRuntime {
       return { replyText: "" };
     }
 
-    const activity: ActivitySnapshot | null = null;
-
     this.pet.emitEvent({
       type: "thinking",
       value: "start"
@@ -466,7 +400,6 @@ export class CompanionRuntime {
 
     const delivered = await this.deliverAssistantOutput({
       rawText: rawReply,
-      activity,
       proactive: false,
       destination: "pet",
       historyChannel: "system"
@@ -551,7 +484,6 @@ export class CompanionRuntime {
   }
 
   private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
-    const activity: ActivitySnapshot | null = null;
     this.emitConsoleChatEvent({
       requestId,
       type: "thinking",
@@ -626,7 +558,6 @@ export class CompanionRuntime {
 
       const delivered = await this.deliverAssistantOutput({
         rawText: rawReply,
-        activity,
         proactive: false,
         destination: "console",
         historyChannel: "system"
@@ -779,7 +710,6 @@ export class CompanionRuntime {
 
     await this.deliverAssistantOutput({
       rawText: reply,
-      activity: null,
       proactive: false,
       destination: "telegram",
       telegramChatId: inbound.chatId
@@ -790,9 +720,6 @@ export class CompanionRuntime {
     return [
       "可用命令：",
       "/help - 查看命令说明",
-      "/eyes - 查看桌面感知状态",
-      "/eyes on - 打开桌面感知命令",
-      "/eyes off - 关闭桌面感知命令",
       "/reminders - 查看待提醒事项",
       "/cancel <提醒ID前缀> - 取消提醒"
     ].join("\n");
@@ -814,72 +741,6 @@ export class CompanionRuntime {
       return {
         handled: true,
         responseText: this.buildCommandHelpText()
-      };
-    }
-
-    if (/^\/eyes(\s+status)?$/i.test(command)) {
-      const config = this.getConfig();
-      const context = this.contextStore.get();
-      const issues: string[] = [];
-      this.refreshMacPerceptionPermissions();
-
-      if (!config.perception.enabled) {
-        issues.push("设置页中的『启用桌面感知』为关闭状态");
-      }
-      if (!config.proactive.enabled) {
-        issues.push("主动聊天开关为 OFF");
-      }
-      if (!context.eyesCommandEnabled) {
-        issues.push("命令开关为 OFF（输入 /eyes on 恢复）");
-      }
-      if (this.screenLocked) {
-        issues.push("系统处于锁屏/休眠状态");
-      }
-      if (this.idlePaused) {
-        issues.push(`系统空闲超过 ${config.perception.idlePauseSeconds} 秒`);
-      }
-
-      const running = this.activityMonitor.isRunning();
-      const snapshot = this.activityMonitor.getCurrentSnapshot();
-      const lines = [
-        `桌面感知状态：${running ? "运行中" : "已暂停"}`,
-        `全局开关：${config.perception.enabled ? "ON" : "OFF"}`,
-        `/eyes 开关：${context.eyesCommandEnabled ? "ON" : "OFF"}`,
-        `轮询间隔：${config.perception.pollIntervalMs} ms`,
-        `截图宽度/质量：${config.perception.screenshotMaxWidth}px / ${config.perception.screenshotQuality}`,
-        `空闲暂停阈值：${config.perception.idlePauseSeconds} 秒`,
-        `最近快照应用：${snapshot?.app ?? "(暂无)"}`,
-        `最近快照标题：${snapshot?.title ?? "(暂无)"}`,
-        `最近快照时间：${snapshot?.changedAt ?? "(暂无)"}`
-      ];
-
-      if (issues.length > 0) {
-        lines.push(`暂停原因：${issues.join("；")}`);
-      }
-
-      lines.push("命令：/eyes on | /eyes off");
-
-      return {
-        handled: true,
-        responseText: lines.join("\n")
-      };
-    }
-
-    if (/^\/eyes\s+off$/i.test(command)) {
-      await this.contextStore.patch({ eyesCommandEnabled: false });
-      await this.syncPerceptionState();
-      return {
-        handled: true,
-        responseText: "已关闭屏幕感知（/eyes on 可恢复）。"
-      };
-    }
-
-    if (/^\/eyes\s+on$/i.test(command)) {
-      await this.contextStore.patch({ eyesCommandEnabled: true });
-      await this.syncPerceptionState();
-      return {
-        handled: true,
-        responseText: "已恢复屏幕感知。"
       };
     }
 
@@ -939,7 +800,6 @@ export class CompanionRuntime {
 
   private async deliverAssistantOutput(input: {
     rawText: string;
-    activity: ActivitySnapshot | null;
     proactive: boolean;
     destination: "telegram" | "pet" | "console";
     historyChannel?: HistoryMessage["channel"];
@@ -1082,7 +942,6 @@ export class CompanionRuntime {
 
     await this.conversation.commitAssistantMessage({
       text: historyTextPieces.join("\n"),
-      activity: input.activity,
       proactive: input.proactive,
       channel: input.historyChannel ?? "telegram"
     });
@@ -1104,56 +963,6 @@ export class CompanionRuntime {
     this.silenceTimer = setInterval(() => {
       void this.checkSilence();
     }, 60_000);
-  }
-
-  private startIdleLoop(): void {
-    if (this.idleTimer) {
-      clearInterval(this.idleTimer);
-    }
-
-    this.idleTimer = setInterval(() => {
-      const threshold = this.getConfig().perception.idlePauseSeconds;
-      const idleSeconds = powerMonitor.getSystemIdleTime();
-      const nextIdlePaused = idleSeconds >= threshold;
-      if (nextIdlePaused === this.idlePaused) {
-        return;
-      }
-
-      this.idlePaused = nextIdlePaused;
-      void this.syncPerceptionState();
-      void this.emitStatus();
-    }, 15_000);
-  }
-
-  private bindPowerMonitor(): void {
-    powerMonitor.removeAllListeners("lock-screen");
-    powerMonitor.removeAllListeners("unlock-screen");
-    powerMonitor.removeAllListeners("suspend");
-    powerMonitor.removeAllListeners("resume");
-
-    powerMonitor.on("lock-screen", () => {
-      this.screenLocked = true;
-      void this.syncPerceptionState();
-      void this.emitStatus();
-    });
-
-    powerMonitor.on("unlock-screen", () => {
-      this.screenLocked = false;
-      void this.syncPerceptionState();
-      void this.emitStatus();
-    });
-
-    powerMonitor.on("suspend", () => {
-      this.screenLocked = true;
-      void this.syncPerceptionState();
-      void this.emitStatus();
-    });
-
-    powerMonitor.on("resume", () => {
-      this.screenLocked = false;
-      void this.syncPerceptionState();
-      void this.emitStatus();
-    });
   }
 
   private async checkSilence(): Promise<void> {
@@ -1186,37 +995,22 @@ export class CompanionRuntime {
       trigger: {
         type: "silence",
         detail: `用户已沉默 ${Math.floor(silenceMs / 60000)} 分钟`
-      },
-      activity: this.resolveProactiveActivity(this.lastActivity)
+      }
     });
     await this.emitStatus();
   }
 
-  private resolveProactiveActivity(
-    preferred: ActivitySnapshot | null
-  ): ActivitySnapshot | null {
-    if (!this.getConfig().perception.enabled) {
-      return null;
-    }
-
-    return preferred ?? this.activityMonitor.getCurrentSnapshot() ?? this.lastActivity;
-  }
-
   private async handleProactive(input: {
-    trigger: { type: "activity-switch" | "silence" | "comeback"; detail: string };
-    activity: ActivitySnapshot | null;
+    trigger: { type: "silence"; detail: string };
   }): Promise<void> {
     const proactiveConfig = this.getConfig().proactive;
     if (!proactiveConfig.enabled) {
       return;
     }
 
-    const resolvedActivity = this.resolveProactiveActivity(input.activity);
-
     const decision = await this.withTimeout(
       this.proactive.evaluate({
-        trigger: input.trigger,
-        activity: resolvedActivity
+        trigger: input.trigger
       }),
       CompanionRuntime.PROACTIVE_DECISION_TIMEOUT_MS,
       "主动消息决策超时"
@@ -1231,39 +1025,10 @@ export class CompanionRuntime {
 
     await this.deliverAssistantOutput({
       rawText: decision.message,
-      activity: resolvedActivity,
       proactive: true,
       destination,
       historyChannel: proactivePushToTelegram ? "telegram" : "system"
     });
-  }
-
-  private async syncPerceptionState(): Promise<void> {
-    this.refreshMacPerceptionPermissions();
-    const shouldRun = this.shouldRunPerception();
-    const running = this.activityMonitor.isRunning();
-
-    if (shouldRun && !running) {
-      await this.activityMonitor.start();
-      return;
-    }
-
-    if (!shouldRun && running) {
-      this.activityMonitor.stop();
-    }
-  }
-
-  private shouldRunPerception(): boolean {
-    const config = this.getConfig();
-    const context = this.contextStore.get();
-
-    return (
-      config.proactive.enabled &&
-      config.perception.enabled &&
-      context.eyesCommandEnabled &&
-      !this.screenLocked &&
-      !this.idlePaused
-    );
   }
 
   private syncPetWindow(): void {
@@ -1443,21 +1208,18 @@ export class CompanionRuntime {
   }
 
   private async collectStatus(): Promise<AppStatus> {
-    this.refreshMacPerceptionPermissions();
+    this.refreshMacAccessibilityPermission();
     return {
       bootedAt: this.bootedAt,
       telegramConnected: this.telegram.isConnected(),
-      lastActivitySummary: this.contextStore.get().lastActivitySummary,
       lastUserAt: this.contextStore.get().lastUserAt,
       lastProactiveAt: this.contextStore.get().lastProactiveAt,
       historyCount: await this.historyStore.count(),
       memoryFacts: this.memoryManager.listFacts().length,
-      perceptionRunning: this.activityMonitor.isRunning(),
       keepAwakeActive: this.keepAwake.isActive(),
       pendingReminders: this.reminderService.count(),
       petOnline: this.pet.isOnline(),
-      macAccessibilityPermission: this.macAccessibilityPermission,
-      macScreenRecordingPermission: this.macScreenRecordingPermission
+      macAccessibilityPermission: this.macAccessibilityPermission
     };
   }
 
@@ -1521,10 +1283,6 @@ export class CompanionRuntime {
       });
     }
 
-    await this.runConfigSideEffect("同步屏幕感知", 8_000, async () => {
-      await this.syncPerceptionState();
-    });
-
     await this.runConfigSideEffect("刷新运行状态", 4_000, async () => {
       await this.emitStatus();
     });
@@ -1562,61 +1320,18 @@ export class CompanionRuntime {
     });
   }
 
-  private refreshMacPerceptionPermissions(options?: { promptIfMissing?: boolean }): void {
+  private refreshMacAccessibilityPermission(): void {
     if (process.platform !== "darwin") {
       this.macAccessibilityPermission = "granted";
-      this.macScreenRecordingPermission = "granted";
       return;
     }
 
-    const promptIfMissing = Boolean(options?.promptIfMissing);
-    let accessibilityGranted = false;
     try {
-      accessibilityGranted = systemPreferences.isTrustedAccessibilityClient(false);
+      this.macAccessibilityPermission = systemPreferences.isTrustedAccessibilityClient(false)
+        ? "granted"
+        : "denied";
     } catch {
-      accessibilityGranted = false;
-    }
-
-    if (
-      !accessibilityGranted &&
-      promptIfMissing &&
-      !this.promptedAccessibilityPermission &&
-      this.getConfig().perception.enabled
-    ) {
-      this.promptedAccessibilityPermission = true;
-      try {
-        systemPreferences.isTrustedAccessibilityClient(true);
-      } catch {
-        // ignore
-      }
-
-      try {
-        accessibilityGranted = systemPreferences.isTrustedAccessibilityClient(false);
-      } catch {
-        accessibilityGranted = false;
-      }
-    }
-
-    this.macAccessibilityPermission = accessibilityGranted ? "granted" : "denied";
-    this.macScreenRecordingPermission = this.readMacScreenRecordingPermission();
-  }
-
-  private readMacScreenRecordingPermission(): MacPermissionState {
-    if (process.platform !== "darwin") {
-      return "granted";
-    }
-
-    try {
-      const status = systemPreferences.getMediaAccessStatus("screen");
-      if (status === "granted") {
-        return "granted";
-      }
-      if (status === "denied" || status === "restricted") {
-        return "denied";
-      }
-      return "unknown";
-    } catch {
-      return "unknown";
+      this.macAccessibilityPermission = "unknown";
     }
   }
 

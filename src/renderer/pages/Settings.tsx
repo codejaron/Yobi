@@ -499,99 +499,6 @@ export function SettingsPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>屏幕感知参数</CardTitle>
-          <CardDescription>
-            三层控制：全局开关 + /eyes 指令 + 锁屏/空闲自动暂停。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>启用屏幕感知</Label>
-            <Switch
-              checked={config.perception.enabled}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  perception: {
-                    ...config.perception,
-                    enabled: checked
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>检测间隔（毫秒）</Label>
-            <Input
-              value={String(config.perception.pollIntervalMs)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  perception: {
-                    ...config.perception,
-                    pollIntervalMs: Number(event.target.value) || config.perception.pollIntervalMs
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>截图最大宽度</Label>
-            <Input
-              value={String(config.perception.screenshotMaxWidth)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  perception: {
-                    ...config.perception,
-                    screenshotMaxWidth:
-                      Number(event.target.value) || config.perception.screenshotMaxWidth
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>截图质量（20-100）</Label>
-            <Input
-              value={String(config.perception.screenshotQuality)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  perception: {
-                    ...config.perception,
-                    screenshotQuality:
-                      Number(event.target.value) || config.perception.screenshotQuality
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>空闲暂停阈值（秒）</Label>
-            <Input
-              value={String(config.perception.idlePauseSeconds)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  perception: {
-                    ...config.perception,
-                    idlePauseSeconds:
-                      Number(event.target.value) || config.perception.idlePauseSeconds
-                  }
-                })
-              }
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
           <CardTitle>后台与桌宠</CardTitle>
           <CardDescription>后台保活、桌宠窗口和实时语音配置。</CardDescription>
         </CardHeader>
@@ -993,7 +900,7 @@ export function SettingsPage({
         <CardHeader>
           <CardTitle>主动聊天参数</CardTitle>
           <CardDescription>
-            关闭时只被动回复；开启后按冷却、沉默、回归规则触发主动消息。
+            关闭时只被动回复；开启后按冷却与沉默规则触发主动消息。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -1047,20 +954,9 @@ export function SettingsPage({
           </div>
 
           <div className="space-y-1.5">
-            <Label>回归检测窗口（毫秒）</Label>
-            <Input
-              value={String(config.proactive.comebackGraceMs)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  proactive: {
-                    ...config.proactive,
-                    comebackGraceMs:
-                      Number(event.target.value) || config.proactive.comebackGraceMs
-                  }
-                })
-              }
-            />
+            <p className="text-xs text-muted-foreground">
+              冷却用于限制主动消息频率；沉默阈值用于触发沉默场景的主动聊天。
+            </p>
           </div>
         </CardContent>
       </Card>

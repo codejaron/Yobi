@@ -1,13 +1,12 @@
 # Yobi
 
-桌面 AI 陪伴应用（Electron + Telegram + 屏幕感知 + Live2D 桌宠）。
+桌面 AI 陪伴应用（Electron + Telegram + Live2D 桌宠）。
 
 ## 主要功能
 
 - 本地控制台聊天（支持流式回复）
 - Telegram 双向消息（文本、图片输入；文本、语音输出）
-- 屏幕感知（活动窗口 + 截图摘要）
-- 主动聊天（切换/沉默/回归触发）
+- 主动聊天（沉默触发）
 - 长期记忆（自动提炼 + 手动管理）
 - 提醒系统（创建、查看、取消）
 - Live2D 桌宠（情绪/说话/思考动作联动）
@@ -40,7 +39,7 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 在界面「Provider 与模型路由」中配置：
 
 - 至少 1 个可用 Provider（API Key）
-- 聊天 / 感知 / 记忆模型
+- 聊天 / 记忆模型
 
 > 模型名是手动输入，兼容 OpenAI-compatible 服务。
 
@@ -71,7 +70,6 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 ## 常用命令
 
 - `/help`
-- `/eyes` / `/eyes on` / `/eyes off`
 - `/reminders`
 - `/cancel <提醒ID前缀>`
 

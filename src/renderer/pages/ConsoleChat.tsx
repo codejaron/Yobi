@@ -67,24 +67,6 @@ const SLASH_COMMAND_OPTIONS: SlashCommandOption[] = [
     applyValue: "/help"
   },
   {
-    command: "/eyes",
-    usage: "/eyes 或 /eyes status",
-    description: "查看桌面感知状态",
-    applyValue: "/eyes"
-  },
-  {
-    command: "/eyes on",
-    usage: "/eyes on",
-    description: "恢复桌面感知",
-    applyValue: "/eyes on"
-  },
-  {
-    command: "/eyes off",
-    usage: "/eyes off",
-    description: "暂停桌面感知",
-    applyValue: "/eyes off"
-  },
-  {
     command: "/reminders",
     usage: "/reminders",
     description: "查看待提醒列表",

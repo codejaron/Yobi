@@ -18,10 +18,13 @@ export class ContextStore {
       return;
     }
 
-    const raw = await readJsonFile<RuntimeContext>(this.paths.contextPath, DEFAULT_CONTEXT);
+    const raw = await readJsonFile<Record<string, unknown>>(
+      this.paths.contextPath,
+      DEFAULT_CONTEXT as unknown as Record<string, unknown>
+    );
     this.cached = {
-      ...DEFAULT_CONTEXT,
-      ...raw
+      lastProactiveAt: typeof raw.lastProactiveAt === "string" ? raw.lastProactiveAt : null,
+      lastUserAt: typeof raw.lastUserAt === "string" ? raw.lastUserAt : null
     };
     await writeJsonFile(this.paths.contextPath, this.cached);
   }

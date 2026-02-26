@@ -1,4 +1,4 @@
-import type { ActivitySnapshot, AppConfig, RuntimeContext } from "@shared/types";
+import type { AppConfig, RuntimeContext } from "@shared/types";
 import { CharacterStore } from "@main/core/character";
 import { LlmRouter } from "@main/core/llm";
 import { MemoryManager } from "@main/core/memory";
@@ -6,9 +6,7 @@ import { HistoryStore } from "@main/storage/history";
 import { ContextStore } from "@main/storage/context-store";
 
 export type ProactiveTrigger =
-  | { type: "activity-switch"; detail: string }
-  | { type: "silence"; detail: string }
-  | { type: "comeback"; detail: string };
+  | { type: "silence"; detail: string };
 
 export class ProactiveDecisionEngine {
   constructor(
@@ -22,7 +20,6 @@ export class ProactiveDecisionEngine {
 
   async evaluate(input: {
     trigger: ProactiveTrigger;
-    activity: ActivitySnapshot | null;
   }): Promise<{ speak: boolean; message?: string; reason: string }> {
     const context = this.contextStore.get();
     if (!this.canSpeak(context)) {
@@ -40,7 +37,6 @@ export class ProactiveDecisionEngine {
       characterPrompt: character.systemPrompt,
       recentHistory,
       memoryFacts: this.memoryManager.listFacts(),
-      activity: input.activity,
       reason: `${input.trigger.type}: ${input.trigger.detail}`
     });
 

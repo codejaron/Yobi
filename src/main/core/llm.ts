@@ -4,7 +4,6 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
 import type {
-  ActivitySnapshot,
   AppConfig,
   ModelRoute,
   ProviderConfig
@@ -50,7 +49,6 @@ interface ProactiveDecisionInput {
   characterPrompt: string;
   recentHistory: HistoryMessage[];
   memoryFacts: MemoryFact[];
-  activity?: ActivitySnapshot | null;
   reason: string;
 }
 
@@ -249,41 +247,6 @@ export class LlmRouter {
     return text || "操作已完成。";
   }
 
-  async describeActivity(input: {
-    appName: string;
-    windowTitle: string;
-    screenshotBase64: string;
-  }): Promise<string> {
-    const config = this.getConfig();
-    const resolved = this.getModel(config.modelRouting.perception, "perception");
-    const system =
-      "你是桌面活动观察器。输出一句中文，描述用户当前在做什么。不要夸张，不要建议。";
-    const context = `当前窗口应用名: ${input.appName}; 窗口标题: ${input.windowTitle}`;
-
-    const result = await generateText({
-      model: resolved.model,
-      system,
-      maxOutputTokens: 80,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: context
-            },
-            {
-              type: "image",
-              image: `data:image/jpeg;base64,${input.screenshotBase64}`
-            }
-          ]
-        }
-      ]
-    } as any);
-
-    return result.text.replace(/\s+/g, " ").trim();
-  }
-
   async extractFacts(input: {
     recentHistory: HistoryMessage[];
     existingFacts: MemoryFact[];
@@ -320,7 +283,6 @@ export class LlmRouter {
     const prompt = [
       input.characterPrompt,
       `触发原因: ${input.reason}`,
-      `活动状态: ${input.activity?.summary ?? "未知"}`,
       `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
       `最近对话:\n${this.formatHistory(input.recentHistory)}`
     ].join("\n\n");

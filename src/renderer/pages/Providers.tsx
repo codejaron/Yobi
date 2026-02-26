@@ -79,10 +79,6 @@ export function ProvidersPage({
           config.modelRouting.chat.providerId === providerId
             ? { ...config.modelRouting.chat, providerId: fallback.id }
             : config.modelRouting.chat,
-        perception:
-          config.modelRouting.perception.providerId === providerId
-            ? { ...config.modelRouting.perception, providerId: fallback.id }
-            : config.modelRouting.perception,
         memory:
           config.modelRouting.memory.providerId === providerId
             ? { ...config.modelRouting.memory, providerId: fallback.id }
@@ -222,7 +218,7 @@ export function ProvidersPage({
       <Card>
         <CardHeader>
           <CardTitle>模型分配</CardTitle>
-          <CardDescription>聊天 / 屏幕感知 / 记忆提取可使用不同模型，节省成本。</CardDescription>
+          <CardDescription>聊天与记忆提取可使用不同模型，节省成本。</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
@@ -256,45 +252,6 @@ export function ProvidersPage({
                     ...config.modelRouting,
                     chat: {
                       ...config.modelRouting.chat,
-                      model: event.target.value
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>屏幕感知 Provider</Label>
-            <Select
-              value={config.modelRouting.perception.providerId}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  modelRouting: {
-                    ...config.modelRouting,
-                    perception: {
-                      ...config.modelRouting.perception,
-                      providerId: event.target.value
-                    }
-                  }
-                })
-              }
-            >
-              {providerOptions}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>屏幕感知模型</Label>
-            <Input
-              value={config.modelRouting.perception.model}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  modelRouting: {
-                    ...config.modelRouting,
-                    perception: {
-                      ...config.modelRouting.perception,
                       model: event.target.value
                     }
                   }

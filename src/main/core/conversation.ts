@@ -1,4 +1,4 @@
-import type { ActivitySnapshot, AppConfig } from "@shared/types";
+import type { AppConfig } from "@shared/types";
 import { CharacterStore } from "./character";
 import { LlmRouter } from "./llm";
 import { MemoryManager } from "./memory";
@@ -54,7 +54,6 @@ export class ConversationEngine {
 
   async commitAssistantMessage(input: {
     text: string;
-    activity: ActivitySnapshot | null;
     proactive?: boolean;
     channel?: "telegram" | "system";
   }): Promise<void> {
@@ -64,8 +63,7 @@ export class ConversationEngine {
     }
 
     await this.historyStore.append("assistant", text, input.channel ?? "telegram", {
-      proactive: input.proactive,
-      activitySnapshot: input.activity?.summary
+      proactive: input.proactive
     });
     try {
       await this.memoryManager.onConversationTurn();
@@ -74,10 +72,9 @@ export class ConversationEngine {
     }
   }
 
-  async saveProactiveMessage(text: string, activity: ActivitySnapshot | null): Promise<void> {
+  async saveProactiveMessage(text: string): Promise<void> {
     await this.commitAssistantMessage({
       text,
-      activity,
       proactive: true
     });
   }

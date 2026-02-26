@@ -1,7 +1,7 @@
 {
   "name": "yobi",
   "version": "0.1.0",
-  "description": "Desktop AI companion powered by Telegram and screen perception",
+  "description": "Desktop AI companion powered by Telegram",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
@@ -16,7 +16,6 @@
     "@ai-sdk/anthropic": "^2.0.4",
     "@ai-sdk/openai": "^2.0.10",
     "@openrouter/ai-sdk-provider": "^1.5.4",
-    "active-win": "^8.1.0",
     "ai": "^5.0.90",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -28,7 +27,6 @@
     "pixi.js": "^6.5.10",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "sharp": "^0.34.3",
     "tailwind-merge": "^3.3.1",
     "uiohook-napi": "^1.5.4",
     "zod": "^4.1.5"

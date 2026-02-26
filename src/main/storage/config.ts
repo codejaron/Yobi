@@ -66,10 +66,6 @@ export class ConfigStore {
         ...DEFAULT_CONFIG.messaging,
         ...raw.messaging
       },
-      perception: {
-        ...DEFAULT_CONFIG.perception,
-        ...raw.perception
-      },
       voice: {
         ...DEFAULT_CONFIG.voice,
         ...raw.voice
@@ -120,10 +116,6 @@ export class ConfigStore {
         chat: {
           ...DEFAULT_CONFIG.modelRouting.chat,
           ...raw.modelRouting?.chat
-        },
-        perception: {
-          ...DEFAULT_CONFIG.modelRouting.perception,
-          ...raw.modelRouting?.perception
         },
         memory: {
           ...DEFAULT_CONFIG.modelRouting.memory,

@@ -1,4 +1,4 @@
-import { Activity, Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint } from "lucide-react";
+import { Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import {
   Card,
@@ -49,15 +49,15 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>感知状态</CardDescription>
+            <CardDescription>主动聊天</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Activity className="h-4 w-4" />
-              最近状态
+              <Clock3 className="h-4 w-4" />
+              最近主动消息
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              {status?.lastActivitySummary || "还没有可用的屏幕活动摘要"}
+              {formatDateTime(status?.lastProactiveAt ?? null)}
             </p>
           </CardContent>
         </Card>
@@ -67,13 +67,12 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
             <CardDescription>系统权限</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
               <ShieldCheck className="h-4 w-4" />
-              辅助功能与屏幕录制
+              辅助功能
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              辅助功能 {formatPermission(status?.macAccessibilityPermission)} · 屏幕录制{" "}
-              {formatPermission(status?.macScreenRecordingPermission)}
+              辅助功能 {formatPermission(status?.macAccessibilityPermission)}
             </p>
           </CardContent>
         </Card>
@@ -117,7 +116,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              保活 {status?.keepAwakeActive ? "已启用" : "未启用"} · 屏幕感知 {status?.perceptionRunning ? "运行中" : "已暂停"}
+              保活 {status?.keepAwakeActive ? "已启用" : "未启用"} · 历史消息 {status?.historyCount ?? 0} 条
             </p>
           </CardContent>
         </Card>

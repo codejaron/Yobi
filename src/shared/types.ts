@@ -28,15 +28,7 @@ export const appConfigSchema = z.object({
   providers: z.array(providerSchema),
   modelRouting: z.object({
     chat: modelRouteSchema,
-    perception: modelRouteSchema,
     memory: modelRouteSchema
-  }),
-  perception: z.object({
-    enabled: z.boolean().default(true),
-    pollIntervalMs: z.number().int().min(1000).default(5000),
-    screenshotQuality: z.number().int().min(20).max(100).default(55),
-    screenshotMaxWidth: z.number().int().min(640).max(2560).default(1200),
-    idlePauseSeconds: z.number().int().min(30).max(3600).default(180)
   }),
   voice: z.object({
     ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
@@ -74,8 +66,7 @@ export const appConfigSchema = z.object({
     enabled: z.boolean().default(false),
     pushToTelegram: z.boolean().default(false),
     cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
-    silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000),
-    comebackGraceMs: z.number().int().min(5_000).default(2 * 60 * 1000)
+    silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000)
   }),
   memory: z.object({
     workingSetSize: z.number().int().min(10).max(100).default(30),
@@ -202,15 +193,7 @@ export interface HistoryMessage {
   timestamp: string;
   meta?: {
     proactive?: boolean;
-    activitySnapshot?: string;
   };
-}
-
-export interface ActivitySnapshot {
-  app: string;
-  title: string;
-  summary: string;
-  changedAt: string;
 }
 
 export interface CharacterProfile {
@@ -220,27 +203,21 @@ export interface CharacterProfile {
 }
 
 export interface RuntimeContext {
-  lastWindowKey: string;
-  lastActivitySummary: string;
   lastProactiveAt: string | null;
   lastUserAt: string | null;
-  eyesCommandEnabled: boolean;
 }
 
 export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
-  lastActivitySummary: string;
   lastUserAt: string | null;
   lastProactiveAt: string | null;
   historyCount: number;
   memoryFacts: number;
-  perceptionRunning: boolean;
   keepAwakeActive: boolean;
   pendingReminders: number;
   petOnline: boolean;
   macAccessibilityPermission: "granted" | "denied" | "unknown";
-  macScreenRecordingPermission: "granted" | "denied" | "unknown";
 }
 
 export interface ReminderItem {
@@ -298,21 +275,10 @@ export const DEFAULT_CONFIG: AppConfig = {
       providerId: "anthropic-main",
       model: "claude-sonnet-4"
     },
-    perception: {
-      providerId: "openai-main",
-      model: "gpt-4o-mini"
-    },
     memory: {
       providerId: "openai-main",
       model: "gpt-4o-mini"
     }
-  },
-  perception: {
-    enabled: true,
-    pollIntervalMs: 5000,
-    screenshotQuality: 55,
-    screenshotMaxWidth: 1200,
-    idlePauseSeconds: 180
   },
   voice: {
     ttsVoice: "zh-CN-XiaoxiaoNeural",
@@ -350,8 +316,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     enabled: false,
     pushToTelegram: false,
     cooldownMs: 25 * 60 * 1000,
-    silenceThresholdMs: 40 * 60 * 1000,
-    comebackGraceMs: 2 * 60 * 1000
+    silenceThresholdMs: 40 * 60 * 1000
   },
   memory: {
     workingSetSize: 30,
@@ -391,9 +356,6 @@ export const DEFAULT_REMINDERS: ReminderDocument = {
 };
 
 export const DEFAULT_CONTEXT: RuntimeContext = {
-  lastWindowKey: "",
-  lastActivitySummary: "",
   lastProactiveAt: null,
-  lastUserAt: null,
-  eyesCommandEnabled: true
+  lastUserAt: null
 };
