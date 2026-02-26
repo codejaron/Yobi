@@ -61,7 +61,8 @@ const memoryFactItemSchema = z.object({
 const proactiveSchema = z.object({
   shouldSpeak: z.boolean(),
   reason: z.string().min(1),
-  message: z.string().optional()
+  message: z.string().optional(),
+  usedTopicIndex: z.number().int().min(1).nullable().optional()
 });
 
 export class LlmRouter {
@@ -250,7 +251,7 @@ export class LlmRouter {
   }): Promise<Array<{ content: string; confidence: number }>> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.memory, "memory");
-    const maxFacts = Math.max(10, Math.min(500, Math.round(config.memory.maxFacts || 80)));
+    const maxFacts = Math.max(10, Math.min(500, Math.round(config.memory.maxFacts)));
     const memorySchema = z.object({
       facts: z.array(memoryFactItemSchema).max(maxFacts)
     });
@@ -380,6 +381,7 @@ ${input.searchSnippets}`;
     shouldSpeak: boolean;
     reason: string;
     message?: string;
+    usedTopicIndex?: number | null;
   }> {
     const config = this.getConfig();
     const resolved = this.getModel(config.modelRouting.chat, "chat");
@@ -395,6 +397,7 @@ ${input.searchSnippets}`;
       `触发原因: ${input.reason}`,
       `当前时间: ${new Date().toLocaleString("zh-CN")}`,
       `积攒的话题:\n${input.topicHints}`,
+      "如果你用了上面的话题，在 usedTopicIndex 填对应序号（从 1 开始），没用就填 null。",
       `长期记忆:\n${this.formatFacts(input.memoryFacts)}`,
       `最近对话:\n${this.formatHistory(input.recentHistory)}`
     ].join("\n\n");

@@ -62,11 +62,10 @@ export class ProactiveDecisionEngine {
       };
     }
 
-    for (const topic of pendingTopics) {
-      const sample = topic.text.slice(0, Math.min(10, topic.text.length));
-      if (sample && decision.message.includes(sample)) {
+    if (typeof decision.usedTopicIndex === "number") {
+      const topic = pendingTopics[decision.usedTopicIndex - 1];
+      if (topic) {
         await this.topicPool.markUsed(topic.id);
-        break;
       }
     }
 
