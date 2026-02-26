@@ -1177,11 +1177,6 @@ export class CompanionRuntime {
       return;
     }
 
-    const currentWindow = this.lastActivity;
-    if (!currentWindow) {
-      return;
-    }
-
     if (this.lastSilenceHandledAt === context.lastUserAt) {
       return;
     }
@@ -1192,9 +1187,19 @@ export class CompanionRuntime {
         type: "silence",
         detail: `用户已沉默 ${Math.floor(silenceMs / 60000)} 分钟`
       },
-      activity: currentWindow
+      activity: this.resolveProactiveActivity(this.lastActivity)
     });
     await this.emitStatus();
+  }
+
+  private resolveProactiveActivity(
+    preferred: ActivitySnapshot | null
+  ): ActivitySnapshot | null {
+    if (!this.getConfig().perception.enabled) {
+      return null;
+    }
+
+    return preferred ?? this.activityMonitor.getCurrentSnapshot() ?? this.lastActivity;
   }
 
   private async handleProactive(input: {
@@ -1206,10 +1211,12 @@ export class CompanionRuntime {
       return;
     }
 
+    const resolvedActivity = this.resolveProactiveActivity(input.activity);
+
     const decision = await this.withTimeout(
       this.proactive.evaluate({
         trigger: input.trigger,
-        activity: input.activity
+        activity: resolvedActivity
       }),
       CompanionRuntime.PROACTIVE_DECISION_TIMEOUT_MS,
       "主动消息决策超时"
@@ -1224,7 +1231,7 @@ export class CompanionRuntime {
 
     await this.deliverAssistantOutput({
       rawText: decision.message,
-      activity: input.activity,
+      activity: resolvedActivity,
       proactive: true,
       destination,
       historyChannel: proactivePushToTelegram ? "telegram" : "system"
