@@ -145,17 +145,15 @@ function registerShellMenuIpc(): void {
 
 app.whenReady().then(async () => {
   ensureDockIconVisibleOnMac();
-  app.on("browser-window-created", () => {
-    ensureDockIconVisibleOnMac();
-  });
 
   registerShellMenuIpc();
   registerIpcHandlers();
 
   await runtime.init();
-  await runtime.start();
-
   createWindow();
+  void runtime.start().catch((error) => {
+    console.error("Failed to start runtime services:", error);
+  });
 
   app.on("activate", () => {
     ensureDockIconVisibleOnMac();

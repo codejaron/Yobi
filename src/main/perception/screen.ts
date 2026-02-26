@@ -171,7 +171,6 @@ export async function captureCompressedScreenshot(options: {
 }): Promise<string | null> {
   const screenshots = await loadScreenshots();
   if (!screenshots) {
-    console.warn("[perception] Failed to load node-screenshots module.");
     return null;
   }
 
@@ -185,11 +184,6 @@ export async function captureCompressedScreenshot(options: {
   }
 
   if (!raw) {
-    console.warn("[perception] Failed to capture monitor by active window position.", {
-      appName: options.windowInfo.appName,
-      title: options.windowInfo.title,
-      bounds: options.windowInfo.bounds
-    });
     return null;
   }
 

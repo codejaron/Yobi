@@ -10,6 +10,34 @@ import {
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
+  private dockRepairTimer: NodeJS.Timeout | null = null;
+
+  private ensureDockIconVisibleOnMac(): void {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    try {
+      app.setActivationPolicy("regular");
+      app.dock?.show();
+    } catch {}
+  }
+
+  private scheduleDockRepairOnMac(): void {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    if (this.dockRepairTimer) {
+      clearTimeout(this.dockRepairTimer);
+      this.dockRepairTimer = null;
+    }
+
+    this.dockRepairTimer = setTimeout(() => {
+      this.ensureDockIconVisibleOnMac();
+      this.dockRepairTimer = null;
+    }, 120);
+  }
 
   private showWindowWithoutFocus(): void {
     if (!this.window || this.window.isDestroyed()) {
@@ -33,6 +61,15 @@ export class PetWindowController {
     }
 
     this.window.setAlwaysOnTop(alwaysOnTop, alwaysOnTop ? "screen-saver" : "normal");
+
+    if (process.platform === "darwin") {
+      this.window.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true
+      });
+      this.scheduleDockRepairOnMac();
+      return;
+    }
+
     this.window.setVisibleOnAllWorkspaces(alwaysOnTop, {
       visibleOnFullScreen: alwaysOnTop
     });
@@ -161,6 +198,7 @@ export class PetWindowController {
     });
     this.applyWindowPinning(input.alwaysOnTop);
     this.window.once("ready-to-show", () => {
+      this.applyWindowPinning(input.alwaysOnTop);
       this.showWindowWithoutFocus();
     });
 
@@ -171,6 +209,11 @@ export class PetWindowController {
   }
 
   close(): void {
+    if (this.dockRepairTimer) {
+      clearTimeout(this.dockRepairTimer);
+      this.dockRepairTimer = null;
+    }
+
     if (!this.window || this.window.isDestroyed()) {
       this.window = null;
       return;
