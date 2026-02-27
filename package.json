@@ -61,6 +61,9 @@
     ],
     "mac": {
       "icon": "build/icon.png",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Yobi 需要麦克风权限来进行语音输入与实时对话。"
+      },
       "target": [
         "dmg"
       ]
