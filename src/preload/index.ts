@@ -53,7 +53,7 @@ const api: CompanionApi = {
   },
   openSystemPermissionSettings(
     permission: "accessibility" | "microphone" | "screenCapture"
-  ): Promise<{ opened: boolean }> {
+  ): Promise<{ opened: boolean; prompted: boolean }> {
     return ipcRenderer.invoke("system:permissions:open-settings", permission);
   },
   resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {

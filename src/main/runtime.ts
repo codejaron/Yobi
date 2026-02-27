@@ -349,19 +349,25 @@ export class CompanionRuntime {
     return this.collectStatus();
   }
 
-  async openSystemPermissionSettings(permission: SystemPermissionKey): Promise<{ opened: boolean }> {
+  async openSystemPermissionSettings(
+    permission: SystemPermissionKey
+  ): Promise<{ opened: boolean; prompted: boolean }> {
     const initialState = this.getSystemPermissionState(permission);
     this.systemPermissions[permission] = initialState;
     if (initialState === "granted") {
       await this.emitStatus();
       return {
-        opened: false
+        opened: false,
+        prompted: false
       };
     }
+
+    let prompted = false;
 
     if (process.platform === "darwin") {
       if (permission === "accessibility") {
         try {
+          prompted = true;
           systemPreferences.isTrustedAccessibilityClient(true);
         } catch (error) {
           console.warn("[runtime] request accessibility permission failed:", error);
@@ -373,6 +379,7 @@ export class CompanionRuntime {
         try {
           const rawStatus = this.getMediaAccessRawStatus("microphone");
           if (rawStatus === "not-determined") {
+            prompted = true;
             const granted = await systemPreferences.askForMediaAccess("microphone");
             this.systemPermissions.microphone = granted ? "granted" : "denied";
           }
@@ -382,7 +389,11 @@ export class CompanionRuntime {
       }
 
       if (permission === "screenCapture") {
-        await this.tryRequestScreenCapturePermissionOnMac();
+        const rawStatus = this.getMediaAccessRawStatus("screen");
+        if (rawStatus === "not-determined") {
+          prompted = true;
+          await this.tryRequestScreenCapturePermissionOnMac();
+        }
         this.systemPermissions.screenCapture = this.getMediaPermissionState("screen");
       }
 
@@ -391,7 +402,15 @@ export class CompanionRuntime {
       await this.emitStatus();
       if (latestState === "granted") {
         return {
-          opened: false
+          opened: false,
+          prompted
+        };
+      }
+
+      if (prompted) {
+        return {
+          opened: false,
+          prompted: true
         };
       }
     }
@@ -399,19 +418,22 @@ export class CompanionRuntime {
     const target = this.resolveSystemPermissionSettingsTarget(permission);
     if (!target) {
       return {
-        opened: false
+        opened: false,
+        prompted: false
       };
     }
 
     try {
       await shell.openExternal(target);
       return {
-        opened: true
+        opened: true,
+        prompted: false
       };
     } catch (error) {
       console.warn("[runtime] open system permission settings failed:", error);
       return {
-        opened: false
+        opened: false,
+        prompted: false
       };
     }
   }

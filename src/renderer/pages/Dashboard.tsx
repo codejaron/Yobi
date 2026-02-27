@@ -90,36 +90,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
     };
   }, [permissionActionNotice]);
 
-  const requestBrowserPermission = async (
-    permission: keyof AppStatus["systemPermissions"]
-  ): Promise<boolean> => {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices) {
-      return false;
-    }
-
-    if (permission === "microphone") {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-      return true;
-    }
-
-    if (permission === "screenCapture") {
-      if (typeof navigator.mediaDevices.getDisplayMedia !== "function") {
-        return false;
-      }
-
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-      return true;
-    }
-
-    return false;
-  };
-
   const openPermissionSettings = (permission: keyof AppStatus["systemPermissions"]): void => {
     if (openingPermission) {
       return;
@@ -138,28 +108,29 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
         return;
       }
 
-      if (permission !== "accessibility") {
-        try {
-          await requestBrowserPermission(permission);
-          await refreshStatus();
-          const nextStatus = await window.companion.getStatus();
-          if (nextStatus.systemPermissions[permission] === "granted") {
-            setPermissionActionNotice({
-              type: "success",
-              message: "授权成功"
-            });
-            return;
-          }
-        } catch {
-          await refreshStatus();
-        }
-      }
-
-      const opened = await window.companion.openSystemPermissionSettings(permission);
-      if (opened.opened) {
+      const result = await window.companion.openSystemPermissionSettings(permission);
+      if (result.opened) {
         setPermissionActionNotice({
           type: "info",
           message: "已打开系统设置，请在隐私页授权"
+        });
+        return;
+      }
+
+      if (result.prompted) {
+        await refreshStatus();
+        const currentAfterPrompt = await window.companion.getStatus();
+        if (currentAfterPrompt.systemPermissions[permission] === "granted") {
+          setPermissionActionNotice({
+            type: "success",
+            message: "授权成功"
+          });
+          return;
+        }
+
+        setPermissionActionNotice({
+          type: "info",
+          message: "已触发系统授权弹窗，请先在弹窗内完成授权。"
         });
         return;
       }

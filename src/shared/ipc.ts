@@ -33,7 +33,7 @@ export interface CompanionApi {
   getStatus(): Promise<AppStatus>;
   openSystemPermissionSettings(
     permission: keyof AppStatus["systemPermissions"]
-  ): Promise<{ opened: boolean }>;
+  ): Promise<{ opened: boolean; prompted: boolean }>;
   resetSystemPermissions(): Promise<{ reset: boolean; message?: string }>;
   importPetModelFromDialog(): Promise<{
     canceled: boolean;
