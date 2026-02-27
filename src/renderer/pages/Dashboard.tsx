@@ -49,6 +49,9 @@ const SYSTEM_PERMISSION_ITEMS: Array<{
 ];
 
 export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status" | "refreshStatus">) {
+  const [openingPermission, setOpeningPermission] = useState<keyof AppStatus["systemPermissions"] | null>(
+    null
+  );
   const [resettingPermissions, setResettingPermissions] = useState(false);
   const [resetPermissionsNotice, setResetPermissionsNotice] = useState<{
     type: "success" | "error";
@@ -69,10 +72,65 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
     };
   }, [resetPermissionsNotice]);
 
+  const requestBrowserPermission = async (
+    permission: keyof AppStatus["systemPermissions"]
+  ): Promise<boolean> => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) {
+      return false;
+    }
+
+    if (permission === "microphone") {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      return true;
+    }
+
+    if (permission === "screenCapture") {
+      if (typeof navigator.mediaDevices.getDisplayMedia !== "function") {
+        return false;
+      }
+
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      return true;
+    }
+
+    return false;
+  };
+
   const openPermissionSettings = (permission: keyof AppStatus["systemPermissions"]): void => {
-    void window.companion
-      .openSystemPermissionSettings(permission)
-      .finally(() => void refreshStatus());
+    if (openingPermission) {
+      return;
+    }
+
+    setOpeningPermission(permission);
+    void (async () => {
+      const current = status?.systemPermissions?.[permission];
+      if (current === "granted") {
+        return;
+      }
+
+      if (permission !== "accessibility") {
+        try {
+          const granted = await requestBrowserPermission(permission);
+          await refreshStatus();
+          if (granted) {
+            return;
+          }
+        } catch {
+          await refreshStatus();
+        }
+      }
+
+      await window.companion.openSystemPermissionSettings(permission);
+    })().finally(() => {
+      setOpeningPermission(null);
+      void refreshStatus();
+    });
   };
   const resetYobiPermissions = (): void => {
     if (resettingPermissions) {
@@ -87,7 +145,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
         if (result.reset) {
           setResetPermissionsNotice({
             type: "success",
-            message: "已重置 Yobi 权限"
+            message: result.message ?? "已重置 Yobi 权限"
           });
           return;
         }
@@ -186,6 +244,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
                 key={item.key}
                 type="button"
                 onClick={() => openPermissionSettings(item.key)}
+                disabled={openingPermission !== null}
                 className="flex w-full items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2 text-sm transition-colors hover:bg-secondary/40"
               >
                 <span>{item.label}</span>
@@ -194,9 +253,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
                 </span>
               </button>
             ))}
-            <p className="text-xs text-muted-foreground">
-              点击后会先检查权限；未授权时会触发系统授权或打开系统设置页。
-            </p>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={resetYobiPermissions} disabled={resettingPermissions}>
                 {resettingPermissions ? "重置中..." : "重置 Yobi 权限"}

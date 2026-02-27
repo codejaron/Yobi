@@ -69,7 +69,6 @@ const execFileAsync = promisify(execFile);
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
   private static readonly PROACTIVE_DECISION_TIMEOUT_MS = 45_000;
-  private static readonly BUNDLE_ID = "com.yobi.app";
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
   private readonly configStore = new ConfigStore(this.paths);
@@ -422,10 +421,18 @@ export class CompanionRuntime {
     }
 
     try {
-      await execFileAsync("tccutil", ["reset", "All", CompanionRuntime.BUNDLE_ID]);
+      const bundleId = await this.resolveCurrentBundleId();
+      if (!bundleId) {
+        return {
+          reset: false,
+          message: "无法识别当前应用标识，重置权限失败。"
+        };
+      }
+      await execFileAsync("tccutil", ["reset", "All", bundleId]);
       await this.emitStatus();
       return {
-        reset: true
+        reset: true,
+        message: `已重置 ${bundleId} 的系统权限，建议重启应用后重新授权。`
       };
     } catch (error) {
       console.warn("[runtime] reset system permissions failed:", error);
@@ -1519,6 +1526,32 @@ export class CompanionRuntime {
     }
 
     return "unknown";
+  }
+
+  private async resolveCurrentBundleId(): Promise<string | null> {
+    if (process.platform !== "darwin") {
+      return null;
+    }
+
+    const marker = "/Contents/MacOS/";
+    const markerIndex = process.execPath.indexOf(marker);
+    if (markerIndex <= 0) {
+      return null;
+    }
+
+    const appBundlePath = process.execPath.slice(0, markerIndex);
+    const infoPlistPath = path.join(appBundlePath, "Contents", "Info");
+    try {
+      const { stdout } = await execFileAsync("defaults", [
+        "read",
+        infoPlistPath,
+        "CFBundleIdentifier"
+      ]);
+      const bundleId = stdout.trim();
+      return bundleId || null;
+    } catch {
+      return null;
+    }
   }
 
   private resolveSystemPermissionSettingsTarget(permission: SystemPermissionKey): string | null {
