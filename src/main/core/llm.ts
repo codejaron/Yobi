@@ -92,14 +92,13 @@ export class LlmRouter {
 
     const generationOptions: Record<string, unknown> = {
       model: resolved.model,
-      maxOutputTokens: 400,
       system
     };
 
     if (input.tools && Object.keys(input.tools).length > 0) {
       generationOptions.tools = input.tools;
       generationOptions.toolChoice = "auto";
-      generationOptions.stopWhen = stepCountIs(8);
+      generationOptions.stopWhen = stepCountIs(50);
       if (resolved.providerKind === "openai" || resolved.providerKind === "custom-openai") {
         generationOptions.providerOptions = {
           openai: {
