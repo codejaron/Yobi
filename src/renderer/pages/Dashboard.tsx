@@ -1,5 +1,6 @@
 import { Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint } from "lucide-react";
 import type { AppStatus, PermissionState } from "@shared/types";
+import { useEffect, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import {
   Card,
@@ -48,14 +49,63 @@ const SYSTEM_PERMISSION_ITEMS: Array<{
 ];
 
 export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status" | "refreshStatus">) {
+  const [resettingPermissions, setResettingPermissions] = useState(false);
+  const [resetPermissionsNotice, setResetPermissionsNotice] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!resetPermissionsNotice) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setResetPermissionsNotice(null);
+    }, 3000);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [resetPermissionsNotice]);
+
   const openPermissionSettings = (permission: keyof AppStatus["systemPermissions"]): void => {
     void window.companion
       .openSystemPermissionSettings(permission)
       .finally(() => void refreshStatus());
   };
   const resetYobiPermissions = (): void => {
+    if (resettingPermissions) {
+      return;
+    }
+
+    setResettingPermissions(true);
+    setResetPermissionsNotice(null);
     void window.companion
       .resetSystemPermissions()
+      .then((result) => {
+        if (result.reset) {
+          setResetPermissionsNotice({
+            type: "success",
+            message: "已重置 Yobi 权限"
+          });
+          return;
+        }
+
+        setResetPermissionsNotice({
+          type: "error",
+          message: result.message ?? "重置权限失败，请稍后重试。"
+        });
+      })
+      .catch((error) => {
+        setResetPermissionsNotice({
+          type: "error",
+          message: error instanceof Error ? error.message : "重置权限失败，请稍后重试。"
+        });
+      })
+      .finally(() => {
+        setResettingPermissions(false);
+      })
       .finally(() => void refreshStatus());
   };
 
@@ -145,11 +195,22 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
               </button>
             ))}
             <p className="text-xs text-muted-foreground">
-              点击任一权限可打开系统设置授权页。
+              点击后会先检查权限；未授权时会触发系统授权或打开系统设置页。
             </p>
-            <Button variant="outline" onClick={resetYobiPermissions}>
-              重置 Yobi 权限
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={resetYobiPermissions} disabled={resettingPermissions}>
+                {resettingPermissions ? "重置中..." : "重置 Yobi 权限"}
+              </Button>
+              {resetPermissionsNotice ? (
+                <span
+                  className={`text-xs ${
+                    resetPermissionsNotice.type === "success" ? "text-emerald-700" : "text-rose-700"
+                  }`}
+                >
+                  {resetPermissionsNotice.message}
+                </span>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
         <Card>

@@ -351,6 +351,48 @@ export class CompanionRuntime {
   }
 
   async openSystemPermissionSettings(permission: SystemPermissionKey): Promise<{ opened: boolean }> {
+    const initialState = this.getSystemPermissionState(permission);
+    this.systemPermissions[permission] = initialState;
+    if (initialState === "granted") {
+      await this.emitStatus();
+      return {
+        opened: false
+      };
+    }
+
+    if (process.platform === "darwin") {
+      if (permission === "accessibility") {
+        try {
+          systemPreferences.isTrustedAccessibilityClient(true);
+        } catch (error) {
+          console.warn("[runtime] request accessibility permission failed:", error);
+        }
+        this.systemPermissions.accessibility = this.getAccessibilityPermissionState();
+      }
+
+      if (permission === "microphone") {
+        try {
+          const granted = await systemPreferences.askForMediaAccess("microphone");
+          this.systemPermissions.microphone = granted ? "granted" : "denied";
+        } catch (error) {
+          console.warn("[runtime] request microphone permission failed:", error);
+        }
+      }
+
+      if (permission === "screenCapture") {
+        this.systemPermissions.screenCapture = this.getMediaPermissionState("screen");
+      }
+
+      const latestState = this.getSystemPermissionState(permission);
+      this.systemPermissions[permission] = latestState;
+      await this.emitStatus();
+      if (latestState === "granted") {
+        return {
+          opened: false
+        };
+      }
+    }
+
     const target = this.resolveSystemPermissionSettingsTarget(permission);
     if (!target) {
       return {
@@ -1427,10 +1469,22 @@ export class CompanionRuntime {
 
   private refreshSystemPermissions(): void {
     this.systemPermissions = {
-      accessibility: this.getAccessibilityPermissionState(),
-      microphone: this.getMediaPermissionState("microphone"),
-      screenCapture: this.getMediaPermissionState("screen")
+      accessibility: this.getSystemPermissionState("accessibility"),
+      microphone: this.getSystemPermissionState("microphone"),
+      screenCapture: this.getSystemPermissionState("screenCapture")
     };
+  }
+
+  private getSystemPermissionState(permission: SystemPermissionKey): PermissionState {
+    if (permission === "accessibility") {
+      return this.getAccessibilityPermissionState();
+    }
+
+    if (permission === "microphone") {
+      return this.getMediaPermissionState("microphone");
+    }
+
+    return this.getMediaPermissionState("screen");
   }
 
   private getAccessibilityPermissionState(): PermissionState {
