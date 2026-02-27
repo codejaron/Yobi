@@ -109,6 +109,17 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshStatus();
+    };
+
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshStatus]);
+
   const saveConfig = useCallback(async () => {
     if (!config) {
       return;

@@ -52,6 +52,10 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
   const [openingPermission, setOpeningPermission] = useState<keyof AppStatus["systemPermissions"] | null>(
     null
   );
+  const [permissionActionNotice, setPermissionActionNotice] = useState<{
+    type: "success" | "info" | "error";
+    message: string;
+  } | null>(null);
   const [resettingPermissions, setResettingPermissions] = useState(false);
   const [resetPermissionsNotice, setResetPermissionsNotice] = useState<{
     type: "success" | "error";
@@ -71,6 +75,20 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
       clearTimeout(timer);
     };
   }, [resetPermissionsNotice]);
+
+  useEffect(() => {
+    if (!permissionActionNotice) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setPermissionActionNotice(null);
+    }, 3000);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [permissionActionNotice]);
 
   const requestBrowserPermission = async (
     permission: keyof AppStatus["systemPermissions"]
@@ -107,18 +125,29 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
       return;
     }
 
+    setPermissionActionNotice(null);
     setOpeningPermission(permission);
     void (async () => {
-      const current = status?.systemPermissions?.[permission];
+      const latestStatus = await window.companion.getStatus();
+      const current = latestStatus.systemPermissions[permission];
       if (current === "granted") {
+        setPermissionActionNotice({
+          type: "success",
+          message: "该权限已授权"
+        });
         return;
       }
 
       if (permission !== "accessibility") {
         try {
-          const granted = await requestBrowserPermission(permission);
+          await requestBrowserPermission(permission);
           await refreshStatus();
-          if (granted) {
+          const nextStatus = await window.companion.getStatus();
+          if (nextStatus.systemPermissions[permission] === "granted") {
+            setPermissionActionNotice({
+              type: "success",
+              message: "授权成功"
+            });
             return;
           }
         } catch {
@@ -126,11 +155,39 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
         }
       }
 
-      await window.companion.openSystemPermissionSettings(permission);
-    })().finally(() => {
-      setOpeningPermission(null);
-      void refreshStatus();
-    });
+      const opened = await window.companion.openSystemPermissionSettings(permission);
+      if (opened.opened) {
+        setPermissionActionNotice({
+          type: "info",
+          message: "已打开系统设置，请在隐私页授权"
+        });
+        return;
+      }
+
+      const currentAfter = await window.companion.getStatus();
+      if (currentAfter.systemPermissions[permission] === "granted") {
+        setPermissionActionNotice({
+          type: "success",
+          message: "授权成功"
+        });
+        return;
+      }
+
+      setPermissionActionNotice({
+        type: "error",
+        message: "未能自动打开权限页，请到系统设置手动授权。"
+      });
+    })()
+      .catch((error) => {
+        setPermissionActionNotice({
+          type: "error",
+          message: error instanceof Error ? error.message : "权限操作失败，请稍后重试。"
+        });
+      })
+      .finally(() => {
+        setOpeningPermission(null);
+        void refreshStatus();
+      });
   };
   const resetYobiPermissions = (): void => {
     if (resettingPermissions) {
@@ -253,6 +310,19 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
                 </span>
               </button>
             ))}
+            {permissionActionNotice ? (
+              <p
+                className={`text-xs ${
+                  permissionActionNotice.type === "success"
+                    ? "text-emerald-700"
+                    : permissionActionNotice.type === "info"
+                      ? "text-slate-700"
+                      : "text-rose-700"
+                }`}
+              >
+                {permissionActionNotice.message}
+              </p>
+            ) : null}
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={resetYobiPermissions} disabled={resettingPermissions}>
                 {resettingPermissions ? "重置中..." : "重置 Yobi 权限"}

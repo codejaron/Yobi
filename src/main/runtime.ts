@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import { app, shell, systemPreferences } from "electron";
+import { app, desktopCapturer, shell, systemPreferences } from "electron";
 import type {
   AppConfig,
   AppStatus,
@@ -371,14 +371,18 @@ export class CompanionRuntime {
 
       if (permission === "microphone") {
         try {
-          const granted = await systemPreferences.askForMediaAccess("microphone");
-          this.systemPermissions.microphone = granted ? "granted" : "denied";
+          const rawStatus = this.getMediaAccessRawStatus("microphone");
+          if (rawStatus === "not-determined") {
+            const granted = await systemPreferences.askForMediaAccess("microphone");
+            this.systemPermissions.microphone = granted ? "granted" : "denied";
+          }
         } catch (error) {
           console.warn("[runtime] request microphone permission failed:", error);
         }
       }
 
       if (permission === "screenCapture") {
+        await this.tryRequestScreenCapturePermissionOnMac();
         this.systemPermissions.screenCapture = this.getMediaPermissionState("screen");
       }
 
@@ -432,7 +436,7 @@ export class CompanionRuntime {
       await this.emitStatus();
       return {
         reset: true,
-        message: `已重置 ${bundleId} 的系统权限，建议重启应用后重新授权。`
+        message: `已重置 ${bundleId} 的系统权限。`
       };
     } catch (error) {
       console.warn("[runtime] reset system permissions failed:", error);
@@ -1508,11 +1512,15 @@ export class CompanionRuntime {
 
   private getMediaPermissionState(permission: MediaPermissionKey): PermissionState {
     try {
-      const status = systemPreferences.getMediaAccessStatus(permission);
+      const status = this.getMediaAccessRawStatus(permission);
       return this.normalizeMediaPermissionState(status);
     } catch {
       return "unknown";
     }
+  }
+
+  private getMediaAccessRawStatus(permission: MediaPermissionKey): string {
+    return systemPreferences.getMediaAccessStatus(permission);
   }
 
   private normalizeMediaPermissionState(raw: string): PermissionState {
@@ -1526,6 +1534,24 @@ export class CompanionRuntime {
     }
 
     return "unknown";
+  }
+
+  private async tryRequestScreenCapturePermissionOnMac(): Promise<void> {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    try {
+      await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: {
+          width: 1,
+          height: 1
+        }
+      });
+    } catch (error) {
+      console.warn("[runtime] request screen capture permission failed:", error);
+    }
   }
 
   private async resolveCurrentBundleId(): Promise<string | null> {
