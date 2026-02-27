@@ -31,6 +31,10 @@ export interface CompanionApi {
   openMemoryFileLocation(): Promise<{ path: string }>;
 
   getStatus(): Promise<AppStatus>;
+  openSystemPermissionSettings(
+    permission: keyof AppStatus["systemPermissions"]
+  ): Promise<{ opened: boolean }>;
+  resetSystemPermissions(): Promise<{ reset: boolean; message?: string }>;
   importPetModelFromDialog(): Promise<{
     canceled: boolean;
     modelDir?: string;

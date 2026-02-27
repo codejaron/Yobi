@@ -39,6 +39,14 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("status:get", () => runtime.getStatus());
+  ipcMain.handle(
+    "system:permissions:open-settings",
+    (
+      _,
+      permission: "accessibility" | "microphone" | "screenCapture"
+    ) => runtime.openSystemPermissionSettings(permission)
+  );
+  ipcMain.handle("system:permissions:reset", () => runtime.resetSystemPermissions());
   ipcMain.handle("pet:model:import", async (event) => {
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
     const dialogOptions: OpenDialogOptions = {

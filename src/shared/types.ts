@@ -244,6 +244,14 @@ export interface RuntimeContext {
   lastUserAt: string | null;
 }
 
+export type PermissionState = "granted" | "denied" | "unknown";
+
+export interface SystemPermissionStatus {
+  accessibility: PermissionState;
+  microphone: PermissionState;
+  screenCapture: PermissionState;
+}
+
 export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
@@ -254,7 +262,7 @@ export interface AppStatus {
   keepAwakeActive: boolean;
   pendingReminders: number;
   petOnline: boolean;
-  macAccessibilityPermission: "granted" | "denied" | "unknown";
+  systemPermissions: SystemPermissionStatus;
 }
 
 export interface ReminderItem {

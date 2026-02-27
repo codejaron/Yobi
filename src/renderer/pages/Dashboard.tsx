@@ -1,4 +1,5 @@
 import { Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint } from "lucide-react";
+import type { AppStatus, PermissionState } from "@shared/types";
 import { Badge } from "@renderer/components/ui/badge";
 import {
   Card,
@@ -18,7 +19,7 @@ function formatDateTime(value: string | null): string {
   return new Date(value).toLocaleString();
 }
 
-function formatPermission(value: "granted" | "denied" | "unknown" | undefined): string {
+function formatPermission(value: PermissionState | undefined): string {
   if (value === "granted") {
     return "已授权";
   }
@@ -28,7 +29,36 @@ function formatPermission(value: "granted" | "denied" | "unknown" | undefined): 
   return "未知";
 }
 
+const SYSTEM_PERMISSION_ITEMS: Array<{
+  key: keyof AppStatus["systemPermissions"];
+  label: string;
+}> = [
+  {
+    key: "accessibility",
+    label: "辅助功能"
+  },
+  {
+    key: "microphone",
+    label: "麦克风"
+  },
+  {
+    key: "screenCapture",
+    label: "屏幕录制"
+  }
+];
+
 export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status" | "refreshStatus">) {
+  const openPermissionSettings = (permission: keyof AppStatus["systemPermissions"]): void => {
+    void window.companion
+      .openSystemPermissionSettings(permission)
+      .finally(() => void refreshStatus());
+  };
+  const resetYobiPermissions = (): void => {
+    void window.companion
+      .resetSystemPermissions()
+      .finally(() => void refreshStatus());
+  };
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -64,15 +94,15 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>系统权限</CardDescription>
+            <CardDescription>提醒任务</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
-              <ShieldCheck className="h-4 w-4" />
-              辅助功能
+              <AlarmClock className="h-4 w-4" />
+              {status?.pendingReminders ?? 0} 条待执行
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              辅助功能 {formatPermission(status?.macAccessibilityPermission)}
+              到点后会主动 Telegram 推送，可用 /reminders 与 /cancel 管理。
             </p>
           </CardContent>
         </Card>
@@ -94,16 +124,32 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardDescription>提醒任务</CardDescription>
+            <CardDescription>系统权限</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
-              <AlarmClock className="h-4 w-4" />
-              {status?.pendingReminders ?? 0} 条待执行
+              <ShieldCheck className="h-4 w-4" />
+              权限管理
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              到点后会主动 Telegram 推送，可用 /reminders 与 /cancel 管理。
+          <CardContent className="space-y-2">
+            {SYSTEM_PERMISSION_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => openPermissionSettings(item.key)}
+                className="flex w-full items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2 text-sm transition-colors hover:bg-secondary/40"
+              >
+                <span>{item.label}</span>
+                <span className="text-muted-foreground">
+                  {formatPermission(status?.systemPermissions?.[item.key])}
+                </span>
+              </button>
+            ))}
+            <p className="text-xs text-muted-foreground">
+              点击任一权限可打开系统设置授权页。
             </p>
+            <Button variant="outline" onClick={resetYobiPermissions}>
+              重置 Yobi 权限
+            </Button>
           </CardContent>
         </Card>
         <Card>
@@ -122,29 +168,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-xl">运行时间线</CardTitle>
-          <CardDescription>帮助你确认主动聊天触发是否符合预期</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <div className="flex items-center justify-between rounded-md bg-secondary/45 px-3 py-2">
-            <span className="flex items-center gap-2">
-              <Clock3 className="h-4 w-4" /> 最近用户消息
-            </span>
-            <span>{formatDateTime(status?.lastUserAt ?? null)}</span>
-          </div>
-          <div className="flex items-center justify-between rounded-md bg-secondary/45 px-3 py-2">
-            <span className="flex items-center gap-2">
-              <Clock3 className="h-4 w-4" /> 最近主动消息
-            </span>
-            <span>{formatDateTime(status?.lastProactiveAt ?? null)}</span>
-          </div>
-          <Button variant="outline" onClick={() => void refreshStatus()}>
-            刷新状态
-          </Button>
-        </CardContent>
-      </Card>
     </div>
   );
 }

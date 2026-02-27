@@ -51,6 +51,14 @@ const api: CompanionApi = {
   getStatus(): Promise<AppStatus> {
     return ipcRenderer.invoke("status:get");
   },
+  openSystemPermissionSettings(
+    permission: "accessibility" | "microphone" | "screenCapture"
+  ): Promise<{ opened: boolean }> {
+    return ipcRenderer.invoke("system:permissions:open-settings", permission);
+  },
+  resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {
+    return ipcRenderer.invoke("system:permissions:reset");
+  },
   importPetModelFromDialog(): Promise<{
     canceled: boolean;
     modelDir?: string;

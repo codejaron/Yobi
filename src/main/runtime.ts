@@ -1,8 +1,10 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { app, systemPreferences } from "electron";
+import { promisify } from "node:util";
+import { app, shell, systemPreferences } from "electron";
 import type {
   AppConfig,
   AppStatus,
@@ -10,7 +12,9 @@ import type {
   CommandApprovalDecision,
   ConsoleChatEvent,
   HistoryMessage,
-  MemoryFact
+  MemoryFact,
+  PermissionState,
+  SystemPermissionStatus
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
@@ -58,11 +62,14 @@ interface CommandHandleResult {
   responseText?: string;
 }
 
-type MacPermissionState = "granted" | "denied" | "unknown";
+type SystemPermissionKey = keyof SystemPermissionStatus;
+type MediaPermissionKey = "microphone" | "screen";
+const execFileAsync = promisify(execFile);
 
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
   private static readonly PROACTIVE_DECISION_TIMEOUT_MS = 45_000;
+  private static readonly BUNDLE_ID = "com.yobi.app";
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
   private readonly configStore = new ConfigStore(this.paths);
@@ -141,8 +148,11 @@ export class CompanionRuntime {
   private petPttRecording = false;
   private silenceTimer: NodeJS.Timeout | null = null;
   private lastSilenceHandledAt: string | null = null;
-  private promptedGlobalPttPermission = false;
-  private macAccessibilityPermission: MacPermissionState = "unknown";
+  private systemPermissions: SystemPermissionStatus = {
+    accessibility: "unknown",
+    microphone: "unknown",
+    screenCapture: "unknown"
+  };
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
@@ -338,6 +348,50 @@ export class CompanionRuntime {
 
   async getStatus(): Promise<AppStatus> {
     return this.collectStatus();
+  }
+
+  async openSystemPermissionSettings(permission: SystemPermissionKey): Promise<{ opened: boolean }> {
+    const target = this.resolveSystemPermissionSettingsTarget(permission);
+    if (!target) {
+      return {
+        opened: false
+      };
+    }
+
+    try {
+      await shell.openExternal(target);
+      return {
+        opened: true
+      };
+    } catch (error) {
+      console.warn("[runtime] open system permission settings failed:", error);
+      return {
+        opened: false
+      };
+    }
+  }
+
+  async resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {
+    if (process.platform !== "darwin") {
+      return {
+        reset: false,
+        message: "当前平台不支持重置系统权限。"
+      };
+    }
+
+    try {
+      await execFileAsync("tccutil", ["reset", "All", CompanionRuntime.BUNDLE_ID]);
+      await this.emitStatus();
+      return {
+        reset: true
+      };
+    } catch (error) {
+      console.warn("[runtime] reset system permissions failed:", error);
+      return {
+        reset: false,
+        message: "重置权限失败，请稍后重试。"
+      };
+    }
   }
 
   async getConsoleChatHistory(input?: {
@@ -1231,22 +1285,7 @@ export class CompanionRuntime {
       granted = false;
     }
 
-    if (!granted && !this.promptedGlobalPttPermission) {
-      this.promptedGlobalPttPermission = true;
-      try {
-        systemPreferences.isTrustedAccessibilityClient(true);
-      } catch {
-        // ignore
-      }
-
-      try {
-        granted = systemPreferences.isTrustedAccessibilityClient(false);
-      } catch {
-        granted = false;
-      }
-    }
-
-    this.macAccessibilityPermission = granted ? "granted" : "denied";
+    this.systemPermissions.accessibility = granted ? "granted" : "denied";
     return granted;
   }
 
@@ -1260,7 +1299,7 @@ export class CompanionRuntime {
   }
 
   private async collectStatus(): Promise<AppStatus> {
-    this.refreshMacAccessibilityPermission();
+    this.refreshSystemPermissions();
     return {
       bootedAt: this.bootedAt,
       telegramConnected: this.telegram.isConnected(),
@@ -1271,7 +1310,9 @@ export class CompanionRuntime {
       keepAwakeActive: this.keepAwake.isActive(),
       pendingReminders: this.reminderService.count(),
       petOnline: this.pet.isOnline(),
-      macAccessibilityPermission: this.macAccessibilityPermission
+      systemPermissions: {
+        ...this.systemPermissions
+      }
     };
   }
 
@@ -1384,19 +1425,68 @@ export class CompanionRuntime {
     });
   }
 
-  private refreshMacAccessibilityPermission(): void {
+  private refreshSystemPermissions(): void {
+    this.systemPermissions = {
+      accessibility: this.getAccessibilityPermissionState(),
+      microphone: this.getMediaPermissionState("microphone"),
+      screenCapture: this.getMediaPermissionState("screen")
+    };
+  }
+
+  private getAccessibilityPermissionState(): PermissionState {
     if (process.platform !== "darwin") {
-      this.macAccessibilityPermission = "granted";
-      return;
+      return "granted";
     }
 
     try {
-      this.macAccessibilityPermission = systemPreferences.isTrustedAccessibilityClient(false)
-        ? "granted"
-        : "denied";
+      return systemPreferences.isTrustedAccessibilityClient(false) ? "granted" : "denied";
     } catch {
-      this.macAccessibilityPermission = "unknown";
+      return "unknown";
     }
+  }
+
+  private getMediaPermissionState(permission: MediaPermissionKey): PermissionState {
+    try {
+      const status = systemPreferences.getMediaAccessStatus(permission);
+      return this.normalizeMediaPermissionState(status);
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private normalizeMediaPermissionState(raw: string): PermissionState {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "granted") {
+      return "granted";
+    }
+
+    if (normalized === "denied" || normalized === "restricted") {
+      return "denied";
+    }
+
+    return "unknown";
+  }
+
+  private resolveSystemPermissionSettingsTarget(permission: SystemPermissionKey): string | null {
+    if (process.platform === "darwin") {
+      const map: Record<SystemPermissionKey, string> = {
+        accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        screenCapture: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+      };
+      return map[permission];
+    }
+
+    if (process.platform === "win32") {
+      const map: Record<SystemPermissionKey, string> = {
+        accessibility: "ms-settings:easeofaccess",
+        microphone: "ms-settings:privacy-microphone",
+        screenCapture: "ms-settings:privacy"
+      };
+      return map[permission];
+    }
+
+    return null;
   }
 
   private normalizeModelDirectoryName(name: string): string {
