@@ -480,11 +480,7 @@ export class CompanionRuntime {
         "LLM 回复超时"
       );
 
-      this.pet.emitEvent({
-        type: "talking",
-        value: "talking"
-      });
-      void this.emitPetSpeech(reply);
+      this.emitPetTalkingReply(reply);
 
       return {
         replyText: reply
@@ -641,6 +637,7 @@ export class CompanionRuntime {
         displayText: reply,
         timestamp: new Date().toISOString()
       });
+      this.emitPetTalkingReply(reply);
 
       this.lastUserAt = new Date().toISOString();
       await this.emitStatus();
@@ -712,12 +709,6 @@ export class CompanionRuntime {
           chatId: inbound.chatId
         });
       }
-
-      this.pet.emitEvent({
-        type: "talking",
-        value: "talking"
-      });
-      void this.emitPetSpeech(reply);
       this.lastUserAt = new Date().toISOString();
     } finally {
       this.pet.emitEvent({
@@ -906,6 +897,14 @@ export class CompanionRuntime {
     } catch (error) {
       console.warn("[pet] speech synthesis failed:", error);
     }
+  }
+
+  private emitPetTalkingReply(text: string): void {
+    this.pet.emitEvent({
+      type: "talking",
+      value: "talking"
+    });
+    void this.emitPetSpeech(text);
   }
 
   private syncRealtimeVoice(): void {
