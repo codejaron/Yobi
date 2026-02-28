@@ -13,7 +13,8 @@ export type ProactiveTrigger = {
 const proactiveSchema = z.object({
   shouldSpeak: z.boolean(),
   reason: z.string().min(1),
-  message: z.string().optional()
+  message: z.string().optional(),
+  usedTopicIndex: z.number().int().min(1).max(3).optional()
 });
 
 export class ProactiveService {
@@ -64,6 +65,11 @@ export class ProactiveService {
       limit: 30,
       offset: 0
     });
+    const pendingTopics = await this.memory.listActive(3);
+    const topicHints =
+      pendingTopics.length > 0
+        ? pendingTopics.map((topic, index) => `${index + 1}. [${topic.source}] ${topic.text}`).join("\n")
+        : "（暂无积攒的话题）";
     const workingMemory = await this.memory.getWorkingMemory({
       resourceId: input.resourceId,
       threadId: input.threadId
@@ -84,7 +90,9 @@ export class ProactiveService {
         `当前时间: ${new Date().toLocaleString("zh-CN")}`,
         `工作记忆:\n${workingMemory.markdown}`,
         `最近对话:\n${history.map((item) => `[${item.timestamp}] ${item.role}: ${item.text}`).join("\n") || "(空)"}`,
-        "返回 shouldSpeak/reason/message。"
+        `候选话题池:\n${topicHints}`,
+        "如果你用了候选话题，请返回 usedTopicIndex（1-based）。",
+        "返回 shouldSpeak/reason/message/usedTopicIndex。"
       ].join("\n\n")
     } as any);
 
@@ -98,6 +106,11 @@ export class ProactiveService {
         speak: false,
         reason: parsed.reason
       };
+    }
+
+    const usedTopic = parsed.usedTopicIndex ? pendingTopics[parsed.usedTopicIndex - 1] : undefined;
+    if (usedTopic) {
+      await this.memory.markUsed(usedTopic.id);
     }
 
     return {

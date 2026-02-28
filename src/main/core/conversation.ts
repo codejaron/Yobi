@@ -176,6 +176,46 @@ export class ConversationEngine {
     return finalText;
   }
 
+  async rememberAssistantMessage(input: {
+    text: string;
+    channel: "telegram" | "console";
+    resourceId: string;
+    threadId: string;
+    metadata?: Record<string, unknown>;
+    userTextForWorkingMemory?: string;
+  }): Promise<void> {
+    const normalizedText = input.text.trim();
+    if (!normalizedText) {
+      return;
+    }
+
+    await this.memory.rememberMessage({
+      threadId: input.threadId,
+      resourceId: input.resourceId,
+      role: "assistant",
+      text: normalizedText,
+      metadata: {
+        channel: input.channel,
+        ...(input.metadata ?? {})
+      }
+    });
+
+    const recalled = await this.memory.recall({
+      threadId: input.threadId,
+      resourceId: input.resourceId
+    });
+    const character = await this.characterStore.getCharacter(this.getConfig().characterId);
+
+    void this.refreshWorkingMemory({
+      threadId: input.threadId,
+      resourceId: input.resourceId,
+      userText: input.userTextForWorkingMemory?.trim() || "(无，本轮为助手主动消息)",
+      assistantText: normalizedText,
+      currentWorkingMemory: recalled.workingMemory,
+      workingMemoryTemplate: character.workingMemoryTemplate ?? recalled.workingMemory
+    });
+  }
+
   private async refreshWorkingMemory(input: {
     threadId: string;
     resourceId: string;

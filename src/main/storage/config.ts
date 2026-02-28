@@ -63,9 +63,9 @@ export class ConfigStore {
     const raw = await readJsonFile<unknown>(this.paths.configPath, null);
     const parsed = appConfigSchema.safeParse(raw);
     if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      const path = issue?.path?.join(".") || "(root)";
-      throw new Error(`配置文件格式不合法，请删除并重新生成：${path} ${issue?.message ?? ""}`.trim());
+      this.cached = this.prepareConfig(appConfigSchema.parse({}));
+      await writeJsonFile(this.paths.configPath, this.cached);
+      return;
     }
 
     this.cached = this.prepareConfig(parsed.data);

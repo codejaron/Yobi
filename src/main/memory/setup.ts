@@ -1,20 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createOpenAI } from "@ai-sdk/openai";
+import { createClient } from "@libsql/client";
+import type { Client as LibsqlClient } from "@libsql/client";
 import { LibSQLStore } from "@mastra/libsql";
 import { Memory } from "@mastra/memory";
 import type { MastraDBMessage } from "@mastra/core/agent";
 import type { MemoryConfig } from "@mastra/core/memory";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type {
   AppConfig,
   CharacterProfile,
   HistoryMessage,
-  ProviderConfig,
   WorkingMemoryDocument
 } from "@shared/types";
 import { DEFAULT_WORKING_MEMORY_TEMPLATE } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
+import { createModelForProvider } from "@main/core/model-factory";
 
 interface MemoryResourceContext {
   threadId: string;
@@ -32,11 +31,23 @@ interface CursorHistoryInput extends MemoryResourceContext {
   limit?: number;
 }
 
+export interface PendingTopic {
+  id: string;
+  text: string;
+  source: string;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
 function normalizeRole(role: MastraDBMessage["role"]): "system" | "user" | "assistant" {
   if (role === "assistant" || role === "user" || role === "system") {
     return role;
   }
   return "assistant";
+}
+
+function normalizeTopicText(raw: string): string {
+  return raw.replace(/\s+/g, " ").trim();
 }
 
 function extractTextFromMessage(message: MastraDBMessage): string {
@@ -116,6 +127,8 @@ export class YobiMemory {
   private memory: Memory | null = null;
   private storage: LibSQLStore | null = null;
   private memoryKey = "";
+  private topicClient: LibsqlClient | null = null;
+  private topicTableReady = false;
 
   constructor(
     private readonly paths: CompanionPaths,
@@ -216,6 +229,107 @@ export class YobiMemory {
       markdown: input.markdown,
       updatedAt: new Date().toISOString()
     };
+  }
+
+  async addTopic(input: {
+    text: string;
+    source: string;
+    expiresAt?: string | null;
+  }): Promise<void> {
+    const client = await this.ensureTopicClient();
+    const text = normalizeTopicText(input.text);
+    if (!text) {
+      return;
+    }
+
+    await this.cleanup();
+    const now = new Date().toISOString();
+    const normalizedText = text.toLowerCase();
+    const existing = await client.execute({
+      sql: `SELECT id
+            FROM pending_topics
+            WHERE normalized_text = ?
+              AND used = 0
+              AND (expires_at IS NULL OR expires_at > ?)
+            LIMIT 1`,
+      args: [normalizedText, now]
+    });
+
+    if (existing.rows.length > 0) {
+      return;
+    }
+
+    const expiresAt = input.expiresAt ? input.expiresAt : null;
+    await client.execute({
+      sql: `INSERT INTO pending_topics (id, text, normalized_text, source, created_at, expires_at, used)
+            VALUES (?, ?, ?, ?, ?, ?, 0)`,
+      args: [randomUUID(), text, normalizedText, input.source, now, expiresAt]
+    });
+  }
+
+  async listActive(limit = 3): Promise<PendingTopic[]> {
+    const client = await this.ensureTopicClient();
+    await this.cleanup();
+
+    const now = new Date().toISOString();
+    const safeLimit = Math.max(1, Math.min(20, limit));
+    const result = await client.execute({
+      sql: `SELECT id, text, source, created_at, expires_at
+            FROM pending_topics
+            WHERE used = 0
+              AND (expires_at IS NULL OR expires_at > ?)
+            ORDER BY created_at DESC
+            LIMIT ?`,
+      args: [now, safeLimit]
+    });
+
+    return result.rows
+      .map((row) => {
+        const id = typeof row.id === "string" ? row.id : "";
+        const text = typeof row.text === "string" ? row.text : "";
+        const source = typeof row.source === "string" ? row.source : "";
+        const createdAt = typeof row.created_at === "string" ? row.created_at : "";
+        const rawExpiresAt = row.expires_at;
+        const expiresAt = typeof rawExpiresAt === "string" && rawExpiresAt ? rawExpiresAt : null;
+        if (!id || !text || !source || !createdAt) {
+          return null;
+        }
+
+        return {
+          id,
+          text,
+          source,
+          createdAt,
+          expiresAt
+        };
+      })
+      .filter((item): item is PendingTopic => item !== null);
+  }
+
+  async markUsed(topicId: string): Promise<void> {
+    const client = await this.ensureTopicClient();
+    const id = topicId.trim();
+    if (!id) {
+      return;
+    }
+
+    await client.execute({
+      sql: `UPDATE pending_topics
+            SET used = 1
+            WHERE id = ?`,
+      args: [id]
+    });
+  }
+
+  async cleanup(): Promise<void> {
+    const client = await this.ensureTopicClient();
+    const now = new Date().toISOString();
+    await client.execute({
+      sql: `DELETE FROM pending_topics
+            WHERE used = 1
+               OR (expires_at IS NOT NULL AND expires_at <= ?)`,
+      args: [now]
+    });
   }
 
   async listHistory(input: ListHistoryInput): Promise<HistoryMessage[]> {
@@ -388,6 +502,37 @@ export class YobiMemory {
     return this.memory;
   }
 
+  private async ensureTopicClient(): Promise<LibsqlClient> {
+    if (!this.topicClient) {
+      this.topicClient = createClient({
+        url: `file:${this.paths.yobiDbPath}`
+      });
+    }
+
+    if (this.topicTableReady) {
+      return this.topicClient;
+    }
+
+    await this.topicClient.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS pending_topics (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        normalized_text TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        used INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_topics_active
+        ON pending_topics (used, expires_at, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_pending_topics_normalized
+        ON pending_topics (normalized_text, used, expires_at);
+    `);
+
+    this.topicTableReady = true;
+    return this.topicClient;
+  }
+
   private buildMemoryConfig(character: CharacterProfile): MemoryConfig {
     const config = this.getConfig();
     const observationalModel = this.resolveObservationalModel(config);
@@ -422,66 +567,11 @@ export class YobiMemory {
     }
 
     try {
-      return this.makeModel(provider, model);
+      return createModelForProvider(provider, model);
     } catch (error) {
       console.warn("[memory] observational model disabled:", error);
       return null;
     }
-  }
-
-  private makeModel(provider: ProviderConfig, model: string): any {
-    if (provider.kind === "anthropic") {
-      return createAnthropic({
-        apiKey: provider.apiKey
-      })(model);
-    }
-
-    if (provider.kind === "openrouter") {
-      return createOpenRouter({
-        apiKey: provider.apiKey
-      }).chat(model);
-    }
-
-    if (provider.kind === "custom-openai") {
-      if (!provider.baseUrl) {
-        throw new Error(`Provider ${provider.id} missing baseUrl`);
-      }
-
-      const normalizedBaseUrl = this.normalizeCustomOpenAIBaseUrl(provider.baseUrl);
-      const client = createOpenAI({
-        apiKey: provider.apiKey,
-        baseURL: normalizedBaseUrl
-      });
-      return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
-    }
-
-    const client = createOpenAI({
-      apiKey: provider.apiKey
-    });
-
-    return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
-  }
-
-  private normalizeCustomOpenAIBaseUrl(raw: string): string {
-    const input = raw.trim();
-    if (!input) {
-      return input;
-    }
-
-    let parsed: URL;
-    try {
-      parsed = new URL(input);
-    } catch {
-      return input;
-    }
-
-    const pathname = parsed.pathname.trim();
-    if (pathname === "" || pathname === "/") {
-      parsed.pathname = "/v1";
-      return parsed.toString().replace(/\/$/, "");
-    }
-
-    return input.replace(/\/$/, "");
   }
 
   private resolveWorkingMemoryTemplate(character: CharacterProfile): string {

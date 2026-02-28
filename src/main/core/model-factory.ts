@@ -3,6 +3,65 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 
+export function normalizeCustomOpenAIBaseUrl(raw: string): string {
+  const input = raw.trim();
+  if (!input) {
+    return input;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    return input;
+  }
+
+  const pathname = parsed.pathname.trim();
+  if (pathname === "" || pathname === "/") {
+    parsed.pathname = "/v1";
+    return parsed.toString().replace(/\/$/, "");
+  }
+
+  return input.replace(/\/$/, "");
+}
+
+export function createModelForProvider(provider: ProviderConfig, model: string): any {
+  if (!provider.enabled) {
+    throw new Error(`Provider ${provider.id} is disabled`);
+  }
+
+  if (provider.kind === "anthropic") {
+    return createAnthropic({
+      apiKey: provider.apiKey
+    })(model);
+  }
+
+  if (provider.kind === "openrouter") {
+    return createOpenRouter({
+      apiKey: provider.apiKey
+    }).chat(model);
+  }
+
+  if (provider.kind === "custom-openai") {
+    if (!provider.baseUrl) {
+      throw new Error(`Provider ${provider.id} missing baseUrl`);
+    }
+
+    const normalizedBaseUrl = normalizeCustomOpenAIBaseUrl(provider.baseUrl);
+    const client = createOpenAI({
+      apiKey: provider.apiKey,
+      baseURL: normalizedBaseUrl
+    });
+    return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
+  }
+
+  const client = createOpenAI({
+    apiKey: provider.apiKey
+  });
+
+  return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
+}
+
 export class ModelFactory {
   constructor(private readonly getConfig: () => AppConfig) {}
 
@@ -13,65 +72,6 @@ export class ModelFactory {
       throw new Error(`Missing provider for chat route: ${route.providerId}`);
     }
 
-    return this.makeModel(provider, route.model);
-  }
-
-  private makeModel(provider: ProviderConfig, model: string): any {
-    if (!provider.enabled) {
-      throw new Error(`Provider ${provider.id} is disabled`);
-    }
-
-    if (provider.kind === "anthropic") {
-      return createAnthropic({
-        apiKey: provider.apiKey
-      })(model);
-    }
-
-    if (provider.kind === "openrouter") {
-      return createOpenRouter({
-        apiKey: provider.apiKey
-      }).chat(model);
-    }
-
-    if (provider.kind === "custom-openai") {
-      if (!provider.baseUrl) {
-        throw new Error(`Provider ${provider.id} missing baseUrl`);
-      }
-
-      const normalizedBaseUrl = this.normalizeCustomOpenAIBaseUrl(provider.baseUrl);
-      const client = createOpenAI({
-        apiKey: provider.apiKey,
-        baseURL: normalizedBaseUrl
-      });
-      return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
-    }
-
-    const client = createOpenAI({
-      apiKey: provider.apiKey
-    });
-
-    return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
-  }
-
-  private normalizeCustomOpenAIBaseUrl(raw: string): string {
-    const input = raw.trim();
-    if (!input) {
-      return input;
-    }
-
-    let parsed: URL;
-    try {
-      parsed = new URL(input);
-    } catch {
-      return input;
-    }
-
-    const pathname = parsed.pathname.trim();
-    if (pathname === "" || pathname === "/") {
-      parsed.pathname = "/v1";
-      return parsed.toString().replace(/\/$/, "");
-    }
-
-    return input.replace(/\/$/, "");
+    return createModelForProvider(provider, route.model);
   }
 }

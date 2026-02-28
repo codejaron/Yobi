@@ -22,9 +22,9 @@ import { ReminderStore } from "@main/storage/reminder-store";
 import { CharacterStore } from "@main/core/character";
 import { ModelFactory } from "@main/core/model-factory";
 import { YobiMemory } from "@main/memory/setup";
-import { WorkingMemoryService } from "@main/memory/manual-facts";
 import { ConversationEngine } from "@main/core/conversation";
 import { ProactiveService } from "@main/services/proactive";
+import { BackgroundTaskService } from "@main/services/background-tasks";
 import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage } from "@main/channels/types";
 import { ChannelRouter } from "@main/channels/router";
@@ -73,12 +73,6 @@ export class CompanionRuntime {
     () => this.characterStore.getCharacter(this.configStore.getConfig().characterId)
   );
 
-  private readonly workingMemory = new WorkingMemoryService(
-    this.memory,
-    PRIMARY_RESOURCE_ID,
-    PRIMARY_THREAD_ID
-  );
-
   private readonly modelFactory = new ModelFactory(() => this.configStore.getConfig());
   private readonly approvalGuard = new ApprovalGuard();
   private readonly toolRegistry = new DefaultToolRegistry(
@@ -100,6 +94,16 @@ export class CompanionRuntime {
     this.memory,
     this.characterStore,
     () => this.configStore.getConfig()
+  );
+  private readonly backgroundTasks = new BackgroundTaskService(
+    this.modelFactory,
+    this.memory,
+    this.mcpManager,
+    () => this.configStore.getConfig(),
+    {
+      resourceId: PRIMARY_RESOURCE_ID,
+      threadId: PRIMARY_THREAD_ID
+    }
   );
 
   private readonly channelRouter = new ChannelRouter(this.conversation);
@@ -153,6 +157,7 @@ export class CompanionRuntime {
   async start(): Promise<void> {
     await this.reminderService.init();
     await this.startTelegram();
+    this.backgroundTasks.start();
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
     this.syncPetWindow();
@@ -175,6 +180,7 @@ export class CompanionRuntime {
     this.globalPtt.stop();
     this.petPttRecording = false;
     this.realtimeVoice.stop();
+    this.backgroundTasks.stop();
     await this.openclawRuntime.stop();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
@@ -288,11 +294,18 @@ export class CompanionRuntime {
   }
 
   async getWorkingMemory(): Promise<WorkingMemoryDocument> {
-    return this.workingMemory.getWorkingMemory();
+    return this.memory.getWorkingMemory({
+      resourceId: PRIMARY_RESOURCE_ID,
+      threadId: PRIMARY_THREAD_ID
+    });
   }
 
   async saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument> {
-    return this.workingMemory.saveWorkingMemory(input.markdown);
+    return this.memory.saveWorkingMemory({
+      resourceId: PRIMARY_RESOURCE_ID,
+      threadId: PRIMARY_THREAD_ID,
+      markdown: input.markdown
+    });
   }
 
   async getStatus(): Promise<AppStatus> {
@@ -981,13 +994,12 @@ export class CompanionRuntime {
       return;
     }
 
-    await this.memory.rememberMessage({
+    await this.conversation.rememberAssistantMessage({
       threadId: PRIMARY_THREAD_ID,
       resourceId: PRIMARY_RESOURCE_ID,
-      role: "assistant",
+      channel: "console",
       text: decision.message,
       metadata: {
-        channel: "console",
         proactive: true
       }
     });
@@ -1076,6 +1088,12 @@ export class CompanionRuntime {
     if (JSON.stringify(previousConfig.openclaw) !== JSON.stringify(nextConfig.openclaw)) {
       await this.runConfigSideEffect("重启 OpenClaw", 20_000, async () => {
         await this.openclawRuntime.start(nextConfig);
+      });
+    }
+
+    if (JSON.stringify(previousConfig.proactive) !== JSON.stringify(nextConfig.proactive)) {
+      await this.runConfigSideEffect("重置后台话题任务", 4_000, async () => {
+        this.backgroundTasks.start();
       });
     }
 

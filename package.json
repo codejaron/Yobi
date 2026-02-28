@@ -7,6 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
+    "prebuild": "npm run prebuild:openclaw",
+    "prebuild:openclaw": "node build/prebuild-openclaw-runtime.mjs",
     "build": "electron-vite build",
     "dist:mac": "npm run build && npx electron-builder --mac dmg --publish never",
     "dist:win": "npm run build && npx electron-builder --win nsis --publish never",
@@ -15,6 +17,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.4",
+    "@libsql/client": "^0.15.15",
     "@ai-sdk/openai": "^2.0.10",
     "@mastra/libsql": "^1.6.2",
     "@mastra/memory": "^1.5.2",
@@ -61,7 +64,17 @@
     "files": [
       "**/*",
       "!resources/models{,/**}",
+      "!resources/openclaw-runtime{,/**}",
       "!**/.DS_Store"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/openclaw-runtime",
+        "to": "openclaw-runtime",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "icon": "build/icon.png",
