@@ -42,13 +42,6 @@ interface PendingApproval {
   description: string;
 }
 
-interface SlashCommandOption {
-  command: string;
-  usage: string;
-  description: string;
-  applyValue: string;
-}
-
 function historyRoleToMessageRole(role: HistoryMessage["role"]): MessageRole {
   return role === "assistant" ? "assistant" : "user";
 }
@@ -57,27 +50,6 @@ const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string
   { decision: "allow-once", label: "同意一次" },
   { decision: "allow-always", label: "同意并记住" },
   { decision: "deny", label: "拒绝" }
-];
-
-const SLASH_COMMAND_OPTIONS: SlashCommandOption[] = [
-  {
-    command: "/help",
-    usage: "/help",
-    description: "查看可用命令",
-    applyValue: "/help"
-  },
-  {
-    command: "/reminders",
-    usage: "/reminders",
-    description: "查看待提醒列表",
-    applyValue: "/reminders"
-  },
-  {
-    command: "/cancel",
-    usage: "/cancel <提醒ID前缀>",
-    description: "取消一个提醒",
-    applyValue: "/cancel "
-  }
 ];
 
 function makeId(prefix: string): string {
@@ -176,7 +148,6 @@ export function ConsoleChatPage() {
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [approvalIndex, setApprovalIndex] = useState(0);
-  const [slashSuggestionIndex, setSlashSuggestionIndex] = useState(0);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
@@ -633,31 +604,6 @@ export function ConsoleChatPage() {
     });
   }, [pendingApproval]);
 
-  const slashSuggestions = useMemo(() => {
-    const normalized = draft.trimStart().toLowerCase();
-    if (!normalized.startsWith("/")) {
-      return [];
-    }
-
-    return SLASH_COMMAND_OPTIONS.filter((item) => {
-      const command = item.command.toLowerCase();
-      const usage = item.usage.toLowerCase();
-      return command.startsWith(normalized) || usage.startsWith(normalized);
-    });
-  }, [draft]);
-
-  useEffect(() => {
-    setSlashSuggestionIndex(0);
-  }, [draft, slashSuggestions.length]);
-
-  const applySlashSuggestion = useCallback((option: SlashCommandOption) => {
-    setDraft(option.applyValue);
-    setSlashSuggestionIndex(0);
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-    });
-  }, []);
-
   const handleSubmit = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -723,34 +669,6 @@ export function ConsoleChatPage() {
 
   const handleInputKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (!pendingApproval) {
-      if (slashSuggestions.length === 0) {
-        return;
-      }
-
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setSlashSuggestionIndex((current) =>
-          current <= 0 ? slashSuggestions.length - 1 : current - 1
-        );
-        return;
-      }
-
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setSlashSuggestionIndex((current) =>
-          current >= slashSuggestions.length - 1 ? 0 : current + 1
-        );
-        return;
-      }
-
-      if (event.key === "Tab") {
-        event.preventDefault();
-        const selected = slashSuggestions[slashSuggestionIndex] ?? slashSuggestions[0];
-        if (selected) {
-          applySlashSuggestion(selected);
-        }
-      }
-
       return;
     }
 
@@ -774,7 +692,7 @@ export function ConsoleChatPage() {
       event.preventDefault();
       void submitApproval(APPROVAL_OPTIONS[approvalIndex]?.decision ?? "allow-once");
     }
-  }, [approvalIndex, applySlashSuggestion, pendingApproval, slashSuggestionIndex, slashSuggestions, submitApproval]);
+  }, [approvalIndex, pendingApproval, submitApproval]);
 
   const busy = activeRequestId !== null;
   const recording = micState === "recording";
@@ -786,7 +704,6 @@ export function ConsoleChatPage() {
     busy ||
     (!sttReady && !recording);
   const micButtonLabel = transcribing ? "识别中" : recording ? "结束" : "语音";
-  const showSlashSuggestions = !pendingApproval && slashSuggestions.length > 0;
   const messages = useMemo<ConsoleMessage[]>(() => {
     const historyMessages = persistedMessages
       .filter((item) => item.role === "user" || item.role === "assistant")
@@ -906,40 +823,11 @@ export function ConsoleChatPage() {
               </div>
             ) : null}
 
-            {showSlashSuggestions ? (
-              <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-border/70 bg-white/95 p-2 shadow-lg">
-                <p className="px-1 pb-2 text-xs text-muted-foreground">
-                  可用命令（↑↓ 选择，Tab 自动填充）
-                </p>
-                <div className="grid gap-1">
-                  {slashSuggestions.map((item, index) => (
-                    <button
-                      key={item.command}
-                      type="button"
-                      onClick={() => applySlashSuggestion(item)}
-                      onMouseEnter={() => setSlashSuggestionIndex(index)}
-                      className={`rounded-md border px-2 py-1.5 text-left text-xs transition ${
-                        slashSuggestionIndex === index
-                          ? "border-primary/40 bg-primary/10 text-foreground"
-                          : "border-border/60 bg-white/70 text-foreground/90 hover:bg-secondary/50"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium">{item.command}</span>
-                        <span className="text-[11px] text-muted-foreground">{item.description}</span>
-                      </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{item.usage}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
             <form onSubmit={handleSubmit} className="flex gap-2">
               <Input
                 ref={inputRef}
                 value={draft}
-                placeholder="和 Yobi 说点什么（输入 / 可查看命令）"
+                placeholder="和 Yobi 说点什么"
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleInputKeyDown}
                 disabled={inputDisabled}

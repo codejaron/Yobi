@@ -36,6 +36,7 @@ import { ReminderService } from "@main/services/reminders";
 import { McpManager } from "@main/services/mcp-manager";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
+import { GlobalPetPushToTalkService, type GlobalPttPhase } from "@main/services/global-ptt";
 import { OpenClawRuntime } from "@main/openclaw/runtime";
 import { OpenClawClient } from "@main/openclaw/client";
 import { createOpenClawToolDefinition } from "@main/openclaw/tool";
@@ -112,6 +113,7 @@ export class CompanionRuntime {
   private readonly keepAwake = new KeepAwakeService();
   private readonly pet = new PetWindowController();
   private readonly realtimeVoice = new RealtimeVoiceService();
+  private readonly globalPtt = new GlobalPetPushToTalkService();
   private readonly openclawClient = new OpenClawClient(() => this.configStore.getConfig());
   private readonly openclawRuntime = new OpenClawRuntime(() => {
     void this.emitStatus();
@@ -131,6 +133,7 @@ export class CompanionRuntime {
   private lastProactiveAt: string | null = null;
   private silenceTimer: NodeJS.Timeout | null = null;
   private lastSilenceHandledAt: string | null = null;
+  private petPttRecording = false;
   private systemPermissions: SystemPermissionStatus = {
     accessibility: "unknown",
     microphone: "unknown",
@@ -153,6 +156,7 @@ export class CompanionRuntime {
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
     this.syncPetWindow();
+    await this.syncGlobalPetPushToTalk();
     this.syncRealtimeVoice();
     this.startSilenceLoop();
 
@@ -168,6 +172,8 @@ export class CompanionRuntime {
 
     this.keepAwake.stop();
     this.pet.close();
+    this.globalPtt.stop();
+    this.petPttRecording = false;
     this.realtimeVoice.stop();
     await this.openclawRuntime.stop();
     await this.mcpManager.dispose();
@@ -247,6 +253,7 @@ export class CompanionRuntime {
 
     this.keepAwake.apply(saved.background.keepAwake);
     this.syncPetWindow();
+    await this.syncGlobalPetPushToTalk();
     this.syncRealtimeVoice();
     this.startSilenceLoop();
 
@@ -477,6 +484,7 @@ export class CompanionRuntime {
         type: "talking",
         value: "talking"
       });
+      void this.emitPetSpeech(reply);
 
       return {
         replyText: reply
@@ -709,6 +717,7 @@ export class CompanionRuntime {
         type: "talking",
         value: "talking"
       });
+      void this.emitPetSpeech(reply);
       this.lastUserAt = new Date().toISOString();
     } finally {
       this.pet.emitEvent({
@@ -744,6 +753,159 @@ export class CompanionRuntime {
       modelDir,
       alwaysOnTop: config.alwaysOnTop
     });
+  }
+
+  private async syncGlobalPetPushToTalk(): Promise<void> {
+    if (!this.shouldEnableGlobalPetPushToTalk()) {
+      this.globalPtt.stop();
+      if (this.petPttRecording) {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "桌宠语音已关闭"
+        });
+      }
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (!this.ensureGlobalPttPermission()) {
+      this.globalPtt.stop();
+      this.petPttRecording = false;
+      if (this.pet.isOnline()) {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "请在系统设置中为 Yobi 打开辅助功能权限后再试。"
+        });
+      }
+      return;
+    }
+
+    try {
+      await this.globalPtt.start({
+        hotkey: this.getConfig().ptt.hotkey,
+        onPhase: (phase) => {
+          void this.handleGlobalPetPushToTalkPhase(phase);
+        }
+      });
+    } catch (error) {
+      this.globalPtt.stop();
+      this.petPttRecording = false;
+
+      const reason = error instanceof Error ? error.message : "全局按住说话启动失败";
+      if (this.pet.isOnline()) {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason
+        });
+      }
+    }
+  }
+
+  private shouldEnableGlobalPetPushToTalk(): boolean {
+    const config = this.getConfig();
+    return config.pet.enabled && config.ptt.enabled && this.pet.isOnline();
+  }
+
+  private async handleGlobalPetPushToTalkPhase(phase: GlobalPttPhase): Promise<void> {
+    if (!this.shouldEnableGlobalPetPushToTalk()) {
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (!this.ensureGlobalPttPermission()) {
+      if (phase === "down") {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "缺少辅助功能权限，无法监听全局快捷键。"
+        });
+      }
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (!this.voiceRouter.isAlibabaSttReady()) {
+      if (phase === "down") {
+        this.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "阿里语音识别未启用"
+        });
+      }
+      this.petPttRecording = false;
+      return;
+    }
+
+    if (phase === "down") {
+      if (this.petPttRecording) {
+        return;
+      }
+
+      this.petPttRecording = true;
+      this.pet.emitEvent({
+        type: "ptt",
+        state: "start"
+      });
+      return;
+    }
+
+    if (!this.petPttRecording) {
+      return;
+    }
+
+    this.petPttRecording = false;
+    this.pet.emitEvent({
+      type: "ptt",
+      state: "stop"
+    });
+  }
+
+  private ensureGlobalPttPermission(): boolean {
+    if (process.platform !== "darwin") {
+      return true;
+    }
+
+    let granted = false;
+    try {
+      granted = systemPreferences.isTrustedAccessibilityClient(false);
+    } catch {
+      granted = false;
+    }
+
+    this.systemPermissions.accessibility = granted ? "granted" : "denied";
+    return granted;
+  }
+
+  private async emitPetSpeech(text: string): Promise<void> {
+    const normalized = text.trim();
+    if (!normalized || !this.getConfig().realtimeVoice.enabled || !this.pet.isOnline()) {
+      return;
+    }
+
+    try {
+      const config = this.getConfig();
+      const audio = await this.voiceRouter.synthesize({
+        text: normalized,
+        edgeConfig: {
+          voice: config.voice.ttsVoice,
+          rate: config.voice.ttsRate,
+          pitch: config.voice.ttsPitch,
+          requestTimeoutMs: config.voice.requestTimeoutMs,
+          retryCount: config.voice.retryCount
+        }
+      });
+
+      this.pet.emitEvent({
+        type: "speech",
+        audioBase64: audio.toString("base64"),
+        mimeType: "audio/mpeg"
+      });
+    } catch (error) {
+      console.warn("[pet] speech synthesis failed:", error);
+    }
   }
 
   private syncRealtimeVoice(): void {

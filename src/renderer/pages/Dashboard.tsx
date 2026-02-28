@@ -288,7 +288,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              到点后会主动 Telegram 推送，可用 /reminders 与 /cancel 管理。
+              到点后会主动 Telegram 推送提醒。
             </p>
           </CardContent>
         </Card>

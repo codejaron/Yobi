@@ -71,6 +71,7 @@ export class ProactiveService {
 
     const decision = await generateObject({
       model,
+      providerOptions: this.buildProviderOptions(config),
       schema: proactiveSchema,
       system: [
         "你是 Yobi。现在你有机会主动给用户发一条消息。",
@@ -103,6 +104,28 @@ export class ProactiveService {
       speak: true,
       reason: parsed.reason,
       message: parsed.message.trim()
+    };
+  }
+
+  private buildProviderOptions(config: AppConfig): Record<string, unknown> | undefined {
+    const route = config.modelRouting.chat;
+    const provider = config.providers.find((candidate) => candidate.id === route.providerId);
+    if (!provider) {
+      return undefined;
+    }
+
+    const usesResponsesApi =
+      (provider.kind === "openai" || provider.kind === "custom-openai") &&
+      provider.apiMode === "responses";
+
+    if (!usesResponsesApi) {
+      return undefined;
+    }
+
+    return {
+      openai: {
+        store: true
+      }
     };
   }
 }

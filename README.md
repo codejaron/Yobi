@@ -91,12 +91,6 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 - 内置 `exa` Server 默认可用（remote：`https://mcp.exa.ai/mcp`）
 - 非内置 Server 支持单独开关
 
-## 常用命令
-
-- `/help`
-- `/reminders`
-- `/cancel <提醒ID前缀>`
-
 ## 数据目录
 
 运行后会在本机创建：

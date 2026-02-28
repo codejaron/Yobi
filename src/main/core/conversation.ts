@@ -42,6 +42,7 @@ export class ConversationEngine {
     requestApproval?: ToolApprovalHandler;
   }): Promise<string> {
     const config = this.getConfig();
+    const providerOptions = this.buildProviderOptions(config);
     const character = await this.characterStore.getCharacter(config.characterId);
     const normalizedText = input.text.trim();
 
@@ -90,6 +91,7 @@ export class ConversationEngine {
       messages,
       tools,
       toolChoice: "auto",
+      providerOptions,
       stopWhen: stepCountIs(20)
     } as any);
 
@@ -186,6 +188,7 @@ export class ConversationEngine {
       const model = this.modelFactory.getChatModel();
       const response = await generateText({
         model,
+        providerOptions: this.buildProviderOptions(this.getConfig()),
         system: [
           "你负责维护用户工作记忆。",
           "输出必须是 markdown，结构必须沿用模板，不要添加解释。",
@@ -214,5 +217,27 @@ export class ConversationEngine {
     } catch (error) {
       console.warn("[conversation] working memory refresh skipped:", error);
     }
+  }
+
+  private buildProviderOptions(config: AppConfig): Record<string, unknown> | undefined {
+    const route = config.modelRouting.chat;
+    const provider = config.providers.find((candidate) => candidate.id === route.providerId);
+    if (!provider) {
+      return undefined;
+    }
+
+    const usesResponsesApi =
+      (provider.kind === "openai" || provider.kind === "custom-openai") &&
+      provider.apiMode === "responses";
+
+    if (!usesResponsesApi) {
+      return undefined;
+    }
+
+    return {
+      openai: {
+        store: true
+      }
+    };
   }
 }
