@@ -63,6 +63,16 @@ function formatOpenClawStatus(value: string | undefined): string {
     return "Gateway 已退出";
   }
 
+  if (value.startsWith("gateway-exited:code-")) {
+    const code = value.replace("gateway-exited:code-", "").trim();
+    return `Gateway 已退出（code=${code}）`;
+  }
+
+  if (value.startsWith("gateway-exited:signal-")) {
+    const signal = value.replace("gateway-exited:signal-", "").trim();
+    return `Gateway 被信号终止（${signal}）`;
+  }
+
   if (value.startsWith("gateway-error:")) {
     return `Gateway 错误：${value.replace("gateway-error:", "").trim()}`;
   }

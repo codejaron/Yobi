@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
 import { LibSQLStore } from "@mastra/libsql";
 import { Memory } from "@mastra/memory";
 import type { MastraDBMessage } from "@mastra/core/agent";
 import type { MemoryConfig } from "@mastra/core/memory";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type {
   AppConfig,
   CharacterProfile,
   HistoryMessage,
+  ProviderConfig,
   WorkingMemoryDocument
 } from "@shared/types";
 import { DEFAULT_WORKING_MEMORY_TEMPLATE } from "@shared/types";
@@ -364,6 +368,7 @@ export class YobiMemory {
     const nextKey = JSON.stringify({
       dbPath: this.paths.yobiDbPath,
       memory: config.memory,
+      providers: config.providers,
       template: this.resolveWorkingMemoryTemplate(character)
     });
 
@@ -385,8 +390,8 @@ export class YobiMemory {
 
   private buildMemoryConfig(character: CharacterProfile): MemoryConfig {
     const config = this.getConfig();
-    const hasOM =
-      config.memory.observational.enabled && config.memory.observational.model.trim().length > 0;
+    const observationalModel = this.resolveObservationalModel(config);
+    const hasOM = config.memory.observational.enabled && observationalModel !== null;
 
     return {
       lastMessages: hasOM ? Math.min(20, config.memory.recentMessages) : config.memory.recentMessages,
@@ -398,10 +403,85 @@ export class YobiMemory {
       },
       observationalMemory: hasOM
         ? {
-            model: config.memory.observational.model.trim()
+            model: observationalModel
           }
         : false
     };
+  }
+
+  private resolveObservationalModel(config: AppConfig): any | null {
+    const model = config.memory.observational.model.trim();
+    const providerId = config.memory.observational.providerId.trim();
+    if (!model || !providerId) {
+      return null;
+    }
+
+    const provider = config.providers.find((item) => item.id === providerId);
+    if (!provider || !provider.enabled) {
+      return null;
+    }
+
+    try {
+      return this.makeModel(provider, model);
+    } catch (error) {
+      console.warn("[memory] observational model disabled:", error);
+      return null;
+    }
+  }
+
+  private makeModel(provider: ProviderConfig, model: string): any {
+    if (provider.kind === "anthropic") {
+      return createAnthropic({
+        apiKey: provider.apiKey
+      })(model);
+    }
+
+    if (provider.kind === "openrouter") {
+      return createOpenRouter({
+        apiKey: provider.apiKey
+      }).chat(model);
+    }
+
+    if (provider.kind === "custom-openai") {
+      if (!provider.baseUrl) {
+        throw new Error(`Provider ${provider.id} missing baseUrl`);
+      }
+
+      const normalizedBaseUrl = this.normalizeCustomOpenAIBaseUrl(provider.baseUrl);
+      const client = createOpenAI({
+        apiKey: provider.apiKey,
+        baseURL: normalizedBaseUrl
+      });
+      return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
+    }
+
+    const client = createOpenAI({
+      apiKey: provider.apiKey
+    });
+
+    return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
+  }
+
+  private normalizeCustomOpenAIBaseUrl(raw: string): string {
+    const input = raw.trim();
+    if (!input) {
+      return input;
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(input);
+    } catch {
+      return input;
+    }
+
+    const pathname = parsed.pathname.trim();
+    if (pathname === "" || pathname === "/") {
+      parsed.pathname = "/v1";
+      return parsed.toString().replace(/\/$/, "");
+    }
+
+    return input.replace(/\/$/, "");
   }
 
   private resolveWorkingMemoryTemplate(character: CharacterProfile): string {

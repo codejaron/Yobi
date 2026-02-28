@@ -214,7 +214,6 @@ export function ProvidersPage({
       <Card>
         <CardHeader>
           <CardTitle>聊天模型路由</CardTitle>
-          <CardDescription>单 Agent 模式仅配置聊天模型。</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">

@@ -117,15 +117,13 @@ export class OpenClawRuntime {
     const url = new URL(config.openclaw.gatewayUrl);
     const port = Number(url.port || "18789");
     const host = url.hostname || "127.0.0.1";
+    const bindMode = this.resolveBindMode(host);
+    const args = ["gateway", "run", "--allow-unconfigured", "--bind", bindMode, "--port", String(port)];
 
-    const child = spawn(
-      resolveOpenClawBin(),
-      ["gateway", "--host", host, "--port", String(port)],
-      {
-        stdio: "ignore",
-        env: resolveEnv()
-      }
-    );
+    const child = spawn(resolveOpenClawBin(), args, {
+      stdio: "ignore",
+      env: resolveEnv()
+    });
     this.gatewayProcess = child;
 
     const startState: {
@@ -140,11 +138,15 @@ export class OpenClawRuntime {
       this.setStatus(false, `gateway-error: ${error.message}`);
     });
 
-    child.once("exit", () => {
+    child.once("exit", (code, signal) => {
       if (this.gatewayProcess === child) {
         this.gatewayProcess = null;
       }
-      this.setStatus(false, "gateway-exited");
+      if (signal) {
+        this.setStatus(false, `gateway-exited:signal-${signal}`);
+        return;
+      }
+      this.setStatus(false, `gateway-exited:code-${code ?? "unknown"}`);
     });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 600));
@@ -220,5 +222,23 @@ export class OpenClawRuntime {
       online,
       message
     });
+  }
+
+  private resolveBindMode(host: string): "loopback" | "lan" | "auto" {
+    const normalized = host.trim().toLowerCase();
+    if (normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1") {
+      return "loopback";
+    }
+
+    if (
+      normalized === "0.0.0.0" ||
+      normalized.startsWith("10.") ||
+      normalized.startsWith("192.168.") ||
+      normalized.startsWith("172.")
+    ) {
+      return "lan";
+    }
+
+    return "auto";
   }
 }

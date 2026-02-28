@@ -10,6 +10,7 @@ import {
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { Label } from "@renderer/components/ui/label";
+import { Select } from "@renderer/components/ui/select";
 import { Switch } from "@renderer/components/ui/switch";
 
 const DEFAULT_PTT_HOTKEY = "Alt+Space";
@@ -291,6 +292,10 @@ export function SettingsPage({
   config: AppConfig;
   setConfig: (next: AppConfig) => void;
 }) {
+  const observationalProviderOptions = config.providers.map((provider) => ({
+    id: provider.id,
+    label: provider.enabled ? provider.label : `${provider.label}（已停用）`
+  }));
   const isMac =
     typeof navigator !== "undefined" &&
     /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -988,10 +993,36 @@ export function SettingsPage({
           </div>
 
           <div className="space-y-1.5">
+            <Label>Observational Memory Provider</Label>
+            <Select
+              value={config.memory.observational.providerId}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    observational: {
+                      ...config.memory.observational,
+                      providerId: event.target.value
+                    }
+                  }
+                })
+              }
+            >
+              <option value="">请选择 Provider</option>
+              {observationalProviderOptions.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
             <Label>Observational Memory 模型</Label>
             <Input
               value={config.memory.observational.model}
-              placeholder="google/gemini-2.5-flash"
+              placeholder="例如: gemini-2.5-flash"
               onChange={(event) =>
                 setConfig({
                   ...config,

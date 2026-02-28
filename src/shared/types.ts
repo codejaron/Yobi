@@ -137,6 +137,7 @@ export const appConfigSchema = z
         observational: z
           .object({
             enabled: z.boolean().default(false),
+            providerId: z.string().default(""),
             model: z.string().default("")
           })
           .strict()
@@ -380,6 +381,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     recentMessages: 40,
     observational: {
       enabled: false,
+      providerId: "",
       model: ""
     }
   },
