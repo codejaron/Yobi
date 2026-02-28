@@ -43,10 +43,6 @@ function formatOpenClawStatus(value: string | undefined): string {
     return "正在检查安装状态";
   }
 
-  if (value === "installing") {
-    return "正在自动安装 OpenClaw";
-  }
-
   if (value === "syncing-llm") {
     return "正在同步模型配置";
   }
@@ -60,7 +56,7 @@ function formatOpenClawStatus(value: string | undefined): string {
   }
 
   if (value === "not-installed") {
-    return "未安装，且自动安装已关闭";
+    return "未安装 OpenClaw";
   }
 
   if (value === "gateway-exited") {

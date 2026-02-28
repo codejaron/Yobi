@@ -145,7 +145,6 @@ export const appConfigSchema = z
     openclaw: z
       .object({
         enabled: z.boolean().default(false),
-        autoInstall: z.boolean().default(true),
         gatewayUrl: z.string().url().default("http://127.0.0.1:18789"),
         approvalRequired: z.boolean().default(true)
       })
@@ -386,7 +385,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   openclaw: {
     enabled: false,
-    autoInstall: true,
     gatewayUrl: "http://127.0.0.1:18789",
     approvalRequired: true
   },

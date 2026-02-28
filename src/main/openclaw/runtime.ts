@@ -1,13 +1,50 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, existsSync } from "node:fs";
 import { promisify } from "node:util";
+import { app } from "electron";
 import yaml from "js-yaml";
 import type { ChildProcess } from "node:child_process";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 
 const execFileAsync = promisify(execFile);
+
+function resolveOpenClawBin(): string {
+  // 1. 打包内嵌优先
+  if (app.isPackaged) {
+    const base = path.join(process.resourcesPath, "openclaw-runtime", "node_modules", ".bin");
+    const bin =
+      process.platform === "win32"
+        ? path.join(base, "openclaw.cmd")
+        : path.join(base, "openclaw");
+    if (existsSync(bin)) return bin;
+  }
+
+  // 2. 回退到系统 PATH
+  return "openclaw";
+}
+
+function resolveEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+
+  // 打包环境：内嵌 bin 目录加到 PATH 最前
+  if (app.isPackaged) {
+    const binDir = path.join(process.resourcesPath, "openclaw-runtime", "node_modules", ".bin");
+    env.PATH = `${binDir}${path.delimiter}${env.PATH ?? ""}`;
+  }
+
+  // 开发环境：补全常见全局路径（解决 Electron GUI 启动 PATH 缺失）
+  const extra = ["/opt/homebrew/bin", "/usr/local/bin", `${homedir()}/.npm-global/bin`];
+  const current = env.PATH ?? "";
+  for (const p of extra) {
+    if (!current.includes(p)) {
+      env.PATH = `${p}${path.delimiter}${env.PATH}`;
+    }
+  }
+
+  return env;
+}
 
 interface OpenClawStatus {
   online: boolean;
@@ -38,12 +75,8 @@ export class OpenClawRuntime {
       this.setStatus(false, "checking");
       const installed = await this.isInstalled();
       if (!installed) {
-        if (!config.openclaw.autoInstall) {
-          this.setStatus(false, "not-installed");
-          return;
-        }
-        this.setStatus(false, "installing");
-        await this.install();
+        this.setStatus(false, "not-installed");
+        return;
       }
 
       this.setStatus(false, "syncing-llm");
@@ -69,15 +102,11 @@ export class OpenClawRuntime {
 
   private async isInstalled(): Promise<boolean> {
     try {
-      await execFileAsync("openclaw", ["--version"]);
+      await execFileAsync(resolveOpenClawBin(), ["--version"], { env: resolveEnv() });
       return true;
     } catch {
       return false;
     }
-  }
-
-  private async install(): Promise<void> {
-    await execFileAsync("npm", ["install", "-g", "openclaw"]);
   }
 
   private async startGateway(config: AppConfig): Promise<void> {
@@ -90,10 +119,11 @@ export class OpenClawRuntime {
     const host = url.hostname || "127.0.0.1";
 
     const child = spawn(
-      "openclaw",
+      resolveOpenClawBin(),
       ["gateway", "--host", host, "--port", String(port)],
       {
-        stdio: "ignore"
+        stdio: "ignore",
+        env: resolveEnv()
       }
     );
     this.gatewayProcess = child;
