@@ -119,7 +119,7 @@ export class CompanionRuntime {
   private readonly realtimeVoice = new RealtimeVoiceService();
   private readonly globalPtt = new GlobalPetPushToTalkService();
   private readonly openclawClient = new OpenClawClient(() => this.configStore.getConfig());
-  private readonly openclawRuntime = new OpenClawRuntime(() => {
+  private readonly openclawRuntime = new OpenClawRuntime(this.paths, () => {
     void this.emitStatus();
   });
 

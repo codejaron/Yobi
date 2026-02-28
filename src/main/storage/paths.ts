@@ -37,10 +37,23 @@ export class CompanionPaths {
     return path.join(this.baseDir, "yobi.db");
   }
 
+  get openclawStateDir(): string {
+    return path.join(this.baseDir, "openclaw");
+  }
+
+  get openclawConfigPath(): string {
+    return path.join(this.openclawStateDir, "openclaw.json");
+  }
+
+  get openclawSyncStatePath(): string {
+    return path.join(this.openclawStateDir, "yobi-sync-state.json");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.charactersDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
+    mkdirSync(this.openclawStateDir, { recursive: true });
   }
 }
