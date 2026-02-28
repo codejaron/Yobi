@@ -98,6 +98,8 @@ export class ConversationEngine {
     input.stream?.onThinkingChange?.("start");
 
     let fullText = "";
+    let toolFailed = false;
+    let lastToolError = "";
     try {
       for await (const chunk of result.fullStream) {
         if (chunk.type === "text-delta") {
@@ -121,12 +123,17 @@ export class ConversationEngine {
             data?: unknown;
             error?: string;
           };
+          const success = output?.success ?? true;
+          if (!success) {
+            toolFailed = true;
+            lastToolError = output?.error?.trim() || lastToolError;
+          }
 
           input.stream?.onToolResult?.({
             toolCallId: chunk.toolCallId,
             toolName: chunk.toolName,
             input: chunk.input,
-            success: output?.success ?? true,
+            success,
             output: output?.data,
             error: output?.error
           });
@@ -134,17 +141,20 @@ export class ConversationEngine {
         }
 
         if (chunk.type === "tool-error") {
+          toolFailed = true;
+          const errorMessage =
+            chunk.error instanceof Error
+              ? chunk.error.message
+              : typeof chunk.error === "string"
+                ? chunk.error
+                : "工具调用失败";
+          lastToolError = errorMessage.trim() || lastToolError;
           input.stream?.onToolResult?.({
             toolCallId: chunk.toolCallId,
             toolName: chunk.toolName,
             input: chunk.input,
             success: false,
-            error:
-              chunk.error instanceof Error
-                ? chunk.error.message
-                : typeof chunk.error === "string"
-                  ? chunk.error
-                  : "工具调用失败"
+            error: errorMessage
           });
         }
       }
@@ -152,7 +162,12 @@ export class ConversationEngine {
       input.stream?.onThinkingChange?.("stop");
     }
 
-    const finalText = fullText.trim() || "操作已完成。";
+    const trimmedText = fullText.trim();
+    if (!trimmedText && toolFailed) {
+      throw new Error(lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。");
+    }
+
+    const finalText = trimmedText || "我这次没有生成有效回复，请重试一次。";
 
     await this.memory.rememberMessage({
       threadId: input.threadId,
@@ -276,7 +291,7 @@ export class ConversationEngine {
 
     return {
       openai: {
-        store: true
+        store: false
       }
     };
   }

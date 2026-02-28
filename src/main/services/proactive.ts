@@ -137,7 +137,7 @@ export class ProactiveService {
 
     return {
       openai: {
-        store: true
+        store: false
       }
     };
   }

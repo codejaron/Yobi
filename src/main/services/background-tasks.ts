@@ -238,7 +238,7 @@ export class BackgroundTaskService {
 
     return {
       openai: {
-        store: true
+        store: false
       }
     };
   }
