@@ -3,9 +3,9 @@ import type {
   AppStatus,
   CharacterProfile,
   CommandApprovalDecision,
-  ConsoleChatEvent,
+  ConsoleRunEventV2,
   HistoryMessage,
-  MemoryFact
+  WorkingMemoryDocument
 } from "./types";
 
 export interface CursorHistoryPage {
@@ -24,11 +24,8 @@ export interface CompanionApi {
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]>;
   clearHistory(): Promise<void>;
 
-  listMemory(): Promise<MemoryFact[]>;
-  upsertMemory(input: { id?: string; content: string; confidence: number }): Promise<MemoryFact>;
-  deleteMemory(id: string): Promise<void>;
-  clearMemory(): Promise<void>;
-  openMemoryFileLocation(): Promise<{ path: string }>;
+  getWorkingMemory(): Promise<WorkingMemoryDocument>;
+  saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument>;
 
   getStatus(): Promise<AppStatus>;
   openSystemPermissionSettings(
@@ -55,5 +52,5 @@ export interface CompanionApi {
     approvalId: string;
     decision: CommandApprovalDecision;
   }): Promise<{ accepted: boolean }>;
-  onConsoleChatEvent(listener: (event: ConsoleChatEvent) => void): () => void;
+  onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void;
 }

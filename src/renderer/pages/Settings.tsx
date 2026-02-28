@@ -11,7 +11,6 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { Label } from "@renderer/components/ui/label";
 import { Switch } from "@renderer/components/ui/switch";
-import { Textarea } from "@renderer/components/ui/textarea";
 
 const DEFAULT_PTT_HOTKEY = "Alt+Space";
 const MODIFIER_KEY_NAMES = new Set(["alt", "control", "ctrl", "shift", "meta", "os"]);
@@ -303,14 +302,6 @@ export function SettingsPage({
   const [isRecordingPttHotkey, setIsRecordingPttHotkey] = useState(false);
   const [pttHotkeyNotice, setPttHotkeyNotice] = useState("");
 
-  const parseList = (raw: string): string[] =>
-    raw
-      .split(/[\n,]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-  const toListText = (values: string[]): string => values.join("\n");
-
   useEffect(() => {
     if (!isRecordingPttHotkey) {
       return;
@@ -440,20 +431,21 @@ export function SettingsPage({
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>主动消息推送到 Telegram</Label>
+            <Label>主动消息不再推送到 Telegram</Label>
             <Switch
-              checked={config.proactive.pushToTelegram}
+              checked={config.proactive.localOnly}
               onChange={(checked) =>
                 setConfig({
                   ...config,
                   proactive: {
                     ...config.proactive,
-                    pushToTelegram: checked
+                    localOnly: checked
                   }
                 })
               }
             />
           </div>
+
         </CardContent>
       </Card>
 
@@ -494,6 +486,7 @@ export function SettingsPage({
               }
             />
           </div>
+
         </CardContent>
       </Card>
 
@@ -671,10 +664,6 @@ export function SettingsPage({
               }
             />
           </div>
-          <p className="text-xs text-muted-foreground">
-            语音模型与参数请到阿里百炼或 Edge TTS 设置中调整。
-          </p>
-
         </CardContent>
       </Card>
 
@@ -682,8 +671,7 @@ export function SettingsPage({
         <CardHeader>
           <CardTitle>阿里百炼语音</CardTitle>
           <CardDescription>
-            开启且填写 API Key 后，语音识别和语音合成都会走阿里 WebSocket。
-            未满足条件时会关闭语音识别并回退到 Edge TTS。
+            开启且填写 API Key 后，语音识别和语音合成都会走阿里 WebSocket。未满足条件时回退到 Edge TTS。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -952,75 +940,45 @@ export function SettingsPage({
               }
             />
           </div>
-
-          <div className="space-y-1.5">
-            <p className="text-xs text-muted-foreground">
-              冷却用于限制主动消息频率；沉默阈值用于触发沉默场景的主动聊天。
-            </p>
-          </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>记忆策略</CardTitle>
-          <CardDescription>工作记忆窗口控制上下文长度；长期记忆上限控制提炼总条数。</CardDescription>
+          <CardDescription>Recent Messages + Working Memory + 可选 Observational Memory。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1.5">
-            <Label>工作记忆窗口（条）</Label>
+            <Label>最近消息条数（不开 Observational Memory 时）</Label>
             <Input
-              value={String(config.memory.workingSetSize)}
+              value={String(config.memory.recentMessages)}
               onChange={(event) =>
                 setConfig({
                   ...config,
                   memory: {
                     ...config.memory,
-                    workingSetSize: Number(event.target.value) || config.memory.workingSetSize
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>长期记忆上限（条）</Label>
-            <Input
-              value={String(config.memory.maxFacts)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  memory: {
-                    ...config.memory,
-                    maxFacts:
+                    recentMessages:
                       Number.isFinite(Number(event.target.value))
-                        ? Math.max(10, Math.min(500, Number(event.target.value)))
-                        : config.memory.maxFacts
+                        ? Math.max(10, Math.min(200, Number(event.target.value)))
+                        : config.memory.recentMessages
                   }
                 })
               }
             />
           </div>
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>浏览器工具（Beta）</CardTitle>
-          <CardDescription>隔离 Chromium + snapshot/ref/act 模式。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>启用浏览器工具</Label>
+            <Label>启用 Observational Memory</Label>
             <Switch
-              checked={config.tools.browser.enabled}
+              checked={config.memory.observational.enabled}
               onChange={(checked) =>
                 setConfig({
                   ...config,
-                  tools: {
-                    ...config.tools,
-                    browser: {
-                      ...config.tools.browser,
+                  memory: {
+                    ...config.memory,
+                    observational: {
+                      ...config.memory.observational,
                       enabled: checked
                     }
                   }
@@ -1029,76 +987,19 @@ export function SettingsPage({
             />
           </div>
 
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>Headless 模式</Label>
-            <Switch
-              checked={config.tools.browser.headless}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    browser: {
-                      ...config.tools.browser,
-                      headless: checked
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>阻止私网地址</Label>
-            <Switch
-              checked={config.tools.browser.blockPrivateNetwork}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    browser: {
-                      ...config.tools.browser,
-                      blockPrivateNetwork: checked
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
           <div className="space-y-1.5">
-            <Label>CDP 端口</Label>
+            <Label>Observational Memory 模型</Label>
             <Input
-              value={String(config.tools.browser.cdpPort)}
+              value={config.memory.observational.model}
+              placeholder="google/gemini-2.5-flash"
               onChange={(event) =>
                 setConfig({
                   ...config,
-                  tools: {
-                    ...config.tools,
-                    browser: {
-                      ...config.tools.browser,
-                      cdpPort: Number(event.target.value) || config.tools.browser.cdpPort
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>域名白名单（每行一个，空=不限制）</Label>
-            <Textarea
-              rows={3}
-              value={toListText(config.tools.browser.allowedDomains)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    browser: {
-                      ...config.tools.browser,
-                      allowedDomains: parseList(event.target.value)
+                  memory: {
+                    ...config.memory,
+                    observational: {
+                      ...config.memory.observational,
+                      model: event.target.value
                     }
                   }
                 })
@@ -1110,23 +1011,20 @@ export function SettingsPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>系统工具（Beta）</CardTitle>
-          <CardDescription>Shell 执行 + App 控制，默认走审批。</CardDescription>
+          <CardTitle>OpenClaw</CardTitle>
+          <CardDescription>桌面操控工具，默认关闭，启用后走审批。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>启用系统工具</Label>
+            <Label>启用 OpenClaw</Label>
             <Switch
-              checked={config.tools.system.enabled}
+              checked={config.openclaw.enabled}
               onChange={(checked) =>
                 setConfig({
                   ...config,
-                  tools: {
-                    ...config.tools,
-                    system: {
-                      ...config.tools.system,
-                      enabled: checked
-                    }
+                  openclaw: {
+                    ...config.openclaw,
+                    enabled: checked
                   }
                 })
               }
@@ -1134,37 +1032,15 @@ export function SettingsPage({
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>允许执行 shell</Label>
+            <Label>所有操作需要审批</Label>
             <Switch
-              checked={config.tools.system.execEnabled}
+              checked={config.openclaw.approvalRequired}
               onChange={(checked) =>
                 setConfig({
                   ...config,
-                  tools: {
-                    ...config.tools,
-                    system: {
-                      ...config.tools.system,
-                      execEnabled: checked
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>高风险操作需确认</Label>
-            <Switch
-              checked={config.tools.system.approvalRequired}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    system: {
-                      ...config.tools.system,
-                      approvalRequired: checked
-                    }
+                  openclaw: {
+                    ...config.openclaw,
+                    approvalRequired: checked
                   }
                 })
               }
@@ -1172,39 +1048,15 @@ export function SettingsPage({
           </div>
 
           <div className="space-y-1.5">
-            <Label>命令白名单（每行一个，空=不限制）</Label>
-            <Textarea
-              rows={3}
-              value={toListText(config.tools.system.allowedCommands)}
+            <Label>Gateway URL</Label>
+            <Input
+              value={config.openclaw.gatewayUrl}
               onChange={(event) =>
                 setConfig({
                   ...config,
-                  tools: {
-                    ...config.tools,
-                    system: {
-                      ...config.tools.system,
-                      allowedCommands: parseList(event.target.value)
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>命令阻止规则（每行一个）</Label>
-            <Textarea
-              rows={3}
-              value={toListText(config.tools.system.blockedPatterns)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    system: {
-                      ...config.tools.system,
-                      blockedPatterns: parseList(event.target.value)
-                    }
+                  openclaw: {
+                    ...config.openclaw,
+                    gatewayUrl: event.target.value
                   }
                 })
               }
@@ -1212,73 +1064,6 @@ export function SettingsPage({
           </div>
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>文件工具（Beta）</CardTitle>
-          <CardDescription>按目录白名单控制读写。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>允许读取文件</Label>
-            <Switch
-              checked={config.tools.file.readEnabled}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    file: {
-                      ...config.tools.file,
-                      readEnabled: checked
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-            <Label>允许写入文件</Label>
-            <Switch
-              checked={config.tools.file.writeEnabled}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    file: {
-                      ...config.tools.file,
-                      writeEnabled: checked
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>允许访问目录（每行一个，空=不限制）</Label>
-            <Textarea
-              rows={3}
-              value={toListText(config.tools.file.allowedPaths)}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  tools: {
-                    ...config.tools,
-                    file: {
-                      ...config.tools.file,
-                      allowedPaths: parseList(event.target.value)
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-        </CardContent>
-      </Card>
-
     </div>
   );
 }

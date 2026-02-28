@@ -66,15 +66,14 @@ export class DefaultToolRegistry implements ToolRegistry {
     const toolSet: Record<string, unknown> = {};
 
     for (const definition of this.tools.values()) {
-      if (!this.isToolEnabled(definition.name)) {
+      if (!this.isToolEnabled(definition)) {
         continue;
       }
 
       toolSet[definition.name] = tool({
         description: definition.description,
         inputSchema: definition.parameters,
-        execute: async (input) =>
-          this.execute(definition.name, input as Record<string, unknown>, context)
+        execute: async (input) => this.execute(definition.name, input as Record<string, unknown>, context)
       });
     }
 
@@ -94,6 +93,14 @@ export class DefaultToolRegistry implements ToolRegistry {
       };
     }
 
+    const config = this.getConfig();
+    if (!this.isToolEnabled(definition)) {
+      return {
+        success: false,
+        error: `工具未启用: ${name}`
+      };
+    }
+
     const parsed = definition.parameters.safeParse(params);
     if (!parsed.success) {
       return {
@@ -106,16 +113,21 @@ export class DefaultToolRegistry implements ToolRegistry {
 
     const input = parsed.data;
     const description = definition.approvalText?.(input) ?? `${name} ${JSON.stringify(input)}`;
-    const signature = `${name}:${JSON.stringify(input)}`;
+    const signature = definition.signatureKey
+      ? `${name}:${definition.signatureKey(input)}`
+      : `${name}:${JSON.stringify(input)}`;
 
-    const needsApproval = definition.requiresApproval?.(input) ?? false;
+    const needsApproval = definition.requiresApproval?.(input, config) ?? false;
     if (needsApproval) {
-      const approved = await this.approvalGuard.ensureApproved({
-        toolName: name,
-        params: input,
-        description,
-        signature
-      }, context.requestApproval);
+      const approved = await this.approvalGuard.ensureApproved(
+        {
+          toolName: name,
+          params: input,
+          description,
+          signature
+        },
+        context.requestApproval
+      );
 
       if (!approved) {
         return {
@@ -146,23 +158,9 @@ export class DefaultToolRegistry implements ToolRegistry {
     }
   }
 
-  private isToolEnabled(name: string): boolean {
-    const config = this.getConfig();
-    const definition = this.tools.get(name);
-    if (definition?.source === "mcp") {
-      return true;
-    }
-
-    if (name === "browser") {
-      return config.tools.browser.enabled;
-    }
-
-    if (name === "system") {
-      return config.tools.system.enabled;
-    }
-
-    if (name === "file") {
-      return config.tools.file.readEnabled || config.tools.file.writeEnabled;
+  private isToolEnabled(definition: ToolDefinition<any>): boolean {
+    if (definition.isEnabled) {
+      return definition.isEnabled(this.getConfig());
     }
 
     return true;

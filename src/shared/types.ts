@@ -1,38 +1,46 @@
 import { z } from "zod";
 
-export const providerSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  kind: z.enum(["openai", "anthropic", "custom-openai", "openrouter"]),
-  apiMode: z.enum(["chat", "responses"]).default("chat"),
-  apiKey: z.string().default(""),
-  baseUrl: z.string().url().optional(),
-  enabled: z.boolean().default(true)
-});
+export const providerSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    kind: z.enum(["openai", "anthropic", "custom-openai", "openrouter"]),
+    apiMode: z.enum(["chat", "responses"]).default("chat"),
+    apiKey: z.string().default(""),
+    baseUrl: z.string().url().optional(),
+    enabled: z.boolean().default(true)
+  })
+  .strict();
 
-export const modelRouteSchema = z.object({
-  providerId: z.string().min(1),
-  model: z.string().min(1)
-});
+export const modelRouteSchema = z
+  .object({
+    providerId: z.string().min(1),
+    model: z.string().min(1)
+  })
+  .strict();
 
-export const mcpRemoteServerSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  enabled: z.boolean().default(true),
-  transport: z.literal("remote"),
-  url: z.string().url(),
-  headers: z.record(z.string(), z.string()).default({})
-});
+export const mcpRemoteServerSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    enabled: z.boolean().default(true),
+    transport: z.literal("remote"),
+    url: z.string().url(),
+    headers: z.record(z.string(), z.string()).default({})
+  })
+  .strict();
 
-export const mcpStdioServerSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  enabled: z.boolean().default(true),
-  transport: z.literal("stdio"),
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({})
-});
+export const mcpStdioServerSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    enabled: z.boolean().default(true),
+    transport: z.literal("stdio"),
+    command: z.string().min(1),
+    args: z.array(z.string()).default([]),
+    env: z.record(z.string(), z.string()).default({})
+  })
+  .strict();
 
 export const mcpServerSchema = z.discriminatedUnion("transport", [
   mcpRemoteServerSchema,
@@ -50,122 +58,124 @@ export const DEFAULT_MCP_SERVERS: Array<z.output<typeof mcpServerSchema>> = [
   }
 ] as const;
 
-export const appConfigSchema = z.object({
-  characterId: z.string().default("default"),
-  telegram: z.object({
-    botToken: z.string().default(""),
-    chatId: z.string().default("")
-  }),
-  messaging: z.object({
-    allowVoiceMessages: z.boolean().default(true),
-    allowPhotoInput: z.boolean().default(true)
-  }),
-  providers: z.array(providerSchema),
-  modelRouting: z.object({
-    chat: modelRouteSchema,
-    memory: modelRouteSchema
-  }),
-  voice: z.object({
-    ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
-    ttsRate: z.string().default("+0%"),
-    ttsPitch: z.string().default("+0Hz"),
-    requestTimeoutMs: z.number().int().min(3000).max(30000).default(15000),
-    retryCount: z.number().int().min(0).max(2).default(1)
-  }),
-  alibabaVoice: z.object({
-    enabled: z.boolean().default(false),
-    apiKey: z.string().default(""),
-    region: z.enum(["cn", "intl"]).default("cn"),
-    asrModel: z.string().default("fun-asr-realtime"),
-    ttsModel: z.string().default("cosyvoice-v3-flash"),
-    ttsVoice: z.string().default("longxiaochun_v3")
-  }),
-  background: z.object({
-    keepAwake: z.boolean().default(true)
-  }),
-  pet: z.object({
-    enabled: z.boolean().default(true),
-    modelDir: z.string().default(""),
-    alwaysOnTop: z.boolean().default(true)
-  }),
-  ptt: z.object({
-    enabled: z.boolean().default(true),
-    hotkey: z.string().default("Alt+Space")
-  }),
-  realtimeVoice: z.object({
-    enabled: z.boolean().default(false),
-    whisperMode: z.enum(["local", "api"]).default("api"),
-    autoInterrupt: z.boolean().default(true)
-  }),
-  proactive: z.object({
-    enabled: z.boolean().default(false),
-    pushToTelegram: z.boolean().default(false),
-    cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
-    silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000)
-  }),
-  memory: z.object({
-    workingSetSize: z.number().int().min(10).max(100).default(30),
-    maxFacts: z.number().int().min(10).max(500).default(80)
-  }),
-  tools: z.object({
-    browser: z.object({
-      enabled: z.boolean().default(false),
-      headless: z.boolean().default(false),
-      cdpPort: z.number().int().min(1000).max(65535).default(19222),
-      allowedDomains: z.array(z.string().min(1)).default([]),
-      blockPrivateNetwork: z.boolean().default(true)
-    }),
-    system: z.object({
-      enabled: z.boolean().default(false),
-      execEnabled: z.boolean().default(false),
-      allowedCommands: z.array(z.string().min(1)).default([]),
-      blockedPatterns: z.array(z.string().min(1)).default(["rm -rf", "sudo"]),
-      approvalRequired: z.boolean().default(true)
-    }),
-    file: z.object({
-      readEnabled: z.boolean().default(true),
-      writeEnabled: z.boolean().default(false),
-      allowedPaths: z.array(z.string().min(1)).default([])
-    }),
-    mcp: z.object({
-      servers: z.array(mcpServerSchema).default(DEFAULT_MCP_SERVERS)
-    })
+export const appConfigSchema = z
+  .object({
+    characterId: z.string().default("default"),
+    telegram: z
+      .object({
+        botToken: z.string().default(""),
+        chatId: z.string().default("")
+      })
+      .strict(),
+    messaging: z
+      .object({
+        allowVoiceMessages: z.boolean().default(true),
+        allowPhotoInput: z.boolean().default(true)
+      })
+      .strict(),
+    providers: z.array(providerSchema),
+    modelRouting: z
+      .object({
+        chat: modelRouteSchema
+      })
+      .strict(),
+    voice: z
+      .object({
+        ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
+        ttsRate: z.string().default("+0%"),
+        ttsPitch: z.string().default("+0Hz"),
+        requestTimeoutMs: z.number().int().min(3000).max(30000).default(15000),
+        retryCount: z.number().int().min(0).max(2).default(1)
+      })
+      .strict(),
+    alibabaVoice: z
+      .object({
+        enabled: z.boolean().default(false),
+        apiKey: z.string().default(""),
+        region: z.enum(["cn", "intl"]).default("cn"),
+        asrModel: z.string().default("fun-asr-realtime"),
+        ttsModel: z.string().default("cosyvoice-v3-flash"),
+        ttsVoice: z.string().default("longxiaochun_v3")
+      })
+      .strict(),
+    background: z
+      .object({
+        keepAwake: z.boolean().default(true)
+      })
+      .strict(),
+    pet: z
+      .object({
+        enabled: z.boolean().default(false),
+        modelDir: z.string().default(""),
+        alwaysOnTop: z.boolean().default(true)
+      })
+      .strict(),
+    ptt: z
+      .object({
+        enabled: z.boolean().default(true),
+        hotkey: z.string().default("Alt+Space")
+      })
+      .strict(),
+    realtimeVoice: z
+      .object({
+        enabled: z.boolean().default(false),
+        whisperMode: z.enum(["local", "api"]).default("api"),
+        autoInterrupt: z.boolean().default(true)
+      })
+      .strict(),
+    proactive: z
+      .object({
+        enabled: z.boolean().default(false),
+        localOnly: z.boolean().default(true),
+        cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
+        silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000)
+      })
+      .strict(),
+    memory: z
+      .object({
+        recentMessages: z.number().int().min(10).max(200).default(40),
+        observational: z
+          .object({
+            enabled: z.boolean().default(false),
+            model: z.string().default("")
+          })
+          .strict()
+      })
+      .strict(),
+    openclaw: z
+      .object({
+        enabled: z.boolean().default(false),
+        autoInstall: z.boolean().default(true),
+        gatewayUrl: z.string().url().default("http://127.0.0.1:18789"),
+        approvalRequired: z.boolean().default(true)
+      })
+      .strict(),
+    tools: z
+      .object({
+        mcp: z
+          .object({
+            servers: z.array(mcpServerSchema).default(DEFAULT_MCP_SERVERS)
+          })
+          .strict()
+      })
+      .strict()
   })
-});
-
-export const memoryFactSchema = z.object({
-  id: z.string().min(1),
-  content: z.string().min(1),
-  confidence: z.number().min(0).max(1).default(0.5),
-  updatedAt: z.string().datetime()
-});
-
-export const memoryDocumentSchema = z.object({
-  facts: z.array(memoryFactSchema).default([])
-});
+  .strict();
 
 export type ProviderConfig = z.infer<typeof providerSchema>;
 export type ModelRoute = z.infer<typeof modelRouteSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;
-export type MemoryFact = z.infer<typeof memoryFactSchema>;
-export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
 
 export type ChatRole = "system" | "user" | "assistant";
 
 export type CommandApprovalDecision = "allow-once" | "allow-always" | "deny";
 
-export type ConsoleChatEvent =
+export type ConsoleRunEventV2 =
   | {
       requestId: string;
       type: "thinking";
       state: "start" | "stop";
-      timestamp: string;
-    }
-  | {
-      requestId: string;
-      type: "reasoning-delta";
-      delta: string;
       timestamp: string;
     }
   | {
@@ -226,7 +236,7 @@ export interface HistoryMessage {
   id: string;
   role: ChatRole;
   text: string;
-  channel: "telegram" | "system";
+  channel: "telegram" | "console";
   timestamp: string;
   meta?: {
     proactive?: boolean;
@@ -237,6 +247,7 @@ export interface CharacterProfile {
   id: string;
   name: string;
   systemPrompt: string;
+  workingMemoryTemplate?: string;
 }
 
 export interface RuntimeContext {
@@ -258,10 +269,11 @@ export interface AppStatus {
   lastUserAt: string | null;
   lastProactiveAt: string | null;
   historyCount: number;
-  memoryFacts: number;
   keepAwakeActive: boolean;
   pendingReminders: number;
   petOnline: boolean;
+  openclawOnline: boolean;
+  openclawStatus: string;
   systemPermissions: SystemPermissionStatus;
 }
 
@@ -277,15 +289,21 @@ export interface ReminderDocument {
   items: ReminderItem[];
 }
 
-export interface AssistantOutputParseResult {
-  visibleText: string;
-  voiceTexts: string[];
-  reminders: Array<{
-    time: string;
-    text: string;
-  }>;
-  emotions: string[];
+export interface WorkingMemoryDocument {
+  markdown: string;
+  updatedAt: string;
 }
+
+export const DEFAULT_WORKING_MEMORY_TEMPLATE = `# 用户档案
+- 称呼：
+- 性格特征：
+- 兴趣爱好：
+- 近期关注：
+- 情绪状态：
+- 重要日期：
+
+# 手动备注
+（用户在 Memory 页面手动添加的内容）`;
 
 export const DEFAULT_CONFIG: AppConfig = {
   characterId: "default",
@@ -319,10 +337,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     chat: {
       providerId: "anthropic-main",
       model: "claude-sonnet-4"
-    },
-    memory: {
-      providerId: "openai-main",
-      model: "gpt-4o-mini"
     }
   },
   voice: {
@@ -344,7 +358,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     keepAwake: true
   },
   pet: {
-    enabled: true,
+    enabled: false,
     modelDir: "",
     alwaysOnTop: true
   },
@@ -359,34 +373,24 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   proactive: {
     enabled: false,
-    pushToTelegram: false,
+    localOnly: true,
     cooldownMs: 25 * 60 * 1000,
     silenceThresholdMs: 40 * 60 * 1000
   },
   memory: {
-    workingSetSize: 30,
-    maxFacts: 80
+    recentMessages: 40,
+    observational: {
+      enabled: false,
+      model: ""
+    }
+  },
+  openclaw: {
+    enabled: false,
+    autoInstall: true,
+    gatewayUrl: "http://127.0.0.1:18789",
+    approvalRequired: true
   },
   tools: {
-    browser: {
-      enabled: false,
-      headless: false,
-      cdpPort: 19222,
-      allowedDomains: [],
-      blockPrivateNetwork: true
-    },
-    system: {
-      enabled: false,
-      execEnabled: false,
-      allowedCommands: [],
-      blockedPatterns: ["rm -rf", "sudo"],
-      approvalRequired: true
-    },
-    file: {
-      readEnabled: true,
-      writeEnabled: false,
-      allowedPaths: []
-    },
     mcp: {
       servers: DEFAULT_MCP_SERVERS.map((server) =>
         server.transport === "stdio"
@@ -406,10 +410,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       )
     }
   }
-};
-
-export const DEFAULT_MEMORY: MemoryDocument = {
-  facts: []
 };
 
 export const DEFAULT_REMINDERS: ReminderDocument = {

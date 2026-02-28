@@ -71,6 +71,20 @@ export function CharacterPage({
           />
         </div>
 
+        <div className="space-y-1.5">
+          <Label>Working Memory Template</Label>
+          <Textarea
+            className="min-h-[220px]"
+            value={draft.workingMemoryTemplate ?? ""}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                workingMemoryTemplate: event.target.value
+              })
+            }
+          />
+        </div>
+
         <Button
           disabled={saving}
           onClick={async () => {

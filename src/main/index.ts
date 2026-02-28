@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 import { registerIpcHandlers } from "./ipc";
-import { runtime } from "./runtime";
+import { runtime } from "./app-runtime";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PET_ENABLED_CHANNEL = "runtime:pet-enabled";
@@ -154,4 +154,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  void runtime.stop().catch((error) => {
+    console.error("Failed to stop runtime services:", error);
+  });
 });

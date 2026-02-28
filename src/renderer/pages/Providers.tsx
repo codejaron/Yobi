@@ -78,11 +78,7 @@ export function ProvidersPage({
         chat:
           config.modelRouting.chat.providerId === providerId
             ? { ...config.modelRouting.chat, providerId: fallback.id }
-            : config.modelRouting.chat,
-        memory:
-          config.modelRouting.memory.providerId === providerId
-            ? { ...config.modelRouting.memory, providerId: fallback.id }
-            : config.modelRouting.memory
+            : config.modelRouting.chat
       }
     });
   };
@@ -217,8 +213,8 @@ export function ProvidersPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>模型分配</CardTitle>
-          <CardDescription>聊天与记忆提取可使用不同模型，节省成本。</CardDescription>
+          <CardTitle>聊天模型路由</CardTitle>
+          <CardDescription>单 Agent 模式仅配置聊天模型。</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
@@ -252,45 +248,6 @@ export function ProvidersPage({
                     ...config.modelRouting,
                     chat: {
                       ...config.modelRouting.chat,
-                      model: event.target.value
-                    }
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>记忆总结 Provider</Label>
-            <Select
-              value={config.modelRouting.memory.providerId}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  modelRouting: {
-                    ...config.modelRouting,
-                    memory: {
-                      ...config.modelRouting.memory,
-                      providerId: event.target.value
-                    }
-                  }
-                })
-              }
-            >
-              {providerOptions}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>记忆总结模型</Label>
-            <Input
-              value={config.modelRouting.memory.model}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  modelRouting: {
-                    ...config.modelRouting,
-                    memory: {
-                      ...config.modelRouting.memory,
                       model: event.target.value
                     }
                   }

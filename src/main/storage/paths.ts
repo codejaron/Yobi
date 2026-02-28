@@ -21,28 +21,8 @@ export class CompanionPaths {
     return path.join(this.charactersDir, "default.json");
   }
 
-  get sessionDir(): string {
-    return path.join(this.baseDir, "sessions", "main");
-  }
-
-  get historyPath(): string {
-    return path.join(this.sessionDir, "history.jsonl");
-  }
-
-  get memoryPath(): string {
-    return path.join(this.sessionDir, "memory.json");
-  }
-
-  get contextPath(): string {
-    return path.join(this.sessionDir, "context.json");
-  }
-
   get remindersPath(): string {
-    return path.join(this.sessionDir, "reminders.json");
-  }
-
-  get topicsPath(): string {
-    return path.join(this.sessionDir, "topics.json");
+    return path.join(this.baseDir, "reminders.json");
   }
 
   get logsDir(): string {
@@ -53,10 +33,13 @@ export class CompanionPaths {
     return path.join(this.baseDir, "models");
   }
 
+  get yobiDbPath(): string {
+    return path.join(this.baseDir, "yobi.db");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.charactersDir, { recursive: true });
-    mkdirSync(this.sessionDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
   }

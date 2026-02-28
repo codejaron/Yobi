@@ -2,7 +2,7 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
-  MemoryFact
+  WorkingMemoryDocument
 } from "@shared/types";
 
 export type PageId =
@@ -25,5 +25,5 @@ export interface DataBundle {
   config: AppConfig;
   status: AppStatus | null;
   character: CharacterProfile | null;
-  memoryFacts: MemoryFact[];
+  workingMemory: WorkingMemoryDocument | null;
 }

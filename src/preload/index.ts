@@ -4,9 +4,9 @@ import type {
   AppStatus,
   CharacterProfile,
   CommandApprovalDecision,
-  ConsoleChatEvent,
+  ConsoleRunEventV2,
   HistoryMessage,
-  MemoryFact
+  WorkingMemoryDocument
 } from "@shared/types";
 import type { CompanionApi } from "@shared/ipc";
 
@@ -32,20 +32,11 @@ const api: CompanionApi = {
     return ipcRenderer.invoke("history:clear");
   },
 
-  listMemory(): Promise<MemoryFact[]> {
-    return ipcRenderer.invoke("memory:list");
+  getWorkingMemory(): Promise<WorkingMemoryDocument> {
+    return ipcRenderer.invoke("memory:get");
   },
-  upsertMemory(input: { id?: string; content: string; confidence: number }): Promise<MemoryFact> {
-    return ipcRenderer.invoke("memory:upsert", input);
-  },
-  deleteMemory(id: string): Promise<void> {
-    return ipcRenderer.invoke("memory:delete", id);
-  },
-  clearMemory(): Promise<void> {
-    return ipcRenderer.invoke("memory:clear");
-  },
-  openMemoryFileLocation(): Promise<{ path: string }> {
-    return ipcRenderer.invoke("memory:open-location");
+  saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument> {
+    return ipcRenderer.invoke("memory:save", input);
   },
 
   getStatus(): Promise<AppStatus> {
@@ -118,9 +109,9 @@ const api: CompanionApi = {
   }): Promise<{ accepted: boolean }> {
     return ipcRenderer.invoke("console:chat:approve", input);
   },
-  onConsoleChatEvent(listener: (event: ConsoleChatEvent) => void): () => void {
-    const channel = "runtime:console-chat-event";
-    const wrapped = (_event: Electron.IpcRendererEvent, payload: ConsoleChatEvent) => {
+  onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void {
+    const channel = "runtime:console-run-event";
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: ConsoleRunEventV2) => {
       listener(payload);
     };
 

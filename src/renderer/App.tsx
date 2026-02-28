@@ -3,7 +3,7 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
-  MemoryFact
+  WorkingMemoryDocument
 } from "@shared/types";
 import { SideNav } from "@renderer/components/layout/SideNav";
 import { Button } from "@renderer/components/ui/button";
@@ -28,7 +28,7 @@ function pageTitle(page: PageId): string {
     case "character":
       return "角色人设";
     case "memory":
-      return "长期记忆";
+      return "工作记忆";
     case "mcp":
       return "MCP 工具中心";
     case "settings":
@@ -43,7 +43,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [character, setCharacter] = useState<CharacterProfile | null>(null);
-  const [memoryFacts, setMemoryFacts] = useState<MemoryFact[]>([]);
+  const [workingMemory, setWorkingMemory] = useState<WorkingMemoryDocument | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
 
@@ -52,9 +52,9 @@ export default function App() {
     setStatus(next);
   }, []);
 
-  const refreshMemory = useCallback(async (): Promise<void> => {
-    const list = await window.companion.listMemory();
-    setMemoryFacts(list);
+  const refreshWorkingMemory = useCallback(async (): Promise<void> => {
+    const doc = await window.companion.getWorkingMemory();
+    setWorkingMemory(doc);
   }, []);
 
   useEffect(() => {
@@ -62,15 +62,15 @@ export default function App() {
     let unsubPetEnabled: (() => void) | null = null;
 
     const load = async (): Promise<void> => {
-      const [nextConfig, nextStatus, nextMemory] = await Promise.all([
+      const [nextConfig, nextStatus, nextWorkingMemory] = await Promise.all([
         window.companion.getConfig(),
         window.companion.getStatus(),
-        window.companion.listMemory()
+        window.companion.getWorkingMemory()
       ]);
 
       setConfig(nextConfig);
       setStatus(nextStatus);
-      setMemoryFacts(nextMemory);
+      setWorkingMemory(nextWorkingMemory);
 
       const currentCharacter = await window.companion.getCharacter(nextConfig.characterId);
 
@@ -179,25 +179,15 @@ export default function App() {
     if (activePage === "memory") {
       return (
         <MemoryPage
-          facts={memoryFacts}
-          onUpsert={async (input) => {
-            await window.companion.upsertMemory(input);
-            await refreshMemory();
-            setNotice("记忆已更新");
+          document={workingMemory}
+          onSave={async (markdown) => {
+            const saved = await window.companion.saveWorkingMemory({ markdown });
+            setWorkingMemory(saved);
+            setNotice("工作记忆已更新");
           }}
-          onDelete={async (id) => {
-            await window.companion.deleteMemory(id);
-            await refreshMemory();
-            setNotice("记忆已删除");
-          }}
-          onClearAll={async () => {
-            await window.companion.clearMemory();
-            await refreshMemory();
-            setNotice("长期记忆已清空");
-          }}
-          onOpenFileLocation={async () => {
-            await window.companion.openMemoryFileLocation();
-            setNotice("已打开记忆文件位置");
+          onRefresh={async () => {
+            await refreshWorkingMemory();
+            setNotice("已刷新工作记忆");
           }}
         />
       );
@@ -208,7 +198,7 @@ export default function App() {
     }
 
     return <SettingsPage config={config} setConfig={setConfig} />;
-  }, [activePage, character, config, memoryFacts, refreshMemory, refreshStatus, status]);
+  }, [activePage, character, config, refreshStatus, status, workingMemory, refreshWorkingMemory]);
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">

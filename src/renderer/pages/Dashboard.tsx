@@ -30,6 +30,50 @@ function formatPermission(value: PermissionState | undefined): string {
   return "未知";
 }
 
+function formatOpenClawStatus(value: string | undefined): string {
+  if (!value) {
+    return "状态未知";
+  }
+
+  if (value === "disabled") {
+    return "已关闭（未启动）";
+  }
+
+  if (value === "checking") {
+    return "正在检查安装状态";
+  }
+
+  if (value === "installing") {
+    return "正在自动安装 OpenClaw";
+  }
+
+  if (value === "syncing-llm") {
+    return "正在同步模型配置";
+  }
+
+  if (value === "starting-gateway") {
+    return "正在启动 Gateway";
+  }
+
+  if (value === "online") {
+    return "Gateway 已就绪";
+  }
+
+  if (value === "not-installed") {
+    return "未安装，且自动安装已关闭";
+  }
+
+  if (value === "gateway-exited") {
+    return "Gateway 已退出";
+  }
+
+  if (value.startsWith("gateway-error:")) {
+    return `Gateway 错误：${value.replace("gateway-error:", "").trim()}`;
+  }
+
+  return value;
+}
+
 const SYSTEM_PERMISSION_ITEMS: Array<{
   key: keyof AppStatus["systemPermissions"];
   label: string;
@@ -245,14 +289,16 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>长期记忆</CardDescription>
+            <CardDescription>OpenClaw</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
               <Sparkles className="h-4 w-4" />
-              {status?.memoryFacts ?? 0} 条事实
+              {status?.openclawOnline ? "在线" : "离线"}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">每隔一定轮次自动提炼，也支持手动编辑。</p>
+            <p className="text-sm text-muted-foreground">
+              {formatOpenClawStatus(status?.openclawStatus)}
+            </p>
           </CardContent>
         </Card>
       </div>

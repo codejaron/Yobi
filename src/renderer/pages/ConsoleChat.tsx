@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppConfig, CommandApprovalDecision, ConsoleChatEvent, HistoryMessage } from "@shared/types";
+import type { AppConfig, CommandApprovalDecision, ConsoleRunEventV2, HistoryMessage } from "@shared/types";
 import { Loader2, Mic, Square, Trash2 } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -16,7 +16,7 @@ import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 
 type MessageRole = "user" | "assistant";
 type MessageState = "streaming" | "done" | "error";
-type ActionKind = "thinking" | "reasoning" | "tool" | "approval" | "status" | "error";
+type ActionKind = "thinking" | "tool" | "approval" | "status" | "error";
 
 interface ConsoleMessage {
   id: string;
@@ -144,10 +144,6 @@ function actionColor(kind: ActionKind): string {
     return "border-sky-200 bg-sky-50/90";
   }
 
-  if (kind === "reasoning") {
-    return "border-violet-200 bg-violet-50/90";
-  }
-
   if (kind === "tool") {
     return "border-amber-200 bg-amber-50/90";
   }
@@ -205,42 +201,6 @@ export function ConsoleChatPage() {
     });
   }, [logEnabled]);
 
-  const upsertReasoningAction = useCallback((event: Extract<ConsoleChatEvent, { type: "reasoning-delta" }>) => {
-    if (!logEnabled) {
-      return;
-    }
-
-    setActions((prev) => {
-      const id = `reasoning-${event.requestId}`;
-      const index = prev.findIndex((item) => item.id === id);
-
-      if (index < 0) {
-        const created: ActionItem = {
-          id,
-          requestId: event.requestId,
-          kind: "reasoning",
-          label: "Thinking",
-          detail: summarize(event.delta, 360),
-          timestamp: event.timestamp
-        };
-
-        return [
-          ...prev,
-          created
-        ].slice(-90);
-      }
-
-      const next = [...prev];
-      const merged = `${next[index].detail}${event.delta}`;
-      next[index] = {
-        ...next[index],
-        detail: summarize(merged, 420),
-        timestamp: event.timestamp
-      };
-      return next;
-    });
-  }, [logEnabled]);
-
   const upsertAssistantMessage = useCallback((requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
     setLiveMessages((prev) => {
       const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
@@ -262,7 +222,7 @@ export function ConsoleChatPage() {
     });
   }, []);
 
-  const handleChatEvent = useCallback((event: ConsoleChatEvent) => {
+  const handleChatEvent = useCallback((event: ConsoleRunEventV2) => {
     if (event.type === "thinking") {
       appendAction({
         requestId: event.requestId,
@@ -271,11 +231,6 @@ export function ConsoleChatPage() {
         detail: event.state === "start" ? "模型开始规划动作" : "模型已结束本轮思考",
         timestamp: event.timestamp
       });
-      return;
-    }
-
-    if (event.type === "reasoning-delta") {
-      upsertReasoningAction(event);
       return;
     }
 
@@ -377,7 +332,7 @@ export function ConsoleChatPage() {
       detail: event.message,
       timestamp: event.timestamp
     });
-  }, [appendAction, upsertAssistantMessage, upsertReasoningAction]);
+  }, [appendAction, upsertAssistantMessage]);
 
   const loadLatestHistory = useCallback(async () => {
     try {
@@ -605,7 +560,7 @@ export function ConsoleChatPage() {
   );
 
   useEffect(() => {
-    return window.companion.onConsoleChatEvent((event) => {
+    return window.companion.onConsoleRunEvent((event) => {
       handleChatEvent(event);
     });
   }, [handleChatEvent]);

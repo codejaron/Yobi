@@ -13,152 +13,27 @@ const EXA_LOCKED_SERVER: Extract<McpServerList[number], { transport: "remote" }>
   headers: {}
 };
 
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-
-  return Math.max(min, Math.min(max, Math.round(numeric)));
-}
-
-function normalizeString(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value.trim() : fallback;
-}
-
-function normalizeHotkey(value: unknown, fallback: string): string {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const normalized = value
-    .split("+")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .join("+");
-
-  return normalized || fallback;
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter(Boolean);
-}
-
-function normalizeStringMap(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  const normalized: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(value)) {
-    const key = normalizeString(rawKey);
-    const mappedValue = normalizeString(rawValue);
-    if (!key || !mappedValue) {
-      continue;
-    }
-    normalized[key] = mappedValue;
-  }
-
-  return normalized;
-}
-
 function cloneMcpServers(servers: McpServerList): McpServerList {
-  const cloned: McpServerList = [];
-  for (const server of servers) {
-    if (server.transport === "stdio") {
-      cloned.push({
-        ...server,
-        args: [...server.args],
-        env: {
-          ...server.env
+  return servers.map((server) =>
+    server.transport === "stdio"
+      ? {
+          ...server,
+          args: [...server.args],
+          env: {
+            ...server.env
+          }
         }
-      });
-      continue;
-    }
-
-    cloned.push({
-      ...server,
-      headers: {
-        ...server.headers
-      }
-    });
-  }
-
-  return cloned;
-}
-
-function normalizeMcpServers(
-  value: unknown,
-  fallback: McpServerList
-): McpServerList {
-  if (!Array.isArray(value)) {
-    return cloneMcpServers(fallback);
-  }
-
-  if (value.length === 0) {
-    return [];
-  }
-
-  const normalized: McpServerList = [];
-  for (const [index, candidate] of value.entries()) {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      continue;
-    }
-
-    const server = candidate as Record<string, unknown>;
-    const id = normalizeString(server.id, `mcp-${index + 1}`);
-    const label = normalizeString(server.label, id || `MCP Server ${index + 1}`);
-    const enabled =
-      typeof server.enabled === "boolean"
-        ? server.enabled
-        : typeof server.disabled === "boolean"
-          ? !server.disabled
-          : true;
-
-    if (server.transport === "stdio") {
-      const command = normalizeString(server.command);
-      if (!command) {
-        continue;
-      }
-
-      normalized.push({
-        id,
-        label,
-        enabled,
-        transport: "stdio",
-        command,
-        args: normalizeStringList(server.args),
-        env: normalizeStringMap(server.env)
-      });
-      continue;
-    }
-
-    const url = normalizeString(server.url);
-    if (!url) {
-      continue;
-    }
-
-    normalized.push({
-      id,
-      label,
-      enabled,
-      transport: "remote",
-      url,
-      headers: normalizeStringMap(server.headers)
-    });
-  }
-
-  return normalized;
+      : {
+          ...server,
+          headers: {
+            ...server.headers
+          }
+        }
+  );
 }
 
 function ensureLockedExaServer(servers: McpServerList): McpServerList {
-  const others = servers.filter((server) => server.id !== EXA_LOCKED_SERVER.id);
+  const others = cloneMcpServers(servers).filter((server) => server.id !== EXA_LOCKED_SERVER.id);
   return [
     {
       ...EXA_LOCKED_SERVER,
@@ -180,160 +55,20 @@ export class ConfigStore {
 
     const exists = await fileExists(this.paths.configPath);
     if (!exists) {
-      this.cached = DEFAULT_CONFIG;
+      this.cached = this.prepareConfig(DEFAULT_CONFIG);
       await writeJsonFile(this.paths.configPath, this.cached);
       return;
     }
 
-    const raw = await readJsonFile<AppConfig>(this.paths.configPath, DEFAULT_CONFIG);
-    const merged = {
-      ...DEFAULT_CONFIG,
-      ...raw,
-      telegram: {
-        ...DEFAULT_CONFIG.telegram,
-        ...raw.telegram
-      },
-      messaging: {
-        ...DEFAULT_CONFIG.messaging,
-        ...raw.messaging
-      },
-      voice: {
-        ...DEFAULT_CONFIG.voice,
-        ...raw.voice
-      },
-      alibabaVoice: {
-        ...DEFAULT_CONFIG.alibabaVoice,
-        ...raw.alibabaVoice
-      },
-      background: {
-        ...DEFAULT_CONFIG.background,
-        ...raw.background
-      },
-      pet: {
-        ...DEFAULT_CONFIG.pet,
-        ...raw.pet
-      },
-      ptt: {
-        ...DEFAULT_CONFIG.ptt,
-        ...raw.ptt
-      },
-      realtimeVoice: {
-        ...DEFAULT_CONFIG.realtimeVoice,
-        ...raw.realtimeVoice
-      },
-      proactive: {
-        ...DEFAULT_CONFIG.proactive,
-        ...raw.proactive
-      },
-      memory: {
-        ...DEFAULT_CONFIG.memory,
-        ...raw.memory
-      },
-      tools: {
-        browser: {
-          ...DEFAULT_CONFIG.tools.browser,
-          ...raw.tools?.browser
-        },
-        system: {
-          ...DEFAULT_CONFIG.tools.system,
-          ...raw.tools?.system
-        },
-        file: {
-          ...DEFAULT_CONFIG.tools.file,
-          ...raw.tools?.file
-        },
-        mcp: {
-          ...DEFAULT_CONFIG.tools.mcp,
-          ...raw.tools?.mcp
-        }
-      },
-      modelRouting: {
-        chat: {
-          ...DEFAULT_CONFIG.modelRouting.chat,
-          ...raw.modelRouting?.chat
-        },
-        memory: {
-          ...DEFAULT_CONFIG.modelRouting.memory,
-          ...raw.modelRouting?.memory
-        }
-      }
-    };
+    const raw = await readJsonFile<unknown>(this.paths.configPath, null);
+    const parsed = appConfigSchema.safeParse(raw);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const path = issue?.path?.join(".") || "(root)";
+      throw new Error(`配置文件格式不合法，请删除并重新生成：${path} ${issue?.message ?? ""}`.trim());
+    }
 
-    merged.voice = {
-      ...merged.voice,
-      requestTimeoutMs: clampInt(
-        merged.voice?.requestTimeoutMs,
-        3000,
-        30000,
-        DEFAULT_CONFIG.voice.requestTimeoutMs
-      ),
-      retryCount: clampInt(
-        merged.voice?.retryCount,
-        0,
-        2,
-        DEFAULT_CONFIG.voice.retryCount
-      )
-    };
-    merged.alibabaVoice = {
-      ...merged.alibabaVoice,
-      apiKey: normalizeString(merged.alibabaVoice?.apiKey, ""),
-      region: merged.alibabaVoice?.region === "intl" ? "intl" : "cn",
-      asrModel: normalizeString(merged.alibabaVoice?.asrModel, DEFAULT_CONFIG.alibabaVoice.asrModel),
-      ttsModel: normalizeString(merged.alibabaVoice?.ttsModel, DEFAULT_CONFIG.alibabaVoice.ttsModel),
-      ttsVoice: normalizeString(merged.alibabaVoice?.ttsVoice, DEFAULT_CONFIG.alibabaVoice.ttsVoice)
-    };
-    merged.telegram = {
-      ...merged.telegram,
-      botToken: normalizeString(merged.telegram?.botToken, ""),
-      chatId: normalizeString(merged.telegram?.chatId, "")
-    };
-    merged.ptt = {
-      ...merged.ptt,
-      hotkey: normalizeHotkey(merged.ptt?.hotkey, DEFAULT_CONFIG.ptt.hotkey)
-    };
-    merged.memory = {
-      ...merged.memory,
-      workingSetSize: clampInt(
-        merged.memory?.workingSetSize,
-        10,
-        100,
-        DEFAULT_CONFIG.memory.workingSetSize
-      ),
-      maxFacts: clampInt(
-        merged.memory?.maxFacts,
-        10,
-        500,
-        DEFAULT_CONFIG.memory.maxFacts
-      )
-    };
-
-    merged.tools = {
-      browser: {
-        ...merged.tools.browser,
-        allowedDomains: normalizeStringList(merged.tools.browser.allowedDomains)
-      },
-      system: {
-        ...merged.tools.system,
-        allowedCommands: normalizeStringList(merged.tools.system.allowedCommands),
-        blockedPatterns: normalizeStringList(merged.tools.system.blockedPatterns)
-      },
-      file: {
-        ...merged.tools.file,
-        allowedPaths: normalizeStringList(merged.tools.file.allowedPaths)
-      },
-      mcp: {
-        ...merged.tools.mcp,
-        servers: ensureLockedExaServer(
-          normalizeMcpServers(
-            merged.tools.mcp?.servers,
-            DEFAULT_CONFIG.tools.mcp.servers
-          )
-        )
-      }
-    };
-
-    this.cached = appConfigSchema.parse(merged);
-    await writeJsonFile(this.paths.configPath, this.cached);
+    this.cached = this.prepareConfig(parsed.data);
   }
 
   getConfig(): AppConfig {
@@ -341,78 +76,22 @@ export class ConfigStore {
   }
 
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
-    const normalized = {
-      ...nextConfig,
-      telegram: {
-        ...nextConfig.telegram,
-        botToken: normalizeString(nextConfig.telegram.botToken, ""),
-        chatId: normalizeString(nextConfig.telegram.chatId, "")
-      },
-      voice: {
-        ...nextConfig.voice,
-        requestTimeoutMs: clampInt(
-          nextConfig.voice.requestTimeoutMs,
-          3000,
-          30000,
-          DEFAULT_CONFIG.voice.requestTimeoutMs
-        ),
-        retryCount: clampInt(nextConfig.voice.retryCount, 0, 2, DEFAULT_CONFIG.voice.retryCount)
-      },
-      alibabaVoice: {
-        ...nextConfig.alibabaVoice,
-        apiKey: normalizeString(nextConfig.alibabaVoice.apiKey, ""),
-        region: nextConfig.alibabaVoice.region === "intl" ? "intl" : "cn",
-        asrModel: normalizeString(nextConfig.alibabaVoice.asrModel, DEFAULT_CONFIG.alibabaVoice.asrModel),
-        ttsModel: normalizeString(nextConfig.alibabaVoice.ttsModel, DEFAULT_CONFIG.alibabaVoice.ttsModel),
-        ttsVoice: normalizeString(nextConfig.alibabaVoice.ttsVoice, DEFAULT_CONFIG.alibabaVoice.ttsVoice)
-      },
-      ptt: {
-        ...nextConfig.ptt,
-        hotkey: normalizeHotkey(nextConfig.ptt.hotkey, DEFAULT_CONFIG.ptt.hotkey)
-      },
-      memory: {
-        ...nextConfig.memory,
-        workingSetSize: clampInt(
-          nextConfig.memory.workingSetSize,
-          10,
-          100,
-          DEFAULT_CONFIG.memory.workingSetSize
-        ),
-        maxFacts: clampInt(
-          nextConfig.memory.maxFacts,
-          10,
-          500,
-          DEFAULT_CONFIG.memory.maxFacts
-        )
-      },
+    const parsed = appConfigSchema.parse(nextConfig);
+    this.cached = this.prepareConfig(parsed);
+    await writeJsonFile(this.paths.configPath, this.cached);
+    return this.cached;
+  }
+
+  private prepareConfig(config: AppConfig): AppConfig {
+    return {
+      ...config,
       tools: {
-        browser: {
-          ...nextConfig.tools.browser,
-          allowedDomains: normalizeStringList(nextConfig.tools.browser.allowedDomains)
-        },
-        system: {
-          ...nextConfig.tools.system,
-          allowedCommands: normalizeStringList(nextConfig.tools.system.allowedCommands),
-          blockedPatterns: normalizeStringList(nextConfig.tools.system.blockedPatterns)
-        },
-        file: {
-          ...nextConfig.tools.file,
-          allowedPaths: normalizeStringList(nextConfig.tools.file.allowedPaths)
-        },
+        ...config.tools,
         mcp: {
-          ...nextConfig.tools.mcp,
-          servers: ensureLockedExaServer(
-            normalizeMcpServers(
-              nextConfig.tools.mcp.servers,
-              DEFAULT_CONFIG.tools.mcp.servers
-            )
-          )
+          ...config.tools.mcp,
+          servers: ensureLockedExaServer(config.tools.mcp.servers)
         }
       }
     };
-
-    this.cached = appConfigSchema.parse(normalized);
-    await writeJsonFile(this.paths.configPath, this.cached);
-    return this.cached;
   }
 }

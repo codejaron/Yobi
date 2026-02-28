@@ -17,9 +17,7 @@ export interface ToolApprovalRequest {
   signature: string;
 }
 
-export type ToolApprovalHandler = (
-  request: ToolApprovalRequest
-) => Promise<ToolApprovalDecision>;
+export type ToolApprovalHandler = (request: ToolApprovalRequest) => Promise<ToolApprovalDecision>;
 
 export interface ToolResult {
   success: boolean;
@@ -29,7 +27,7 @@ export interface ToolResult {
 }
 
 export interface ToolExecutionContext {
-  channel: "telegram" | "system";
+  channel: "telegram" | "console";
   userMessage: string;
   getConfig: () => AppConfig;
   requestApproval?: ToolApprovalHandler;
@@ -40,8 +38,10 @@ export interface ToolDefinition<TInput extends Record<string, unknown> = Record<
   description: string;
   parameters: z.ZodType<TInput>;
   source?: "builtin" | "mcp";
-  requiresApproval?: (params: TInput) => boolean;
+  isEnabled?: (config: AppConfig) => boolean;
+  requiresApproval?: (params: TInput, config: AppConfig) => boolean;
   approvalText?: (params: TInput) => string;
+  signatureKey?: (params: TInput) => string;
   execute(params: TInput, context: ToolExecutionContext): Promise<ToolResult>;
   dispose?: () => Promise<void>;
 }
@@ -57,9 +57,7 @@ export interface ToolRegistry {
   unregisterBySource(source: NonNullable<ToolDefinition["source"]>): Promise<void>;
   list(): ToolDefinition<any>[];
   getSchemas(): FunctionSchema[];
-  getToolSet(
-    context: Omit<ToolExecutionContext, "getConfig">
-  ): ToolSet;
+  getToolSet(context: Omit<ToolExecutionContext, "getConfig">): ToolSet;
   execute(
     name: string,
     params: Record<string, unknown>,
