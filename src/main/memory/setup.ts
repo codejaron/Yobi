@@ -76,6 +76,15 @@ function toHistoryMessage(message: MastraDBMessage): HistoryMessage | null {
 
   const metadata = message.content?.metadata ?? {};
   const channel = metadata.channel === "telegram" ? "telegram" : "console";
+  const source: "claw" | "yobi" | undefined =
+    metadata.source === "claw" ? "claw" : metadata.source === "yobi" ? "yobi" : undefined;
+  const meta =
+    typeof metadata.proactive === "boolean" || source
+      ? {
+          proactive: typeof metadata.proactive === "boolean" ? metadata.proactive : undefined,
+          source
+        }
+      : undefined;
 
   return {
     id: message.id,
@@ -86,12 +95,7 @@ function toHistoryMessage(message: MastraDBMessage): HistoryMessage | null {
       message.createdAt instanceof Date
         ? message.createdAt.toISOString()
         : new Date(message.createdAt).toISOString(),
-    meta:
-      typeof metadata.proactive === "boolean"
-        ? {
-            proactive: metadata.proactive
-          }
-        : undefined
+    meta
   };
 }
 

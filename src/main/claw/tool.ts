@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@main/tools/types";
-import type { OpenClawClient } from "./client";
+import type { ClawChannel } from "./claw-channel";
+
+const DEFAULT_SESSION_KEY = "main";
 
 function classifyAction(instruction: string): string {
   const normalized = instruction.toLowerCase();
@@ -64,38 +66,35 @@ function classifyRisk(instruction: string): "low" | "medium" | "high" {
   return "low";
 }
 
-export function createOpenClawToolDefinition(client: OpenClawClient): ToolDefinition<{ instruction: string }> {
+export function createClawToolDefinition(channel: ClawChannel): ToolDefinition<{ instruction: string }> {
   return {
-    name: "openclaw",
+    name: "claw",
     source: "builtin",
     description:
-      "操控电脑：打开应用、浏览网页、发邮件、管理文件、执行命令等。用自然语言描述你要做的操作。",
+      "将操作指令交给 Claw 执行（打开应用、浏览网页、文件操作、命令执行等），并在 Claw 页查看实时进度。",
     parameters: z.object({
       instruction: z.string().min(1)
     }),
     isEnabled: (config) => config.openclaw.enabled,
     requiresApproval: (_params, config) => config.openclaw.approvalRequired,
-    approvalText: ({ instruction }) => `OpenClaw 执行：${instruction.trim()}`,
+    approvalText: ({ instruction }) => `Claw 执行：${instruction.trim()}`,
     signatureKey: ({ instruction }) => {
       const normalized = instruction.replace(/\s+/g, " ").trim();
       return `${classifyAction(normalized)}|${classifyTarget(normalized)}|${classifyRisk(normalized)}`;
     },
     execute: async ({ instruction }) => {
-      const result = await client.send(instruction);
-      if (!result.ok) {
+      try {
+        await channel.sendFromYobi(DEFAULT_SESSION_KEY, instruction);
+      } catch (error) {
         return {
           success: false,
-          error: result.text,
-          data: result.raw
+          error: error instanceof Error ? error.message : "Claw 当前不可用"
         };
       }
 
       return {
         success: true,
-        data: {
-          text: result.text,
-          raw: result.raw
-        }
+        data: "已让 Claw 去处理了，你可以切到 Claw 查看进度。"
       };
     }
   };

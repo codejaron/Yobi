@@ -24,6 +24,22 @@ export class ConsoleChannel {
     }
   }
 
+  emitExternalAssistantMessage(input: { text: string; source: "claw" }): void {
+    const text = input.text.trim();
+    if (!text) {
+      return;
+    }
+
+    this.emit({
+      requestId: `external-${randomUUID()}`,
+      type: "external-assistant-message",
+      messageId: randomUUID(),
+      text,
+      source: input.source,
+      timestamp: new Date().toISOString()
+    });
+  }
+
   makeApprovalHandler(requestId: string): ToolApprovalHandler {
     return async (request: ToolApprovalRequest) => {
       if (this.listeners.size === 0) {

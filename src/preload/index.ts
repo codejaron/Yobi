@@ -3,6 +3,8 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
+  ClawEvent,
+  ClawHistoryItem,
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
@@ -117,6 +119,38 @@ const api: CompanionApi = {
 
     ipcRenderer.on(channel, wrapped);
     ipcRenderer.send("console:chat:subscribe");
+
+    return () => {
+      ipcRenderer.removeListener(channel, wrapped);
+    };
+  },
+  clawConnect(): Promise<{ connected: boolean; message: string }> {
+    return ipcRenderer.invoke("claw:connect");
+  },
+  clawDisconnect(): Promise<{ connected: boolean; message: string }> {
+    return ipcRenderer.invoke("claw:disconnect");
+  },
+  clawSend(message: string): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("claw:send", {
+      message
+    });
+  },
+  clawHistory(limit?: number): Promise<{ items: ClawHistoryItem[] }> {
+    return ipcRenderer.invoke("claw:history", {
+      limit
+    });
+  },
+  clawAbort(): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("claw:abort");
+  },
+  onClawEvent(listener: (event: ClawEvent) => void): () => void {
+    const channel = "runtime:claw-event";
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: ClawEvent) => {
+      listener(payload);
+    };
+
+    ipcRenderer.on(channel, wrapped);
+    ipcRenderer.send("claw:subscribe");
 
     return () => {
       ipcRenderer.removeListener(channel, wrapped);

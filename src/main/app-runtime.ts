@@ -9,6 +9,8 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
+  ClawEvent,
+  ClawHistoryItem,
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
@@ -38,8 +40,9 @@ import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
 import { GlobalPetPushToTalkService, type GlobalPttPhase } from "@main/services/global-ptt";
 import { OpenClawRuntime } from "@main/openclaw/runtime";
-import { OpenClawClient } from "@main/openclaw/client";
-import { createOpenClawToolDefinition } from "@main/openclaw/tool";
+import { ClawClient } from "@main/claw/claw-client";
+import { ClawChannel } from "@main/claw/claw-channel";
+import { createClawToolDefinition } from "@main/claw/tool";
 import { createBuiltinTools } from "@main/tools/builtin";
 import { ApprovalGuard } from "@main/tools/guard/approval";
 import { DefaultToolRegistry } from "@main/tools/registry";
@@ -118,9 +121,33 @@ export class CompanionRuntime {
   private readonly pet = new PetWindowController();
   private readonly realtimeVoice = new RealtimeVoiceService();
   private readonly globalPtt = new GlobalPetPushToTalkService();
-  private readonly openclawClient = new OpenClawClient(() => this.configStore.getConfig());
   private readonly openclawRuntime = new OpenClawRuntime(this.paths, () => {
     void this.emitStatus();
+  });
+  private readonly clawClient = new ClawClient(
+    () => this.configStore.getConfig(),
+    () => this.openclawRuntime.getGatewayAuthToken()
+  );
+  private readonly clawChannel = new ClawChannel(this.clawClient, {
+    defaultSessionKey: "main",
+    onYobiFinal: async ({ text }) => {
+      await this.memory.rememberMessage({
+        threadId: PRIMARY_THREAD_ID,
+        resourceId: PRIMARY_RESOURCE_ID,
+        role: "assistant",
+        text,
+        metadata: {
+          channel: "console",
+          source: "claw"
+        }
+      });
+
+      this.consoleChannel.emitExternalAssistantMessage({
+        text,
+        source: "claw"
+      });
+      await this.emitStatus();
+    }
   });
 
   private readonly reminderService = new ReminderService(this.reminderStore, {
@@ -133,6 +160,7 @@ export class CompanionRuntime {
   });
 
   private statusListeners = new Set<(status: AppStatus) => void>();
+  private clawEventListeners = new Set<(event: ClawEvent) => void>();
   private lastUserAt: string | null = null;
   private lastProactiveAt: string | null = null;
   private silenceTimer: NodeJS.Timeout | null = null;
@@ -152,6 +180,12 @@ export class CompanionRuntime {
 
     this.registerBuiltinTools();
     await this.mcpManager.init(this.toolRegistry);
+
+    this.clawChannel.onEvent((event) => {
+      for (const listener of this.clawEventListeners) {
+        listener(event);
+      }
+    });
   }
 
   async start(): Promise<void> {
@@ -165,7 +199,16 @@ export class CompanionRuntime {
     this.syncRealtimeVoice();
     this.startSilenceLoop();
 
-    void this.openclawRuntime.start(this.getConfig());
+    await this.openclawRuntime.start(this.getConfig());
+    const openclawStatus = this.openclawRuntime.getStatus();
+
+    if (this.getConfig().openclaw.enabled && openclawStatus.online) {
+      void this.clawChannel.connect().catch(() => {
+        // 连接失败时由 ClawClient 重连策略继续处理
+      });
+    } else {
+      await this.clawChannel.disconnect();
+    }
     await this.emitStatus();
   }
 
@@ -181,7 +224,9 @@ export class CompanionRuntime {
     this.petPttRecording = false;
     this.realtimeVoice.stop();
     this.backgroundTasks.stop();
+    await this.clawChannel.disconnect();
     await this.openclawRuntime.stop();
+    this.clawChannel.dispose();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
     await this.telegram.stop();
@@ -198,6 +243,13 @@ export class CompanionRuntime {
 
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void {
     return this.consoleChannel.onEvent(listener);
+  }
+
+  onClawEvent(listener: (event: ClawEvent) => void): () => void {
+    this.clawEventListeners.add(listener);
+    return () => {
+      this.clawEventListeners.delete(listener);
+    };
   }
 
   getConfig(): AppConfig {
@@ -471,6 +523,116 @@ export class CompanionRuntime {
     return this.consoleChannel.resolveApproval(input);
   }
 
+  async clawConnect(): Promise<{ connected: boolean; message: string }> {
+    const gatewayReadyReason = this.getClawGatewayReadyError();
+    if (gatewayReadyReason) {
+      return {
+        connected: false,
+        message: gatewayReadyReason
+      };
+    }
+
+    try {
+      await this.clawChannel.connect();
+      return {
+        connected: true,
+        message: "Claw 已连接"
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        message: error instanceof Error ? error.message : "Claw 连接失败"
+      };
+    }
+  }
+
+  async clawDisconnect(): Promise<{ connected: boolean; message: string }> {
+    await this.clawChannel.disconnect();
+    return {
+      connected: false,
+      message: "Claw 已断开"
+    };
+  }
+
+  async clawSend(message: string): Promise<{ accepted: boolean; message: string }> {
+    const normalized = message.trim();
+    if (!normalized) {
+      throw new Error("消息不能为空");
+    }
+
+    const gatewayReadyReason = this.getClawGatewayReadyError();
+    if (gatewayReadyReason) {
+      return {
+        accepted: false,
+        message: gatewayReadyReason
+      };
+    }
+
+    try {
+      await this.clawChannel.sendFromClaw("main", normalized);
+      return {
+        accepted: true,
+        message: "消息已发送到 Claw"
+      };
+    } catch (error) {
+      return {
+        accepted: false,
+        message: error instanceof Error ? error.message : "发送失败"
+      };
+    }
+  }
+
+  async clawHistory(limit = 50): Promise<{ items: ClawHistoryItem[] }> {
+    const gatewayReadyReason = this.getClawGatewayReadyError();
+    if (gatewayReadyReason) {
+      return {
+        items: []
+      };
+    }
+
+    const items = await this.clawChannel.getHistory("main", limit);
+    return {
+      items
+    };
+  }
+
+  async clawAbort(): Promise<{ accepted: boolean; message: string }> {
+    const gatewayReadyReason = this.getClawGatewayReadyError();
+    if (gatewayReadyReason) {
+      return {
+        accepted: false,
+        message: gatewayReadyReason
+      };
+    }
+
+    try {
+      await this.clawChannel.abort("main");
+      return {
+        accepted: true,
+        message: "已发送中止请求"
+      };
+    } catch (error) {
+      return {
+        accepted: false,
+        message: error instanceof Error ? error.message : "中止失败"
+      };
+    }
+  }
+
+  private getClawGatewayReadyError(): string | null {
+    const config = this.getConfig();
+    if (!config.openclaw.enabled) {
+      return "OpenClaw 未启用";
+    }
+
+    const status = this.openclawRuntime.getStatus();
+    if (!status.online) {
+      return "OpenClaw Gateway 尚未就绪，请稍后再试。";
+    }
+
+    return null;
+  }
+
   async chatFromPet(text: string): Promise<{ replyText: string }> {
     const normalized = text.trim();
     if (!normalized) {
@@ -579,7 +741,7 @@ export class CompanionRuntime {
   }
 
   private registerBuiltinTools(): void {
-    this.toolRegistry.register(createOpenClawToolDefinition(this.openclawClient));
+    this.toolRegistry.register(createClawToolDefinition(this.clawChannel));
 
     for (const builtin of createBuiltinTools({
       reminderService: this.reminderService,
@@ -1087,7 +1249,11 @@ export class CompanionRuntime {
 
     if (JSON.stringify(previousConfig.openclaw) !== JSON.stringify(nextConfig.openclaw)) {
       await this.runConfigSideEffect("重启 OpenClaw", 20_000, async () => {
+        await this.clawChannel.disconnect();
         await this.openclawRuntime.start(nextConfig);
+        if (nextConfig.openclaw.enabled && this.openclawRuntime.getStatus().online) {
+          await this.clawChannel.connect();
+        }
       });
     }
 

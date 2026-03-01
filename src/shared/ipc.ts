@@ -2,6 +2,8 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
+  ClawEvent,
+  ClawHistoryItem,
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
@@ -53,4 +55,11 @@ export interface CompanionApi {
     decision: CommandApprovalDecision;
   }): Promise<{ accepted: boolean }>;
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void;
+
+  clawConnect(): Promise<{ connected: boolean; message: string }>;
+  clawDisconnect(): Promise<{ connected: boolean; message: string }>;
+  clawSend(message: string): Promise<{ accepted: boolean; message: string }>;
+  clawHistory(limit?: number): Promise<{ items: ClawHistoryItem[] }>;
+  clawAbort(): Promise<{ accepted: boolean; message: string }>;
+  onClawEvent(listener: (event: ClawEvent) => void): () => void;
 }

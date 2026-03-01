@@ -3,14 +3,17 @@ import type { OpenDialogOptions } from "electron";
 import type {
   AppConfig,
   CharacterProfile,
+  ClawEvent,
   CommandApprovalDecision
 } from "@shared/types";
 import { runtime } from "./app-runtime";
 
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
+const CLAW_EVENT_CHANNEL = "runtime:claw-event";
 const statusSubscriptions = new Map<number, () => void>();
 const consoleRunSubscriptions = new Map<number, () => void>();
+const clawEventSubscriptions = new Map<number, () => void>();
 
 export function registerIpcHandlers(): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
@@ -108,12 +111,26 @@ export function registerIpcHandlers(): void {
     ) => runtime.resolveConsoleApproval(payload)
   );
 
+  ipcMain.handle("claw:connect", () => runtime.clawConnect());
+  ipcMain.handle("claw:disconnect", () => runtime.clawDisconnect());
+  ipcMain.handle("claw:send", (_, payload: { message?: string }) =>
+    runtime.clawSend(payload?.message ?? "")
+  );
+  ipcMain.handle("claw:history", (_, payload: { limit?: number }) =>
+    runtime.clawHistory(payload?.limit ?? 50)
+  );
+  ipcMain.handle("claw:abort", () => runtime.clawAbort());
+
   ipcMain.on("status:subscribe", (event) => {
     subscribeToStatus(event.sender);
   });
 
   ipcMain.on("console:chat:subscribe", (event) => {
     subscribeToConsoleRun(event.sender);
+  });
+
+  ipcMain.on("claw:subscribe", (event) => {
+    subscribeToClawEvents(event.sender);
   });
 
   ipcMain.handle("open:path", (_, location: string) => {
@@ -174,6 +191,33 @@ function subscribeToConsoleRun(target: WebContents): void {
     if (active) {
       active();
       consoleRunSubscriptions.delete(target.id);
+    }
+  });
+}
+
+function subscribeToClawEvents(target: WebContents): void {
+  const previous = clawEventSubscriptions.get(target.id);
+  if (previous) {
+    previous();
+    clawEventSubscriptions.delete(target.id);
+  }
+
+  const unsubscribe = runtime.onClawEvent((event: ClawEvent) => {
+    if (target.isDestroyed()) {
+      unsubscribe();
+      clawEventSubscriptions.delete(target.id);
+      return;
+    }
+
+    target.send(CLAW_EVENT_CHANNEL, event);
+  });
+  clawEventSubscriptions.set(target.id, unsubscribe);
+
+  target.once("destroyed", () => {
+    const active = clawEventSubscriptions.get(target.id);
+    if (active) {
+      active();
+      clawEventSubscriptions.delete(target.id);
     }
   });
 }

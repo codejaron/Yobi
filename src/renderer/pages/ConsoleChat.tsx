@@ -13,6 +13,7 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { Switch } from "@renderer/components/ui/switch";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
+import { ClawTabPanel } from "./ClawTabPanel";
 
 type MessageRole = "user" | "assistant";
 type MessageState = "streaming" | "done" | "error";
@@ -24,6 +25,7 @@ interface ConsoleMessage {
   role: MessageRole;
   text: string;
   state: MessageState;
+  source?: "claw" | "yobi";
 }
 
 interface ActionItem {
@@ -132,6 +134,7 @@ function actionColor(kind: ActionKind): string {
 }
 
 export function ConsoleChatPage() {
+  const [activeTab, setActiveTab] = useState<"yobi" | "claw">("yobi");
   const [liveMessages, setLiveMessages] = useState<ConsoleMessage[]>([]);
   const [persistedMessages, setPersistedMessages] = useState<HistoryMessage[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -266,6 +269,28 @@ export function ConsoleChatPage() {
               ? "已同意一次"
               : "已拒绝",
         detail: `审批单 ${event.approvalId.slice(0, 8)}`,
+        timestamp: event.timestamp
+      });
+      return;
+    }
+
+    if (event.type === "external-assistant-message") {
+      setLiveMessages((prev) => [
+        ...prev,
+        {
+          id: event.messageId,
+          requestId: event.requestId,
+          role: "assistant",
+          text: event.text,
+          state: "done",
+          source: event.source
+        }
+      ]);
+      appendAction({
+        requestId: event.requestId,
+        kind: "status",
+        label: "Claw 结果已同步",
+        detail: "Claw 完成消息已回流到 Yobi 对话。",
         timestamp: event.timestamp
       });
       return;
@@ -712,7 +737,8 @@ export function ConsoleChatPage() {
         requestId: `history-${item.id}`,
         role: historyRoleToMessageRole(item.role),
         text: item.text,
-        state: "done" as const
+        state: "done" as const,
+        source: item.meta?.source
       }));
 
     return [...historyMessages, ...liveMessages];
@@ -731,7 +757,34 @@ export function ConsoleChatPage() {
   }, []);
 
   return (
-    <div className="grid h-[calc(100vh-140px)] min-h-[680px] max-h-[900px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="space-y-4">
+      <div className="inline-flex rounded-full border border-border/70 bg-white/75 p-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab("yobi")}
+          className={`rounded-full px-4 py-1.5 text-sm transition ${
+            activeTab === "yobi"
+              ? "bg-primary text-primary-foreground shadow"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Yobi
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("claw")}
+          className={`rounded-full px-4 py-1.5 text-sm transition ${
+            activeTab === "claw"
+              ? "bg-primary text-primary-foreground shadow"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Claw
+        </button>
+      </div>
+
+      <div className={activeTab === "yobi" ? "block" : "hidden"}>
+        <div className="grid h-[calc(100vh-140px)] min-h-[680px] max-h-[900px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
         <CardHeader className="flex flex-row items-start justify-between gap-4">
           <div>
@@ -783,6 +836,12 @@ export function ConsoleChatPage() {
                         }`
                   }
                 >
+                  {item.role === "assistant" && item.source === "claw" ? (
+                    <div className="mb-2 flex items-center gap-2">
+                      <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">Claw</Badge>
+                      <span className="text-[11px] text-muted-foreground">来自 Claw 执行结果</span>
+                    </div>
+                  ) : null}
                   <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
                   {item.role === "assistant" && item.state === "streaming" ? (
                     <p className="mt-2 text-xs text-muted-foreground">流式输出中...</p>
@@ -960,7 +1019,13 @@ export function ConsoleChatPage() {
             <div ref={actionBottomRef} />
           </div>
         </CardContent>
-      </Card>
+        </Card>
+      </div>
+      </div>
+
+      <div className={activeTab === "claw" ? "block" : "hidden"}>
+        <ClawTabPanel active={activeTab === "claw"} />
+      </div>
     </div>
   );
 }

@@ -3,6 +3,62 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 
+type FetchInput = Parameters<typeof fetch>[0];
+type FetchInit = Parameters<typeof fetch>[1];
+
+function resolveRequestUrl(input: FetchInput): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  if (input instanceof URL) {
+    return input.toString();
+  }
+
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return input.url;
+  }
+
+  return String(input);
+}
+
+function resolveRequestMethod(input: FetchInput, init?: FetchInit): string {
+  if (init?.method) {
+    return init.method.toUpperCase();
+  }
+
+  if (typeof Request !== "undefined" && input instanceof Request && input.method) {
+    return input.method.toUpperCase();
+  }
+
+  return "GET";
+}
+
+function createProviderLoggingFetch(provider: ProviderConfig, model: string): typeof fetch {
+  return async (input, init) => {
+    const url = resolveRequestUrl(input);
+    const method = resolveRequestMethod(input, init);
+    const startedAt = Date.now();
+    console.info(
+      `[provider] request provider=${provider.id} kind=${provider.kind} apiMode=${provider.apiMode} model=${model} method=${method} url=${url}`
+    );
+
+    try {
+      const response = await fetch(input, init);
+      console.info(
+        `[provider] response provider=${provider.id} kind=${provider.kind} apiMode=${provider.apiMode} model=${model} method=${method} status=${response.status} url=${url} durationMs=${Date.now() - startedAt}`
+      );
+      return response;
+    } catch (error) {
+      console.warn(
+        `[provider] failed provider=${provider.id} kind=${provider.kind} apiMode=${provider.apiMode} model=${model} method=${method} url=${url}`,
+        error
+      );
+      throw error;
+    }
+  };
+}
+
 export function normalizeCustomOpenAIBaseUrl(raw: string): string {
   const input = raw.trim();
   if (!input) {
@@ -50,13 +106,15 @@ export function createModelForProvider(provider: ProviderConfig, model: string):
     const normalizedBaseUrl = normalizeCustomOpenAIBaseUrl(provider.baseUrl);
     const client = createOpenAI({
       apiKey: provider.apiKey,
-      baseURL: normalizedBaseUrl
+      baseURL: normalizedBaseUrl,
+      fetch: createProviderLoggingFetch(provider, model)
     });
     return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
   }
 
   const client = createOpenAI({
-    apiKey: provider.apiKey
+    apiKey: provider.apiKey,
+    fetch: createProviderLoggingFetch(provider, model)
   });
 
   return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);

@@ -230,6 +230,87 @@ export type ConsoleRunEventV2 =
       type: "error";
       message: string;
       timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "external-assistant-message";
+      messageId: string;
+      text: string;
+      source: "claw";
+      timestamp: string;
+    };
+
+export type ClawOrigin = "yobi-tool" | "claw-tab" | "unknown";
+
+export interface ClawHistoryItem {
+  id: string;
+  role: "assistant" | "user" | "system" | "tool";
+  text: string;
+  timestamp?: string;
+}
+
+export type ClawConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "disconnected-manual";
+
+export type ClawEvent =
+  | {
+      type: "connection";
+      state: ClawConnectionState;
+      message: string;
+      timestamp: string;
+    }
+  | {
+      type: "status";
+      sessionKey: string;
+      message: string;
+      timestamp: string;
+    }
+  | {
+      type: "assistant-delta";
+      sessionKey: string;
+      delta: string;
+      timestamp: string;
+    }
+  | {
+      type: "assistant-final";
+      sessionKey: string;
+      text: string;
+      origin: ClawOrigin;
+      timestamp: string;
+    }
+  | {
+      type: "tool";
+      sessionKey: string;
+      phase: "start" | "result" | "error";
+      toolName: string;
+      input?: unknown;
+      output?: unknown;
+      error?: string;
+      timestamp: string;
+    }
+  | {
+      type: "lifecycle";
+      sessionKey: string;
+      status: string;
+      detail?: string;
+      timestamp: string;
+    }
+  | {
+      type: "history";
+      sessionKey: string;
+      items: ClawHistoryItem[];
+      timestamp: string;
+    }
+  | {
+      type: "error";
+      sessionKey?: string;
+      message: string;
+      code?: string;
+      timestamp: string;
     };
 
 export interface HistoryMessage {
@@ -240,6 +321,7 @@ export interface HistoryMessage {
   timestamp: string;
   meta?: {
     proactive?: boolean;
+    source?: "claw" | "yobi";
   };
 }
 

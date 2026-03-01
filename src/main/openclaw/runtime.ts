@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { promisify } from "node:util";
@@ -10,7 +11,208 @@ import { CompanionPaths } from "@main/storage/paths";
 import { OPENCLAW_HOOK_PATH, OPENCLAW_HOOK_TOKEN } from "./constants";
 
 const execFileAsync = promisify(execFile);
-const CUSTOM_PROVIDER_ID = "yobi";
+const GATEWAY_HEALTH_WAIT_TIMEOUT_MS = 15_000;
+const GATEWAY_HEALTH_RETRY_INTERVAL_MS = 350;
+const GATEWAY_HEALTH_CHECK_TIMEOUT_MS = 1_500;
+const OPENCLAW_HTTP_AUDIT_HOOK_FILE = "http-audit-hook.cjs";
+const OPENCLAW_HTTP_AUDIT_LOG_FILE = "http-audit.log";
+const OPENCLAW_CUSTOM_OPENAI_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) OpenClaw/2026.2.14";
+const OPENCLAW_HTTP_AUDIT_HOOK_SOURCE = `'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const LOG_FILE = process.env.OPENCLAW_HTTP_AUDIT_LOG || '/tmp/openclaw/http-audit.log';
+
+function ensureParentDir() {
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+  } catch {}
+}
+
+function redactHeader(name, value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const lower = String(name || '').toLowerCase();
+  if (
+    lower === 'authorization' ||
+    lower.includes('api-key') ||
+    lower.includes('token') ||
+    lower.includes('secret')
+  ) {
+    return '***';
+  }
+
+  return value;
+}
+
+function headersToObject(headers) {
+  const result = {};
+  if (!headers) {
+    return result;
+  }
+
+  try {
+    if (typeof headers.forEach === 'function') {
+      headers.forEach((value, key) => {
+        result[String(key)] = redactHeader(key, String(value));
+      });
+      return result;
+    }
+  } catch {}
+
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        continue;
+      }
+      const key = String(entry[0]);
+      result[key] = redactHeader(key, String(entry[1]));
+    }
+    return result;
+  }
+
+  if (typeof headers === 'object') {
+    for (const [key, value] of Object.entries(headers)) {
+      result[String(key)] = redactHeader(key, String(value));
+    }
+  }
+
+  return result;
+}
+
+function summarizeBody(body) {
+  if (body == null) {
+    return undefined;
+  }
+
+  if (typeof body === 'string') {
+    return body.length > 4000 ? body.slice(0, 4000) + '...<truncated>' : body;
+  }
+
+  if (body instanceof URLSearchParams) {
+    const text = body.toString();
+    return text.length > 4000 ? text.slice(0, 4000) + '...<truncated>' : text;
+  }
+
+  if (Buffer.isBuffer(body)) {
+    return '<Buffer length=' + body.length + '>';
+  }
+
+  if (body instanceof ArrayBuffer) {
+    return '<ArrayBuffer length=' + body.byteLength + '>';
+  }
+
+  if (ArrayBuffer.isView(body)) {
+    return '<ArrayBufferView length=' + body.byteLength + '>';
+  }
+
+  return '<' + Object.prototype.toString.call(body) + '>';
+}
+
+function resolveUrl(input) {
+  if (typeof input === 'string') {
+    return input;
+  }
+
+  if (input instanceof URL) {
+    return input.toString();
+  }
+
+  if (input && typeof input.url === 'string') {
+    return input.url;
+  }
+
+  return String(input);
+}
+
+function resolveMethod(input, init) {
+  if (init && typeof init.method === 'string' && init.method) {
+    return init.method.toUpperCase();
+  }
+
+  if (input && typeof input.method === 'string' && input.method) {
+    return input.method.toUpperCase();
+  }
+
+  return 'GET';
+}
+
+function log(entry) {
+  try {
+    ensureParentDir();
+    fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + '\\n', 'utf8');
+  } catch {}
+}
+
+if (!globalThis.__openclawHttpAuditInstalled && typeof globalThis.fetch === 'function') {
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  globalThis.__openclawHttpAuditInstalled = true;
+
+  globalThis.fetch = async (input, init) => {
+    const startedAt = Date.now();
+    const url = resolveUrl(input);
+    const method = resolveMethod(input, init);
+    const requestHeaders = headersToObject((init && init.headers) || (input && input.headers));
+    const requestBody = summarizeBody(init ? init.body : undefined);
+
+    log({
+      ts: new Date().toISOString(),
+      type: 'request',
+      method,
+      url,
+      headers: requestHeaders,
+      body: requestBody
+    });
+
+    try {
+      const response = await originalFetch(input, init);
+      log({
+        ts: new Date().toISOString(),
+        type: 'response',
+        method,
+        url,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        headers: headersToObject(response.headers)
+      });
+      return response;
+    } catch (error) {
+      log({
+        ts: new Date().toISOString(),
+        type: 'error',
+        method,
+        url,
+        durationMs: Date.now() - startedAt,
+        error: error && error.message ? error.message : String(error)
+      });
+      throw error;
+    }
+  };
+}
+`;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function appendPath(baseUrl: string, pathName: string): string {
+  if (!baseUrl) {
+    return pathName;
+  }
+
+  if (baseUrl.endsWith("/") && pathName.startsWith("/")) {
+    return `${baseUrl}${pathName.slice(1)}`;
+  }
+
+  return `${baseUrl}${pathName}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function resolveOpenClawBin(): string {
   // 1. 打包内嵌优先
@@ -54,6 +256,10 @@ interface OpenClawStatus {
 interface GatewayBootstrap {
   env: NodeJS.ProcessEnv;
   modelRef: string;
+  gatewayToken: string;
+  sessionModelProvider: string;
+  sessionModelId: string;
+  customProviderId?: string;
   customProviderConfig?: Record<string, unknown>;
 }
 
@@ -66,6 +272,7 @@ export class OpenClawRuntime {
   private gatewayProcess: ChildProcess | null = null;
   private online = false;
   private message = "idle";
+  private gatewayAuthToken = "";
 
   constructor(
     private readonly paths: CompanionPaths,
@@ -79,8 +286,13 @@ export class OpenClawRuntime {
     };
   }
 
+  getGatewayAuthToken(): string {
+    return this.gatewayAuthToken;
+  }
+
   async start(config: AppConfig): Promise<void> {
     if (!config.openclaw.enabled) {
+      this.gatewayAuthToken = "";
       await this.stop("disabled");
       return;
     }
@@ -90,6 +302,7 @@ export class OpenClawRuntime {
     }
 
     try {
+      this.gatewayAuthToken = this.generateGatewayToken();
       this.setStatus(false, "checking");
       const installed = await this.isInstalled();
       if (!installed) {
@@ -99,9 +312,12 @@ export class OpenClawRuntime {
 
       this.setStatus(false, "checking-config");
       const bootstrap = this.buildBootstrap(config);
+      this.logGatewayRouting(bootstrap);
       await this.syncOpenClawConfig(bootstrap);
       this.setStatus(false, "starting-gateway");
       await this.startGateway(config, bootstrap.env);
+      this.setStatus(false, "waiting-gateway-health");
+      await this.waitForGatewayHealthy(config);
       this.setStatus(true, "online");
     } catch (error) {
       this.setStatus(false, error instanceof Error ? error.message : "startup-failed");
@@ -140,10 +356,11 @@ export class OpenClawRuntime {
     const host = url.hostname || "127.0.0.1";
     const bindMode = this.resolveBindMode(host);
     const args = ["gateway", "run", "--allow-unconfigured", "--bind", bindMode, "--port", String(port)];
+    const gatewayEnv = await this.withGatewayHttpAuditEnv(env);
 
     const child = spawn(resolveOpenClawBin(), args, {
       stdio: "ignore",
-      env
+      env: gatewayEnv
     });
     this.gatewayProcess = child;
 
@@ -181,6 +398,73 @@ export class OpenClawRuntime {
     }
   }
 
+  private async withGatewayHttpAuditEnv(env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+    const hookPath = await this.ensureGatewayHttpAuditHook();
+    const logsDir = path.join(this.paths.openclawStateDir, "logs");
+    const logPath = path.join(logsDir, OPENCLAW_HTTP_AUDIT_LOG_FILE);
+    const requireArg = `--require=${hookPath}`;
+    const nodeOptions = (env.NODE_OPTIONS ?? "").trim();
+
+    const nextEnv: NodeJS.ProcessEnv = {
+      ...env,
+      OPENCLAW_HTTP_AUDIT_LOG: logPath
+    };
+
+    nextEnv.NODE_OPTIONS = nodeOptions.includes(requireArg)
+      ? nodeOptions
+      : nodeOptions
+        ? `${nodeOptions} ${requireArg}`
+        : requireArg;
+
+    console.info(`[openclaw] http audit enabled log=${logPath}`);
+    return nextEnv;
+  }
+
+  private async ensureGatewayHttpAuditHook(): Promise<string> {
+    const runtimeDir = path.join(this.paths.openclawStateDir, "runtime");
+    const hookPath = path.join(runtimeDir, OPENCLAW_HTTP_AUDIT_HOOK_FILE);
+    await fs.mkdir(runtimeDir, {
+      recursive: true
+    });
+    await fs.writeFile(hookPath, OPENCLAW_HTTP_AUDIT_HOOK_SOURCE, "utf8");
+    return hookPath;
+  }
+
+  private async waitForGatewayHealthy(config: AppConfig): Promise<void> {
+    const deadline = Date.now() + GATEWAY_HEALTH_WAIT_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      const healthy = await this.checkGatewayHealth(config);
+      if (healthy) {
+        return;
+      }
+
+      await sleep(GATEWAY_HEALTH_RETRY_INTERVAL_MS);
+    }
+
+    throw new Error("gateway-health-timeout");
+  }
+
+  private async checkGatewayHealth(config: AppConfig): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, GATEWAY_HEALTH_CHECK_TIMEOUT_MS);
+
+    try {
+      const url = new URL("/health", config.openclaw.gatewayUrl).toString();
+      const response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private buildBootstrap(config: AppConfig): GatewayBootstrap {
     const route = config.modelRouting.chat;
     const provider = config.providers.find((item) => item.id === route.providerId);
@@ -196,10 +480,16 @@ export class OpenClawRuntime {
     delete env.OPENAI_API_KEY;
     delete env.OPENROUTER_API_KEY;
 
-    const modelRef = this.resolveModelRef(provider, route.model);
+    const customProviderId =
+      provider.kind === "custom-openai" ? this.resolveCustomProviderId(provider.id) : undefined;
+    const modelRef = this.resolveModelRef(provider, route.model, customProviderId);
+    const routing = this.splitModelRef(modelRef);
     const bootstrap: GatewayBootstrap = {
       env,
-      modelRef
+      modelRef,
+      gatewayToken: this.gatewayAuthToken,
+      sessionModelProvider: routing.providerId,
+      sessionModelId: routing.modelId
     };
 
     if (provider.kind === "anthropic" && provider.apiKey.trim()) {
@@ -208,8 +498,13 @@ export class OpenClawRuntime {
       env.OPENAI_API_KEY = provider.apiKey.trim();
     } else if (provider.kind === "openrouter" && provider.apiKey.trim()) {
       env.OPENROUTER_API_KEY = provider.apiKey.trim();
-    } else if (provider.kind === "custom-openai") {
-      bootstrap.customProviderConfig = this.buildCustomProviderConfig(provider, route.model);
+    } else if (provider.kind === "custom-openai" && customProviderId) {
+      bootstrap.customProviderId = customProviderId;
+      bootstrap.customProviderConfig = this.buildCustomProviderConfig(
+        provider,
+        route.model,
+        customProviderId
+      );
     }
 
     return bootstrap;
@@ -227,27 +522,133 @@ export class OpenClawRuntime {
     ]);
 
     if (configExists && syncState?.fingerprint === fingerprint) {
+      await this.syncModelProviders(bootstrap);
+      await this.syncMainAgentState(bootstrap);
       return;
     }
 
     await this.runConfigSet("hooks.enabled", true, bootstrap.env);
     await this.runConfigSet("hooks.path", OPENCLAW_HOOK_PATH, bootstrap.env);
     await this.runConfigSet("hooks.token", OPENCLAW_HOOK_TOKEN, bootstrap.env);
+    await this.runConfigSet("gateway.auth.mode", "token", bootstrap.env);
+    await this.runConfigSet("gateway.auth.token", bootstrap.gatewayToken, bootstrap.env);
+    await this.runConfigSet("gateway.http.endpoints.responses.enabled", true, bootstrap.env);
     await this.runConfigSet("agents.defaults.model.primary", bootstrap.modelRef, bootstrap.env);
+    await this.syncModelProviders(bootstrap);
 
-    if (bootstrap.customProviderConfig) {
-      await this.runConfigSet("models.mode", "merge", bootstrap.env);
-      await this.runConfigSet(
-        `models.providers.${CUSTOM_PROVIDER_ID}`,
-        bootstrap.customProviderConfig,
-        bootstrap.env
-      );
-    }
+    await this.syncMainAgentState(bootstrap);
 
     await this.writeSyncState({
       fingerprint,
       updatedAt: new Date().toISOString()
     });
+  }
+
+  private async syncMainAgentState(bootstrap: GatewayBootstrap): Promise<void> {
+    await this.syncMainAgentModelsFile(bootstrap);
+    await this.syncMainSessionRouting(bootstrap);
+  }
+
+  private async syncModelProviders(bootstrap: GatewayBootstrap): Promise<void> {
+    await this.runConfigSet("models.mode", "merge", bootstrap.env);
+    const providers: Record<string, Record<string, unknown>> = {};
+    if (bootstrap.customProviderId && bootstrap.customProviderConfig) {
+      providers[bootstrap.customProviderId] = bootstrap.customProviderConfig;
+    }
+
+    await this.runConfigSet("models.providers", providers, bootstrap.env);
+  }
+
+  private async syncMainAgentModelsFile(bootstrap: GatewayBootstrap): Promise<void> {
+    const agentDir = path.join(this.paths.openclawStateDir, "agents", "main", "agent");
+    const modelsPath = path.join(agentDir, "models.json");
+
+    await fs.mkdir(agentDir, {
+      recursive: true
+    });
+
+    const providers: Record<string, Record<string, unknown>> = {};
+    if (bootstrap.customProviderId && bootstrap.customProviderConfig) {
+      providers[bootstrap.customProviderId] = bootstrap.customProviderConfig;
+    }
+
+    const modelsPayload = {
+      providers
+    };
+
+    await fs.writeFile(modelsPath, `${JSON.stringify(modelsPayload, null, 2)}\n`, "utf8");
+  }
+
+  private async syncMainSessionRouting(bootstrap: GatewayBootstrap): Promise<void> {
+    const providerId = bootstrap.sessionModelProvider.trim();
+    const model = bootstrap.sessionModelId.trim();
+    if (!providerId || !model) {
+      return;
+    }
+
+    const sessionsPath = path.join(
+      this.paths.openclawStateDir,
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json"
+    );
+
+    let parsed: unknown;
+    try {
+      const raw = await fs.readFile(sessionsPath, "utf8");
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (!isRecord(parsed)) {
+      return;
+    }
+
+    let changed = false;
+
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+
+      if (!key.startsWith("agent:main:")) {
+        continue;
+      }
+
+      if (entry.modelProvider !== providerId) {
+        entry.modelProvider = providerId;
+        changed = true;
+      }
+
+      if (entry.model !== model) {
+        entry.model = model;
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    await fs.writeFile(sessionsPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  }
+
+  private splitModelRef(modelRef: string): {
+    providerId: string;
+    modelId: string;
+  } {
+    const normalized = modelRef.trim();
+    const slashIndex = normalized.indexOf("/");
+    if (slashIndex <= 0 || slashIndex >= normalized.length - 1) {
+      throw new Error(`OpenClaw config failed: invalid model ref ${normalized || "<empty>"}`);
+    }
+
+    return {
+      providerId: normalized.slice(0, slashIndex),
+      modelId: normalized.slice(slashIndex + 1)
+    };
   }
 
   private async runConfigSet(pathName: string, value: unknown, env: NodeJS.ProcessEnv): Promise<void> {
@@ -265,27 +666,73 @@ export class OpenClawRuntime {
     }
   }
 
-  private resolveModelRef(provider: ProviderConfig, model: string): string {
+  private logGatewayRouting(bootstrap: GatewayBootstrap): void {
+    console.info(
+      `[openclaw] route modelRef=${bootstrap.modelRef} provider=${bootstrap.sessionModelProvider} model=${bootstrap.sessionModelId}`
+    );
+
+    if (!bootstrap.customProviderId || !bootstrap.customProviderConfig) {
+      return;
+    }
+
+    const baseUrl =
+      typeof bootstrap.customProviderConfig.baseUrl === "string"
+        ? bootstrap.customProviderConfig.baseUrl
+        : "";
+    const api =
+      typeof bootstrap.customProviderConfig.api === "string" ? bootstrap.customProviderConfig.api : "";
+    const endpointPath =
+      api === "openai-responses"
+        ? "/responses"
+        : api === "openai-completions"
+          ? "/chat/completions"
+          : "";
+    const endpoint = endpointPath ? appendPath(baseUrl, endpointPath) : "";
+
+    console.info(
+      `[openclaw] provider id=${bootstrap.customProviderId} api=${api || "unknown"} baseUrl=${baseUrl || "unknown"} endpoint=${endpoint || "unknown"}`
+    );
+  }
+
+  private resolveModelRef(
+    provider: ProviderConfig,
+    model: string,
+    customProviderId?: string
+  ): string {
     const normalizedModel = model.trim();
     if (!normalizedModel) {
       throw new Error("OpenClaw config failed: model is empty");
     }
 
     if (provider.kind === "custom-openai") {
-      const customModelId = this.normalizeCustomModelId(normalizedModel);
-      return this.withProviderPrefix(customModelId, CUSTOM_PROVIDER_ID);
+      if (!customProviderId) {
+        throw new Error("OpenClaw config failed: custom provider id missing");
+      }
+
+      const customModelId = this.normalizeCustomModelId(normalizedModel, customProviderId);
+      return this.withProviderPrefix(customModelId, customProviderId);
     }
 
     return this.withProviderPrefix(normalizedModel, provider.kind);
   }
 
-  private buildCustomProviderConfig(provider: ProviderConfig, model: string): Record<string, unknown> {
-    const normalizedModel = this.normalizeCustomModelId(model.trim());
+  private buildCustomProviderConfig(
+    provider: ProviderConfig,
+    model: string,
+    customProviderId: string
+  ): Record<string, unknown> {
+    const normalizedModel = this.normalizeCustomModelId(model.trim(), customProviderId);
     const apiMode = provider.apiMode === "responses" ? "openai-responses" : "openai-completions";
     const config: Record<string, unknown> = {
       baseUrl: this.normalizeCustomOpenAIBaseUrl(provider.baseUrl),
       api: apiMode,
+      auth: "api-key",
+      authHeader: true,
       apiKey: provider.apiKey,
+      headers: {
+        "User-Agent": OPENCLAW_CUSTOM_OPENAI_USER_AGENT,
+        Accept: "application/json"
+      },
       models: [
         {
           id: normalizedModel,
@@ -301,12 +748,26 @@ export class OpenClawRuntime {
     return config;
   }
 
-  private normalizeCustomModelId(model: string): string {
-    const prefix = `${CUSTOM_PROVIDER_ID.toLowerCase()}/`;
-    if (model.toLowerCase().startsWith(prefix)) {
-      return model.slice(CUSTOM_PROVIDER_ID.length + 1);
+  private normalizeCustomModelId(model: string, customProviderId: string): string {
+    const providerPrefix = `${customProviderId.toLowerCase()}/`;
+    if (model.toLowerCase().startsWith(providerPrefix)) {
+      return model.slice(customProviderId.length + 1);
     }
+
     return model;
+  }
+
+  private resolveCustomProviderId(providerId: string): string {
+    const normalized = providerId.trim();
+    if (!normalized) {
+      throw new Error("OpenClaw config failed: custom-openai provider id is empty");
+    }
+
+    if (normalized.includes("/")) {
+      throw new Error("OpenClaw config failed: custom-openai provider id cannot contain '/'");
+    }
+
+    return normalized;
   }
 
   private withProviderPrefix(model: string, providerId: string): string {
@@ -323,6 +784,20 @@ export class OpenClawRuntime {
     if (!trimmed) {
       throw new Error("OpenClaw config failed: custom-openai provider requires baseUrl");
     }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+    }
+
+    const pathname = parsed.pathname.trim();
+    if (pathname === "" || pathname === "/") {
+      parsed.pathname = "/v1";
+      return parsed.toString().replace(/\/$/, "");
+    }
+
     return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
   }
 
@@ -347,9 +822,20 @@ export class OpenClawRuntime {
         path: OPENCLAW_HOOK_PATH,
         token: OPENCLAW_HOOK_TOKEN
       },
+      gateway: {
+        authMode: "token",
+        authToken: bootstrap.gatewayToken,
+        responsesEnabled: true
+      },
+      providerSyncVersion: 2,
       modelRef: bootstrap.modelRef,
+      customProviderId: bootstrap.customProviderId ?? null,
       customProviderConfig: bootstrap.customProviderConfig ?? null
     });
+  }
+
+  private generateGatewayToken(): string {
+    return `yobi-${randomUUID().replace(/-/g, "")}`;
   }
 
   private async pathExists(targetPath: string): Promise<boolean> {
