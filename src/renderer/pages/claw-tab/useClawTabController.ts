@@ -248,47 +248,78 @@ export function useClawTabController(active: boolean): ClawTabController {
     if (event.type === "assistant-delta") {
       setChatItems((prev) => {
         const streamingId = streamMessageIdRef.current;
-        if (!streamingId) {
-          const id = makeClientId("claw-assistant");
-          streamMessageIdRef.current = id;
-          return [
-            ...prev,
-            {
-              id,
-              role: "assistant" as const,
-              title: "Claw",
-              text: event.delta,
+        if (streamingId) {
+          const index = prev.findIndex((item) => item.id === streamingId);
+          if (index >= 0) {
+            const next = [...prev];
+            next[index] = {
+              ...next[index],
+              text: `${next[index].text}${event.delta}`,
               timestamp: event.timestamp,
               streaming: true
-            }
-          ].slice(-CLAW_CHAT_LIMIT);
+            };
+            return next;
+          }
         }
 
-        const index = prev.findIndex((item) => item.id === streamingId);
-        if (index < 0) {
-          const id = makeClientId("claw-assistant");
+        const fallbackStreamingReverseIndex = [...prev]
+          .reverse()
+          .findIndex((item) => item.role === "assistant" && item.streaming);
+        if (fallbackStreamingReverseIndex >= 0) {
+          const index = prev.length - 1 - fallbackStreamingReverseIndex;
+          const id = prev[index].id;
           streamMessageIdRef.current = id;
-          return [
-            ...prev,
-            {
-              id,
-              role: "assistant" as const,
-              title: "Claw",
-              text: event.delta,
-              timestamp: event.timestamp,
-              streaming: true
-            }
-          ].slice(-CLAW_CHAT_LIMIT);
+          const next = [...prev];
+          next[index] = {
+            ...next[index],
+            text: `${next[index].text}${event.delta}`,
+            timestamp: event.timestamp,
+            streaming: true
+          };
+          return next;
         }
 
-        const next = [...prev];
-        next[index] = {
-          ...next[index],
-          text: `${next[index].text}${event.delta}`,
-          timestamp: event.timestamp,
-          streaming: true
-        };
-        return next;
+        let lastAssistantIndex = -1;
+        let lastUserIndex = -1;
+        for (let index = prev.length - 1; index >= 0; index -= 1) {
+          const item = prev[index];
+          if (lastAssistantIndex < 0 && item.role === "assistant") {
+            lastAssistantIndex = index;
+          }
+          if (lastUserIndex < 0 && item.role === "user") {
+            lastUserIndex = index;
+          }
+          if (lastAssistantIndex >= 0 && lastUserIndex >= 0) {
+            break;
+          }
+        }
+
+        if (lastAssistantIndex >= 0 && !prev[lastAssistantIndex].streaming && lastAssistantIndex > lastUserIndex) {
+          const id = prev[lastAssistantIndex].id;
+          streamMessageIdRef.current = id;
+          const next = [...prev];
+          next[lastAssistantIndex] = {
+            ...next[lastAssistantIndex],
+            text: event.delta,
+            timestamp: event.timestamp,
+            streaming: true
+          };
+          return next;
+        }
+
+        const id = makeClientId("claw-assistant");
+        streamMessageIdRef.current = id;
+        return [
+          ...prev,
+          {
+            id,
+            role: "assistant" as const,
+            title: "Claw",
+            text: event.delta,
+            timestamp: event.timestamp,
+            streaming: true
+          }
+        ].slice(-CLAW_CHAT_LIMIT);
       });
       return;
     }
@@ -320,6 +351,25 @@ export function useClawTabController(active: boolean): ClawTabController {
         if (fallbackReverseIndex >= 0) {
           const index = prev.length - 1 - fallbackReverseIndex;
           return replaceAt(index);
+        }
+
+        let lastAssistantIndex = -1;
+        let lastUserIndex = -1;
+        for (let index = prev.length - 1; index >= 0; index -= 1) {
+          const item = prev[index];
+          if (lastAssistantIndex < 0 && item.role === "assistant") {
+            lastAssistantIndex = index;
+          }
+          if (lastUserIndex < 0 && item.role === "user") {
+            lastUserIndex = index;
+          }
+          if (lastAssistantIndex >= 0 && lastUserIndex >= 0) {
+            break;
+          }
+        }
+
+        if (lastAssistantIndex >= 0 && lastAssistantIndex > lastUserIndex) {
+          return replaceAt(lastAssistantIndex);
         }
 
         const latestAssistant = [...prev].reverse().find((item) => item.role === "assistant");
