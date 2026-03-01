@@ -38,4 +38,21 @@ export class ChannelRouter {
       requestApproval: input.requestApproval
     });
   }
+
+  async handleQQ(input: {
+    text: string;
+    photoUrl?: string;
+    resourceId: string;
+    threadId: string;
+    requestApproval?: ToolApprovalHandler;
+  }): Promise<string> {
+    return this.conversation.reply({
+      text: input.text,
+      channel: "qq",
+      photoUrl: input.photoUrl,
+      resourceId: input.resourceId,
+      threadId: input.threadId,
+      requestApproval: input.requestApproval
+    });
+  }
 }

@@ -214,6 +214,7 @@ export default function App() {
 
             <div className="flex items-center gap-3">
               <Badge>{status?.telegramConnected ? "Telegram Online" : "Telegram Offline"}</Badge>
+              <Badge>{status?.qqConnected ? "QQ Online" : "QQ Offline"}</Badge>
               <Button onClick={() => void saveConfig()} disabled={saving || !config}>
                 {saving ? "保存中..." : "保存配置"}
               </Button>

@@ -45,6 +45,70 @@ function ensureLockedExaServer(servers: McpServerList): McpServerList {
   ];
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepClone<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => deepClone(item)) as T;
+  }
+
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const cloned: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    cloned[key] = deepClone(child);
+  }
+  return cloned as T;
+}
+
+function mergeWithDefaults<T>(defaults: T, value: unknown): T {
+  if (Array.isArray(defaults)) {
+    if (!Array.isArray(value)) {
+      return deepClone(defaults);
+    }
+    return deepClone(value) as T;
+  }
+
+  if (isPlainRecord(defaults)) {
+    const source = isPlainRecord(value) ? value : {};
+    const merged: Record<string, unknown> = {};
+
+    for (const [key, defaultChild] of Object.entries(defaults)) {
+      merged[key] = mergeWithDefaults(defaultChild, source[key]);
+    }
+
+    return merged as T;
+  }
+
+  if (value === undefined) {
+    return deepClone(defaults);
+  }
+
+  return value as T;
+}
+
+function migrateRawConfig(raw: unknown): unknown {
+  if (!isPlainRecord(raw)) {
+    return mergeWithDefaults(DEFAULT_CONFIG, raw);
+  }
+
+  const migratedRaw = deepClone(raw) as Record<string, unknown>;
+  const qq = migratedRaw.qq;
+  if (isPlainRecord(qq)) {
+    const hasAppSecret = typeof qq.appSecret === "string" && qq.appSecret.trim().length > 0;
+    const legacyClientSecret = typeof qq.clientSecret === "string" ? qq.clientSecret : "";
+    if (!hasAppSecret && legacyClientSecret.trim().length > 0) {
+      qq.appSecret = legacyClientSecret;
+    }
+  }
+
+  return mergeWithDefaults(DEFAULT_CONFIG, migratedRaw);
+}
+
 export class ConfigStore {
   private cached: AppConfig = DEFAULT_CONFIG;
 
@@ -61,14 +125,16 @@ export class ConfigStore {
     }
 
     const raw = await readJsonFile<unknown>(this.paths.configPath, null);
-    const parsed = appConfigSchema.safeParse(raw);
-    if (!parsed.success) {
-      this.cached = this.prepareConfig(appConfigSchema.parse({}));
+    const migrated = migrateRawConfig(raw);
+    const parsed = appConfigSchema.safeParse(migrated);
+    if (parsed.success) {
+      this.cached = this.prepareConfig(parsed.data);
       await writeJsonFile(this.paths.configPath, this.cached);
       return;
     }
 
-    this.cached = this.prepareConfig(parsed.data);
+    this.cached = this.prepareConfig(DEFAULT_CONFIG);
+    await writeJsonFile(this.paths.configPath, this.cached);
   }
 
   getConfig(): AppConfig {

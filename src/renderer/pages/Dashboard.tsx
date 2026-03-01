@@ -1,4 +1,4 @@
-import { Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint } from "lucide-react";
+import { Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint, MessageCircle } from "lucide-react";
 import type { AppStatus, PermissionState } from "@shared/types";
 import { useEffect, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
@@ -247,7 +247,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Card className="animate-float">
           <CardHeader>
             <CardDescription>Telegram</CardDescription>
@@ -259,6 +259,21 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           <CardContent>
             <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
               {status?.telegramConnected ? "Bot 在线" : "等待配置"}
+            </Badge>
+          </CardContent>
+        </Card>
+
+        <Card className="animate-float">
+          <CardHeader>
+            <CardDescription>QQ</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MessageCircle className="h-4 w-4" />
+              {status?.qqConnected ? "已连接" : "未连接"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
+              {status?.qqConnected ? "Bot 在线" : "等待配置"}
             </Badge>
           </CardContent>
         </Card>

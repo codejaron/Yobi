@@ -13,6 +13,7 @@ import { MessagingCard } from "@renderer/pages/settings/MessagingCard";
 import { OpenClawSettingsCard } from "@renderer/pages/settings/OpenClawSettingsCard";
 import { PetRuntimeCard } from "@renderer/pages/settings/PetRuntimeCard";
 import { ProactiveSettingsCard } from "@renderer/pages/settings/ProactiveSettingsCard";
+import { QQChannelCard } from "@renderer/pages/settings/QQChannelCard";
 import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCard";
 
 export function SettingsPage({
@@ -185,6 +186,8 @@ export function SettingsPage({
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <TelegramChannelCard config={config} setConfig={setConfig} />
+
+      <QQChannelCard config={config} setConfig={setConfig} />
 
       <MessagingCard config={config} setConfig={setConfig} />
 

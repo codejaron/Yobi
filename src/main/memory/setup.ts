@@ -93,7 +93,8 @@ function toHistoryMessage(message: MastraDBMessage): HistoryMessage | null {
   }
 
   const metadata = message.content?.metadata ?? {};
-  const channel = metadata.channel === "telegram" ? "telegram" : "console";
+  const channel =
+    metadata.channel === "telegram" ? "telegram" : metadata.channel === "qq" ? "qq" : "console";
   const source: "claw" | "yobi" | undefined =
     metadata.source === "claw" ? "claw" : metadata.source === "yobi" ? "yobi" : undefined;
   const meta =

@@ -23,6 +23,8 @@ import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage } from "@main/channels/types";
 import { ChannelRouter } from "@main/channels/router";
 import { ConsoleChannel } from "@main/channels/console";
+import { QQChannel } from "@main/channels/qq";
+import type { QQChannelConfig } from "@main/channels/qq-types";
 import { VoiceService } from "@main/services/voice";
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { KeepAwakeService } from "@main/services/keep-awake";
@@ -101,6 +103,7 @@ export class CompanionRuntime {
 
   private readonly channelRouter = new ChannelRouter(this.conversation);
   private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
+  private qqChannel: QQChannel | null = null;
   private readonly consoleChannel = new ConsoleChannel();
   private readonly voiceService = new VoiceService();
   private readonly voiceRouter = new VoiceProviderRouter(
@@ -193,6 +196,7 @@ export class CompanionRuntime {
   async start(): Promise<void> {
     await this.reminderService.init();
     await this.startTelegram();
+    await this.startQQ();
     this.backgroundTasks.start();
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
@@ -228,6 +232,7 @@ export class CompanionRuntime {
     this.clawChannel.dispose();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
+    await this.stopQQ();
     await this.telegram.stop();
   }
 
@@ -611,12 +616,44 @@ export class CompanionRuntime {
   private async startTelegram(): Promise<void> {
     await this.telegram.start(async (inbound) => {
       try {
-        await this.handleInbound(inbound);
+        await this.handleTelegramInbound(inbound);
       } catch (error) {
-        console.error("[runtime] handleInbound failed:", error);
+        console.error("[runtime] telegram inbound failed:", error);
         const message =
           error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
         await this.telegram.send({
+          kind: "text",
+          text: message,
+          chatId: inbound.chatId
+        });
+      }
+      await this.emitStatus();
+    });
+  }
+
+  private async startQQ(): Promise<void> {
+    const config = this.getConfig().qq;
+    if (!config.enabled || !config.appId.trim() || !config.appSecret.trim()) {
+      await this.stopQQ();
+      return;
+    }
+
+    await this.stopQQ();
+
+    this.qqChannel = new QQChannel({
+      enabled: config.enabled,
+      appId: config.appId.trim(),
+      appSecret: config.appSecret.trim()
+    } satisfies QQChannelConfig);
+
+    await this.qqChannel.start(async (inbound) => {
+      try {
+        await this.handleQQInbound(inbound);
+      } catch (error) {
+        console.error("[runtime] qq inbound failed:", error);
+        const message =
+          error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
+        await this.qqChannel?.send({
           kind: "text",
           text: message,
           chatId: inbound.chatId
@@ -631,7 +668,21 @@ export class CompanionRuntime {
     await this.startTelegram();
   }
 
-  private async handleInbound(inbound: InboundMessage): Promise<void> {
+  private async restartQQ(): Promise<void> {
+    await this.stopQQ();
+    await this.startQQ();
+  }
+
+  private async stopQQ(): Promise<void> {
+    if (!this.qqChannel) {
+      return;
+    }
+
+    await this.qqChannel.stop();
+    this.qqChannel = null;
+  }
+
+  private async handleTelegramInbound(inbound: InboundMessage): Promise<void> {
     this.pet.emitEvent({
       type: "thinking",
       value: "start"
@@ -651,6 +702,40 @@ export class CompanionRuntime {
 
       if (reply.trim()) {
         await this.telegram.send({
+          kind: "text",
+          text: reply,
+          chatId: inbound.chatId
+        });
+      }
+      this.lastUserAt = new Date().toISOString();
+    } finally {
+      this.pet.emitEvent({
+        type: "thinking",
+        value: "stop"
+      });
+    }
+  }
+
+  private async handleQQInbound(inbound: InboundMessage): Promise<void> {
+    this.pet.emitEvent({
+      type: "thinking",
+      value: "start"
+    });
+
+    try {
+      const reply = await this.withTimeout(
+        this.channelRouter.handleQQ({
+          text: inbound.text,
+          photoUrl: inbound.photoUrl,
+          resourceId: PRIMARY_RESOURCE_ID,
+          threadId: PRIMARY_THREAD_ID
+        }),
+        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+        "LLM 回复超时"
+      );
+
+      if (reply.trim()) {
+        await this.qqChannel?.send({
           kind: "text",
           text: reply,
           chatId: inbound.chatId
@@ -775,6 +860,7 @@ export class CompanionRuntime {
     return {
       bootedAt: this.bootedAt,
       telegramConnected: this.telegram.isConnected(),
+      qqConnected: this.qqChannel?.isConnected() ?? false,
       lastUserAt: this.lastUserAt,
       lastProactiveAt: this.lastProactiveAt,
       historyCount: await this.memory.countHistory({
@@ -808,6 +894,12 @@ export class CompanionRuntime {
     if (this.shouldRestartTelegram(previousConfig, nextConfig)) {
       await this.runConfigSideEffect("重启 Telegram", 8_000, async () => {
         await this.restartTelegram();
+      });
+    }
+
+    if (this.shouldRestartQQ(previousConfig, nextConfig)) {
+      await this.runConfigSideEffect("重启 QQ 通道", 8_000, async () => {
+        await this.restartQQ();
       });
     }
 
@@ -849,6 +941,14 @@ export class CompanionRuntime {
     return (
       previousConfig.telegram.botToken !== nextConfig.telegram.botToken ||
       previousConfig.telegram.chatId !== nextConfig.telegram.chatId
+    );
+  }
+
+  private shouldRestartQQ(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    return (
+      previousConfig.qq.enabled !== nextConfig.qq.enabled ||
+      previousConfig.qq.appId !== nextConfig.qq.appId ||
+      previousConfig.qq.appSecret !== nextConfig.qq.appSecret
     );
   }
 

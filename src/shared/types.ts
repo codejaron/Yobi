@@ -67,6 +67,13 @@ export const appConfigSchema = z
         chatId: z.string().default("")
       })
       .strict(),
+    qq: z
+      .object({
+        enabled: z.boolean().default(false),
+        appId: z.string().default(""),
+        appSecret: z.string().default("")
+      })
+      .strict(),
     messaging: z
       .object({
         allowVoiceMessages: z.boolean().default(true),
@@ -335,7 +342,7 @@ export interface HistoryMessage {
   id: string;
   role: ChatRole;
   text: string;
-  channel: "telegram" | "console";
+  channel: "telegram" | "console" | "qq";
   timestamp: string;
   meta?: {
     proactive?: boolean;
@@ -366,6 +373,7 @@ export interface SystemPermissionStatus {
 export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
+  qqConnected: boolean;
   lastUserAt: string | null;
   lastProactiveAt: string | null;
   historyCount: number;
@@ -410,6 +418,11 @@ export const DEFAULT_CONFIG: AppConfig = {
   telegram: {
     botToken: "",
     chatId: ""
+  },
+  qq: {
+    enabled: false,
+    appId: "",
+    appSecret: ""
   },
   messaging: {
     allowVoiceMessages: true,

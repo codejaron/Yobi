@@ -35,7 +35,7 @@ export class ConversationEngine {
 
   async reply(input: {
     text: string;
-    channel: "telegram" | "console";
+    channel: "telegram" | "console" | "qq";
     resourceId: string;
     threadId: string;
     photoUrl?: string;
@@ -194,7 +194,7 @@ export class ConversationEngine {
 
   async rememberAssistantMessage(input: {
     text: string;
-    channel: "telegram" | "console";
+    channel: "telegram" | "console" | "qq";
     resourceId: string;
     threadId: string;
     metadata?: Record<string, unknown>;
