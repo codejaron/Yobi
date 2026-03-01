@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppConfig } from "@shared/types";
 import type { CharacterStore } from "@main/core/character";
 import type { ModelFactory } from "@main/core/model-factory";
+import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
 
 export type ProactiveTrigger = {
@@ -77,7 +78,7 @@ export class ProactiveService {
 
     const decision = await generateObject({
       model,
-      providerOptions: this.buildProviderOptions(config),
+      providerOptions: resolveOpenAIStoreOption(config),
       schema: proactiveSchema,
       system: [
         "你是 Yobi。现在你有机会主动给用户发一条消息。",
@@ -94,7 +95,7 @@ export class ProactiveService {
         "如果你用了候选话题，请返回 usedTopicIndex（1-based）。",
         "返回 shouldSpeak/reason/message/usedTopicIndex。"
       ].join("\n\n")
-    } as any);
+    });
 
     const parsed = proactiveSchema.parse(decision.object ?? {
       shouldSpeak: false,
@@ -117,28 +118,6 @@ export class ProactiveService {
       speak: true,
       reason: parsed.reason,
       message: parsed.message.trim()
-    };
-  }
-
-  private buildProviderOptions(config: AppConfig): Record<string, unknown> | undefined {
-    const route = config.modelRouting.chat;
-    const provider = config.providers.find((candidate) => candidate.id === route.providerId);
-    if (!provider) {
-      return undefined;
-    }
-
-    const usesResponsesApi =
-      (provider.kind === "openai" || provider.kind === "custom-openai") &&
-      provider.apiMode === "responses";
-
-    if (!usesResponsesApi) {
-      return undefined;
-    }
-
-    return {
-      openai: {
-        store: false
-      }
     };
   }
 }

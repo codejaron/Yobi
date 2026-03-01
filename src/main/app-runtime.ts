@@ -1,10 +1,4 @@
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { promisify } from "node:util";
-import { app, desktopCapturer, shell, systemPreferences } from "electron";
 import type {
   AppConfig,
   AppStatus,
@@ -14,8 +8,6 @@ import type {
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
-  PermissionState,
-  SystemPermissionStatus,
   WorkingMemoryDocument
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
@@ -38,7 +30,9 @@ import { ReminderService } from "@main/services/reminders";
 import { McpManager } from "@main/services/mcp-manager";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
-import { GlobalPetPushToTalkService, type GlobalPttPhase } from "@main/services/global-ptt";
+import { GlobalPetPushToTalkService } from "@main/services/global-ptt";
+import { SystemPermissionsService } from "@main/services/system-permissions";
+import { PetService } from "@main/services/pet-service";
 import { OpenClawRuntime } from "@main/openclaw/runtime";
 import { ClawClient } from "@main/claw/claw-client";
 import { ClawChannel } from "@main/claw/claw-channel";
@@ -52,10 +46,6 @@ interface HistoryQuery {
   limit?: number;
   offset?: number;
 }
-
-type SystemPermissionKey = keyof SystemPermissionStatus;
-type MediaPermissionKey = "microphone" | "screen";
-const execFileAsync = promisify(execFile);
 
 const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
@@ -121,6 +111,24 @@ export class CompanionRuntime {
   private readonly pet = new PetWindowController();
   private readonly realtimeVoice = new RealtimeVoiceService();
   private readonly globalPtt = new GlobalPetPushToTalkService();
+  private readonly systemPermissionsService = new SystemPermissionsService({
+    onStatusChange: () => this.emitStatus()
+  });
+  private readonly petService = new PetService({
+    paths: this.paths,
+    getConfig: () => this.configStore.getConfig(),
+    pet: this.pet,
+    voiceRouter: this.voiceRouter,
+    realtimeVoice: this.realtimeVoice,
+    globalPtt: this.globalPtt,
+    systemPermissionsService: this.systemPermissionsService,
+    channelRouter: this.channelRouter,
+    primaryResourceId: PRIMARY_RESOURCE_ID,
+    primaryThreadId: PRIMARY_THREAD_ID,
+    chatReplyTimeoutMs: CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+    withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
+    onStatusChange: () => this.emitStatus()
+  });
   private readonly openclawRuntime = new OpenClawRuntime(this.paths, () => {
     void this.emitStatus();
   });
@@ -165,12 +173,6 @@ export class CompanionRuntime {
   private lastProactiveAt: string | null = null;
   private silenceTimer: NodeJS.Timeout | null = null;
   private lastSilenceHandledAt: string | null = null;
-  private petPttRecording = false;
-  private systemPermissions: SystemPermissionStatus = {
-    accessibility: "unknown",
-    microphone: "unknown",
-    screenCapture: "unknown"
-  };
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
@@ -194,9 +196,9 @@ export class CompanionRuntime {
     this.backgroundTasks.start();
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
-    this.syncPetWindow();
-    await this.syncGlobalPetPushToTalk();
-    this.syncRealtimeVoice();
+    this.petService.syncPetWindow();
+    await this.petService.syncGlobalPetPushToTalk();
+    this.petService.syncRealtimeVoice();
     this.startSilenceLoop();
 
     await this.openclawRuntime.start(this.getConfig());
@@ -219,10 +221,7 @@ export class CompanionRuntime {
     }
 
     this.keepAwake.stop();
-    this.pet.close();
-    this.globalPtt.stop();
-    this.petPttRecording = false;
-    this.realtimeVoice.stop();
+    this.petService.stop();
     this.backgroundTasks.stop();
     await this.clawChannel.disconnect();
     await this.openclawRuntime.stop();
@@ -267,52 +266,7 @@ export class CompanionRuntime {
   }
 
   async importPetModelDirectory(sourceDir: string): Promise<{ modelDir: string }> {
-    const resolvedSourceDir = path.resolve(sourceDir);
-
-    let sourceStat;
-    try {
-      sourceStat = await stat(resolvedSourceDir);
-    } catch {
-      throw new Error("选择的模型目录不存在。");
-    }
-
-    if (!sourceStat.isDirectory()) {
-      throw new Error("请选择模型文件夹，而不是文件。");
-    }
-
-    const containsModelFile = await this.containsModel3JsonFile(resolvedSourceDir);
-    if (!containsModelFile) {
-      throw new Error("所选目录内未找到 .model3.json 文件。");
-    }
-
-    await mkdir(this.paths.modelsDir, {
-      recursive: true
-    });
-
-    const managedModelsDir = path.resolve(this.paths.modelsDir);
-    if (resolvedSourceDir === managedModelsDir) {
-      throw new Error("请选择具体模型文件夹，不要选择 models 根目录。");
-    }
-
-    const baseName = this.normalizeModelDirectoryName(path.basename(resolvedSourceDir));
-    let targetDir = path.join(this.paths.modelsDir, baseName);
-    if (existsSync(targetDir)) {
-      targetDir = path.join(this.paths.modelsDir, `${baseName}-${Date.now()}`);
-    }
-
-    await cp(resolvedSourceDir, targetDir, {
-      recursive: true,
-      force: true
-    });
-
-    const copiedContainsModelFile = await this.containsModel3JsonFile(targetDir);
-    if (!copiedContainsModelFile) {
-      throw new Error("模型导入失败：复制后未找到 .model3.json 文件。");
-    }
-
-    return {
-      modelDir: targetDir
-    };
+    return this.petService.importPetModelDirectory(sourceDir);
   }
 
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
@@ -320,9 +274,9 @@ export class CompanionRuntime {
     const saved = await this.configStore.saveConfig(nextConfig);
 
     this.keepAwake.apply(saved.background.keepAwake);
-    this.syncPetWindow();
-    await this.syncGlobalPetPushToTalk();
-    this.syncRealtimeVoice();
+    this.petService.syncPetWindow();
+    await this.petService.syncGlobalPetPushToTalk();
+    this.petService.syncRealtimeVoice();
     this.startSilenceLoop();
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
@@ -375,123 +329,13 @@ export class CompanionRuntime {
   }
 
   async openSystemPermissionSettings(
-    permission: SystemPermissionKey
+    permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }> {
-    const initialState = this.getSystemPermissionState(permission);
-    this.systemPermissions[permission] = initialState;
-    if (initialState === "granted") {
-      await this.emitStatus();
-      return {
-        opened: false,
-        prompted: false
-      };
-    }
-
-    let prompted = false;
-
-    if (process.platform === "darwin") {
-      if (permission === "accessibility") {
-        try {
-          prompted = true;
-          systemPreferences.isTrustedAccessibilityClient(true);
-        } catch (error) {
-          console.warn("[runtime] request accessibility permission failed:", error);
-        }
-        this.systemPermissions.accessibility = this.getAccessibilityPermissionState();
-      }
-
-      if (permission === "microphone") {
-        try {
-          const rawStatus = this.getMediaAccessRawStatus("microphone");
-          if (rawStatus === "not-determined") {
-            prompted = true;
-            const granted = await systemPreferences.askForMediaAccess("microphone");
-            this.systemPermissions.microphone = granted ? "granted" : "denied";
-          }
-        } catch (error) {
-          console.warn("[runtime] request microphone permission failed:", error);
-        }
-      }
-
-      if (permission === "screenCapture") {
-        const rawStatus = this.getMediaAccessRawStatus("screen");
-        if (rawStatus === "not-determined") {
-          prompted = true;
-          await this.tryRequestScreenCapturePermissionOnMac();
-        }
-        this.systemPermissions.screenCapture = this.getMediaPermissionState("screen");
-      }
-
-      const latestState = this.getSystemPermissionState(permission);
-      this.systemPermissions[permission] = latestState;
-      await this.emitStatus();
-      if (latestState === "granted") {
-        return {
-          opened: false,
-          prompted
-        };
-      }
-
-      if (prompted) {
-        return {
-          opened: false,
-          prompted: true
-        };
-      }
-    }
-
-    const target = this.resolveSystemPermissionSettingsTarget(permission);
-    if (!target) {
-      return {
-        opened: false,
-        prompted: false
-      };
-    }
-
-    try {
-      await shell.openExternal(target);
-      return {
-        opened: true,
-        prompted: false
-      };
-    } catch (error) {
-      console.warn("[runtime] open system permission settings failed:", error);
-      return {
-        opened: false,
-        prompted: false
-      };
-    }
+    return this.systemPermissionsService.openSystemPermissionSettings(permission);
   }
 
   async resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {
-    if (process.platform !== "darwin") {
-      return {
-        reset: false,
-        message: "当前平台不支持重置系统权限。"
-      };
-    }
-
-    try {
-      const bundleId = await this.resolveCurrentBundleId();
-      if (!bundleId) {
-        return {
-          reset: false,
-          message: "无法识别当前应用标识，重置权限失败。"
-        };
-      }
-      await execFileAsync("tccutil", ["reset", "All", bundleId]);
-      await this.emitStatus();
-      return {
-        reset: true,
-        message: `已重置 ${bundleId} 的系统权限。`
-      };
-    } catch (error) {
-      console.warn("[runtime] reset system permissions failed:", error);
-      return {
-        reset: false,
-        message: "重置权限失败，请稍后重试。"
-      };
-    }
+    return this.systemPermissionsService.resetSystemPermissions();
   }
 
   async getConsoleChatHistory(input?: {
@@ -644,38 +488,7 @@ export class CompanionRuntime {
   }
 
   async chatFromPet(text: string): Promise<{ replyText: string }> {
-    const normalized = text.trim();
-    if (!normalized) {
-      return { replyText: "" };
-    }
-
-    this.pet.emitEvent({
-      type: "thinking",
-      value: "start"
-    });
-
-    try {
-      const reply = await this.withTimeout(
-        this.channelRouter.handleConsole({
-          text: normalized,
-          resourceId: PRIMARY_RESOURCE_ID,
-          threadId: PRIMARY_THREAD_ID
-        }),
-        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
-        "LLM 回复超时"
-      );
-
-      this.emitPetTalkingReply(reply);
-
-      return {
-        replyText: reply
-      };
-    } finally {
-      this.pet.emitEvent({
-        type: "thinking",
-        value: "stop"
-      });
-    }
+    return this.petService.chatFromPet(text);
   }
 
   async transcribeVoiceInput(input: {
@@ -684,35 +497,7 @@ export class CompanionRuntime {
   }): Promise<{
     text: string;
   }> {
-    const pcm16Base64 = typeof input.pcm16Base64 === "string" ? input.pcm16Base64.trim() : "";
-    if (!pcm16Base64) {
-      throw new Error("录音数据为空。");
-    }
-
-    if (!this.voiceRouter.isAlibabaSttReady()) {
-      throw new Error("阿里语音识别未启用，请在设置里先打开开关并填写 API Key。");
-    }
-
-    let pcm: Buffer;
-    try {
-      pcm = Buffer.from(pcm16Base64, "base64");
-    } catch {
-      throw new Error("录音数据格式不合法。");
-    }
-
-    if (pcm.length === 0) {
-      throw new Error("录音数据为空。");
-    }
-
-    const sampleRate = Number.isFinite(input.sampleRate) ? Number(input.sampleRate) : 16_000;
-    const text = await this.voiceRouter.transcribePcm16({
-      pcm,
-      sampleRate
-    });
-
-    return {
-      text
-    };
+    return this.petService.transcribeVoiceInput(input);
   }
 
   async transcribeAndSendFromPet(input: {
@@ -724,30 +509,7 @@ export class CompanionRuntime {
     replyText?: string;
     message?: string;
   }> {
-    if (!this.voiceRouter.isAlibabaSttReady()) {
-      return {
-        sent: false,
-        text: "",
-        message: "阿里语音识别未启用"
-      };
-    }
-
-    const transcribed = await this.transcribeVoiceInput(input);
-    const text = transcribed.text.trim();
-    if (!text) {
-      return {
-        sent: false,
-        text: "",
-        message: "未识别到有效语音"
-      };
-    }
-
-    const replied = await this.chatFromPet(text);
-    return {
-      sent: true,
-      text,
-      replyText: replied.replyText
-    };
+    return this.petService.transcribeAndSendFromPet(input);
   }
 
   private registerBuiltinTools(): void {
@@ -822,7 +584,7 @@ export class CompanionRuntime {
         displayText: reply,
         timestamp: new Date().toISOString()
       });
-      this.emitPetTalkingReply(reply);
+      this.petService.emitPetTalkingReply(reply);
 
       this.lastUserAt = new Date().toISOString();
       await this.emitStatus();
@@ -901,204 +663,6 @@ export class CompanionRuntime {
         value: "stop"
       });
     }
-  }
-
-  private syncPetWindow(): void {
-    const config = this.getConfig().pet;
-    if (!config.enabled) {
-      this.pet.close();
-      return;
-    }
-
-    const modelDirInput = config.modelDir.trim();
-    if (!modelDirInput) {
-      this.pet.close();
-      return;
-    }
-
-    const modelDir = path.isAbsolute(modelDirInput)
-      ? modelDirInput
-      : path.join(app.getAppPath(), modelDirInput);
-
-    if (!existsSync(modelDir)) {
-      this.pet.close();
-      return;
-    }
-
-    this.pet.open({
-      modelDir,
-      alwaysOnTop: config.alwaysOnTop
-    });
-  }
-
-  private async syncGlobalPetPushToTalk(): Promise<void> {
-    if (!this.shouldEnableGlobalPetPushToTalk()) {
-      this.globalPtt.stop();
-      if (this.petPttRecording) {
-        this.pet.emitEvent({
-          type: "ptt",
-          state: "cancel",
-          reason: "桌宠语音已关闭"
-        });
-      }
-      this.petPttRecording = false;
-      return;
-    }
-
-    if (!this.ensureGlobalPttPermission()) {
-      this.globalPtt.stop();
-      this.petPttRecording = false;
-      if (this.pet.isOnline()) {
-        this.pet.emitEvent({
-          type: "ptt",
-          state: "cancel",
-          reason: "请在系统设置中为 Yobi 打开辅助功能权限后再试。"
-        });
-      }
-      return;
-    }
-
-    try {
-      await this.globalPtt.start({
-        hotkey: this.getConfig().ptt.hotkey,
-        onPhase: (phase) => {
-          void this.handleGlobalPetPushToTalkPhase(phase);
-        }
-      });
-    } catch (error) {
-      this.globalPtt.stop();
-      this.petPttRecording = false;
-
-      const reason = error instanceof Error ? error.message : "全局按住说话启动失败";
-      if (this.pet.isOnline()) {
-        this.pet.emitEvent({
-          type: "ptt",
-          state: "cancel",
-          reason
-        });
-      }
-    }
-  }
-
-  private shouldEnableGlobalPetPushToTalk(): boolean {
-    const config = this.getConfig();
-    return config.pet.enabled && config.ptt.enabled && this.pet.isOnline();
-  }
-
-  private async handleGlobalPetPushToTalkPhase(phase: GlobalPttPhase): Promise<void> {
-    if (!this.shouldEnableGlobalPetPushToTalk()) {
-      this.petPttRecording = false;
-      return;
-    }
-
-    if (!this.ensureGlobalPttPermission()) {
-      if (phase === "down") {
-        this.pet.emitEvent({
-          type: "ptt",
-          state: "cancel",
-          reason: "缺少辅助功能权限，无法监听全局快捷键。"
-        });
-      }
-      this.petPttRecording = false;
-      return;
-    }
-
-    if (!this.voiceRouter.isAlibabaSttReady()) {
-      if (phase === "down") {
-        this.pet.emitEvent({
-          type: "ptt",
-          state: "cancel",
-          reason: "阿里语音识别未启用"
-        });
-      }
-      this.petPttRecording = false;
-      return;
-    }
-
-    if (phase === "down") {
-      if (this.petPttRecording) {
-        return;
-      }
-
-      this.petPttRecording = true;
-      this.pet.emitEvent({
-        type: "ptt",
-        state: "start"
-      });
-      return;
-    }
-
-    if (!this.petPttRecording) {
-      return;
-    }
-
-    this.petPttRecording = false;
-    this.pet.emitEvent({
-      type: "ptt",
-      state: "stop"
-    });
-  }
-
-  private ensureGlobalPttPermission(): boolean {
-    if (process.platform !== "darwin") {
-      return true;
-    }
-
-    let granted = false;
-    try {
-      granted = systemPreferences.isTrustedAccessibilityClient(false);
-    } catch {
-      granted = false;
-    }
-
-    this.systemPermissions.accessibility = granted ? "granted" : "denied";
-    return granted;
-  }
-
-  private async emitPetSpeech(text: string): Promise<void> {
-    const normalized = text.trim();
-    if (!normalized || !this.getConfig().realtimeVoice.enabled || !this.pet.isOnline()) {
-      return;
-    }
-
-    try {
-      const config = this.getConfig();
-      const audio = await this.voiceRouter.synthesize({
-        text: normalized,
-        edgeConfig: {
-          voice: config.voice.ttsVoice,
-          rate: config.voice.ttsRate,
-          pitch: config.voice.ttsPitch,
-          requestTimeoutMs: config.voice.requestTimeoutMs,
-          retryCount: config.voice.retryCount
-        }
-      });
-
-      this.pet.emitEvent({
-        type: "speech",
-        audioBase64: audio.toString("base64"),
-        mimeType: "audio/mpeg"
-      });
-    } catch (error) {
-      console.warn("[pet] speech synthesis failed:", error);
-    }
-  }
-
-  private emitPetTalkingReply(text: string): void {
-    this.pet.emitEvent({
-      type: "talking",
-      value: "talking"
-    });
-    void this.emitPetSpeech(text);
-  }
-
-  private syncRealtimeVoice(): void {
-    if (this.getConfig().realtimeVoice.enabled) {
-      this.realtimeVoice.start();
-      return;
-    }
-
-    this.realtimeVoice.stop();
   }
 
   private startSilenceLoop(): void {
@@ -1206,7 +770,7 @@ export class CompanionRuntime {
   }
 
   private async collectStatus(): Promise<AppStatus> {
-    this.refreshSystemPermissions();
+    this.systemPermissionsService.refreshSystemPermissions();
     const openclawStatus = this.openclawRuntime.getStatus();
     return {
       bootedAt: this.bootedAt,
@@ -1219,12 +783,10 @@ export class CompanionRuntime {
       }),
       keepAwakeActive: this.keepAwake.isActive(),
       pendingReminders: this.reminderService.count(),
-      petOnline: this.pet.isOnline(),
+      petOnline: this.petService.isPetOnline(),
       openclawOnline: openclawStatus.online,
       openclawStatus: openclawStatus.message,
-      systemPermissions: {
-        ...this.systemPermissions
-      }
+      systemPermissions: this.systemPermissionsService.getSnapshot()
     };
   }
 
@@ -1313,160 +875,6 @@ export class CompanionRuntime {
         .catch((error) => reject(error))
         .finally(() => clearTimeout(timer));
     });
-  }
-
-  private refreshSystemPermissions(): void {
-    this.systemPermissions = {
-      accessibility: this.getSystemPermissionState("accessibility"),
-      microphone: this.getSystemPermissionState("microphone"),
-      screenCapture: this.getSystemPermissionState("screenCapture")
-    };
-  }
-
-  private getSystemPermissionState(permission: SystemPermissionKey): PermissionState {
-    if (permission === "accessibility") {
-      return this.getAccessibilityPermissionState();
-    }
-
-    if (permission === "microphone") {
-      return this.getMediaPermissionState("microphone");
-    }
-
-    return this.getMediaPermissionState("screen");
-  }
-
-  private getAccessibilityPermissionState(): PermissionState {
-    if (process.platform !== "darwin") {
-      return "granted";
-    }
-
-    try {
-      return systemPreferences.isTrustedAccessibilityClient(false) ? "granted" : "denied";
-    } catch {
-      return "unknown";
-    }
-  }
-
-  private getMediaPermissionState(permission: MediaPermissionKey): PermissionState {
-    try {
-      const status = this.getMediaAccessRawStatus(permission);
-      return this.normalizeMediaPermissionState(status);
-    } catch {
-      return "unknown";
-    }
-  }
-
-  private getMediaAccessRawStatus(permission: MediaPermissionKey): string {
-    return systemPreferences.getMediaAccessStatus(permission);
-  }
-
-  private normalizeMediaPermissionState(raw: string): PermissionState {
-    const normalized = raw.trim().toLowerCase();
-    if (normalized === "granted") {
-      return "granted";
-    }
-
-    if (normalized === "denied" || normalized === "restricted") {
-      return "denied";
-    }
-
-    return "unknown";
-  }
-
-  private async tryRequestScreenCapturePermissionOnMac(): Promise<void> {
-    if (process.platform !== "darwin") {
-      return;
-    }
-
-    try {
-      await desktopCapturer.getSources({
-        types: ["screen"],
-        thumbnailSize: {
-          width: 1,
-          height: 1
-        }
-      });
-    } catch (error) {
-      console.warn("[runtime] request screen capture permission failed:", error);
-    }
-  }
-
-  private async resolveCurrentBundleId(): Promise<string | null> {
-    if (process.platform !== "darwin") {
-      return null;
-    }
-
-    const marker = "/Contents/MacOS/";
-    const markerIndex = process.execPath.indexOf(marker);
-    if (markerIndex <= 0) {
-      return null;
-    }
-
-    const appBundlePath = process.execPath.slice(0, markerIndex);
-    const infoPlistPath = path.join(appBundlePath, "Contents", "Info");
-    try {
-      const { stdout } = await execFileAsync("defaults", [
-        "read",
-        infoPlistPath,
-        "CFBundleIdentifier"
-      ]);
-      const bundleId = stdout.trim();
-      return bundleId || null;
-    } catch {
-      return null;
-    }
-  }
-
-  private resolveSystemPermissionSettingsTarget(permission: SystemPermissionKey): string | null {
-    if (process.platform === "darwin") {
-      const map: Record<SystemPermissionKey, string> = {
-        accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-        screenCapture: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-      };
-      return map[permission];
-    }
-
-    if (process.platform === "win32") {
-      const map: Record<SystemPermissionKey, string> = {
-        accessibility: "ms-settings:easeofaccess",
-        microphone: "ms-settings:privacy-microphone",
-        screenCapture: "ms-settings:privacy"
-      };
-      return map[permission];
-    }
-
-    return null;
-  }
-
-  private async containsModel3JsonFile(dir: string): Promise<boolean> {
-    const entries = await readdir(dir, {
-      withFileTypes: true
-    });
-
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".model3.json")) {
-        return true;
-      }
-
-      if (entry.isDirectory()) {
-        const nested = path.join(dir, entry.name);
-        if (await this.containsModel3JsonFile(nested)) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
-  private normalizeModelDirectoryName(input: string): string {
-    const normalized = input.trim().replace(/[^a-zA-Z0-9_-]+/g, "-");
-    if (normalized) {
-      return normalized.toLowerCase();
-    }
-
-    return `model-${Date.now()}`;
   }
 }
 

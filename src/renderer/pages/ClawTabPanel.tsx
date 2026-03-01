@@ -12,6 +12,7 @@ import {
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { Switch } from "@renderer/components/ui/switch";
+import { makeClientId, singleLine, summarizeUnknown } from "@renderer/pages/chat-utils";
 
 interface ClawTabPanelProps {
   active: boolean;
@@ -36,29 +37,9 @@ interface ClawActionItem {
   timestamp: string;
 }
 
-function makeId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-}
-
-function summarize(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function singleLine(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
+const CLAW_HISTORY_LIMIT = 50;
+const CLAW_CHAT_LIMIT = 240;
+const CLAW_ACTION_LIMIT = 320;
 
 function formatConnectionLabel(state: ClawConnectionState): string {
   if (state === "connected") {
@@ -183,10 +164,10 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     setChatItems((prev) => [
       ...prev,
       {
-        id: item.id ?? makeId("claw-chat"),
+        id: item.id ?? makeClientId("claw-chat"),
         ...item
       }
-    ].slice(-240));
+    ].slice(-CLAW_CHAT_LIMIT));
   }, []);
 
   const appendActionItem = useCallback((item: Omit<ClawActionItem, "id"> & { id?: string }) => {
@@ -197,10 +178,10 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     setActionItems((prev) => [
       ...prev,
       {
-        id: item.id ?? makeId("claw-action"),
+        id: item.id ?? makeClientId("claw-action"),
         ...item
       }
-    ].slice(-320));
+    ].slice(-CLAW_ACTION_LIMIT));
   }, [logEnabled]);
 
   const applyHistory = useCallback((historyItems: ClawHistoryItem[]) => {
@@ -219,7 +200,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         return prev;
       }
 
-      return [...additions, ...prev].slice(-240);
+      return [...additions, ...prev].slice(-CLAW_CHAT_LIMIT);
     });
 
     if (!logEnabled) {
@@ -241,7 +222,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         return prev;
       }
 
-      return [...additions, ...prev].slice(-320);
+      return [...additions, ...prev].slice(-CLAW_ACTION_LIMIT);
     });
   }, [logEnabled]);
 
@@ -250,7 +231,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     setHistoryError("");
 
     try {
-      const response = await window.companion.clawHistory(50);
+      const response = await window.companion.clawHistory(CLAW_HISTORY_LIMIT);
       applyHistory(response.items);
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : "加载历史失败");
@@ -280,7 +261,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
       setChatItems((prev) => {
         const streamingId = streamMessageIdRef.current;
         if (!streamingId) {
-          const id = makeId("claw-assistant");
+          const id = makeClientId("claw-assistant");
           streamMessageIdRef.current = id;
           return [
             ...prev,
@@ -292,12 +273,12 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
               timestamp: event.timestamp,
               streaming: true
             }
-          ].slice(-240);
+          ].slice(-CLAW_CHAT_LIMIT);
         }
 
         const index = prev.findIndex((item) => item.id === streamingId);
         if (index < 0) {
-          const id = makeId("claw-assistant");
+          const id = makeClientId("claw-assistant");
           streamMessageIdRef.current = id;
           return [
             ...prev,
@@ -309,7 +290,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
               timestamp: event.timestamp,
               streaming: true
             }
-          ].slice(-240);
+          ].slice(-CLAW_CHAT_LIMIT);
         }
 
         const next = [...prev];
@@ -365,14 +346,14 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         return [
           ...prev,
           {
-            id: makeId("claw-final"),
+            id: makeClientId("claw-final"),
             role: "assistant" as const,
             title: "Claw",
             text: event.text,
             timestamp: event.timestamp,
             streaming: false
           }
-        ].slice(-240);
+        ].slice(-CLAW_CHAT_LIMIT);
       });
 
       streamMessageIdRef.current = null;
@@ -382,10 +363,10 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     if (event.type === "tool") {
       const detailParts = [];
       if (event.input !== undefined) {
-        detailParts.push(`输入:\n${summarize(event.input)}`);
+        detailParts.push(`输入:\n${summarizeUnknown(event.input, 400)}`);
       }
       if (event.output !== undefined) {
-        detailParts.push(`输出:\n${summarize(event.output)}`);
+        detailParts.push(`输出:\n${summarizeUnknown(event.output, 400)}`);
       }
       if (event.error) {
         detailParts.push(`错误:\n${event.error}`);

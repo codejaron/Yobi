@@ -2,13 +2,13 @@ import type { ToolSet } from "ai";
 import type { z } from "zod";
 import type { AppConfig, CommandApprovalDecision } from "@shared/types";
 
-export interface ToolMediaAttachment {
+interface ToolMediaAttachment {
   type: "image" | "file";
   path: string;
   mimeType: string;
 }
 
-export type ToolApprovalDecision = CommandApprovalDecision;
+type ToolApprovalDecision = CommandApprovalDecision;
 
 export interface ToolApprovalRequest {
   toolName: string;

@@ -13,6 +13,7 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { Switch } from "@renderer/components/ui/switch";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
+import { makeClientId, singleLine, summarizeUnknown } from "@renderer/pages/chat-utils";
 import { ClawTabPanel } from "./ClawTabPanel";
 
 type MessageRole = "user" | "assistant";
@@ -44,6 +45,9 @@ interface PendingApproval {
   description: string;
 }
 
+const CONSOLE_HISTORY_PAGE_SIZE = 20;
+const LIVE_MESSAGE_LIMIT = 90;
+
 function historyRoleToMessageRole(role: HistoryMessage["role"]): MessageRole {
   return role === "assistant" ? "assistant" : "user";
 }
@@ -53,43 +57,6 @@ const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string
   { decision: "allow-always", label: "同意并记住" },
   { decision: "deny", label: "拒绝" }
 ];
-
-function makeId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-}
-
-function summarize(value: unknown, maxLength = 240): string {
-  let text = "";
-  if (typeof value === "string") {
-    text = value;
-  } else {
-    try {
-      text = JSON.stringify(value, null, 2);
-    } catch {
-      text = String(value);
-    }
-  }
-
-  const normalized = text.trim();
-  if (!normalized) {
-    return "(空)";
-  }
-
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
-}
-
-function singleLine(value: string, maxLength = 108): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (!compact) {
-    return "(空)";
-  }
-
-  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
-}
 
 function isAlibabaSttReady(config: AppConfig | null): boolean {
   if (!config) {
@@ -168,10 +135,10 @@ export function ConsoleChatPage() {
     setActions((prev) => {
       const nextItem: ActionItem = {
         ...item,
-        id: item.id ?? makeId("action")
+        id: item.id ?? makeClientId("action")
       };
 
-      return [...prev, nextItem].slice(-90);
+      return [...prev, nextItem].slice(-LIVE_MESSAGE_LIMIT);
     });
   }, [logEnabled]);
 
@@ -181,7 +148,7 @@ export function ConsoleChatPage() {
 
       if (index < 0) {
         const seed: ConsoleMessage = {
-          id: makeId("assistant"),
+          id: makeClientId("assistant"),
           requestId,
           role: "assistant",
           text: "",
@@ -222,7 +189,7 @@ export function ConsoleChatPage() {
         requestId: event.requestId,
         kind: "tool",
         label: `调用工具 · ${event.toolName}`,
-        detail: summarize(event.input),
+        detail: summarizeUnknown(event.input),
         timestamp: event.timestamp
       });
       return;
@@ -233,7 +200,7 @@ export function ConsoleChatPage() {
         requestId: event.requestId,
         kind: event.success ? "tool" : "error",
         label: event.success ? `工具返回 · ${event.toolName}` : `工具失败 · ${event.toolName}`,
-        detail: event.success ? summarize(event.output) : event.error ?? "执行失败",
+        detail: event.success ? summarizeUnknown(event.output) : event.error ?? "执行失败",
         timestamp: event.timestamp
       });
       return;
@@ -333,7 +300,7 @@ export function ConsoleChatPage() {
   const loadLatestHistory = useCallback(async () => {
     try {
       const page = await window.companion.listConsoleHistory({
-        limit: 20
+        limit: CONSOLE_HISTORY_PAGE_SIZE
       });
 
       setPersistedMessages(page.items);
@@ -493,7 +460,7 @@ export function ConsoleChatPage() {
     try {
       const page = await window.companion.listConsoleHistory({
         cursor: historyCursor,
-        limit: 20
+        limit: CONSOLE_HISTORY_PAGE_SIZE
       });
 
       if (page.items.length === 0) {
@@ -640,12 +607,12 @@ export function ConsoleChatPage() {
     setDraft("");
     setLiveMessages((prev) => [
       ...prev,
-      {
-        id: makeId("user"),
-        requestId: makeId("request-local"),
-        role: "user",
-        text,
-        state: "done"
+        {
+          id: makeClientId("user"),
+          requestId: makeClientId("request-local"),
+          role: "user",
+          text,
+          state: "done"
       }
     ]);
 
@@ -655,7 +622,7 @@ export function ConsoleChatPage() {
       setLiveMessages((prev) => [
         ...prev,
         {
-          id: makeId("assistant"),
+          id: makeClientId("assistant"),
           requestId: started.requestId,
           role: "assistant",
           text: "",
@@ -675,8 +642,8 @@ export function ConsoleChatPage() {
       setLiveMessages((prev) => [
         ...prev,
         {
-          id: makeId("assistant"),
-          requestId: makeId("request-error"),
+          id: makeClientId("assistant"),
+          requestId: makeClientId("request-error"),
           role: "assistant",
           text: message,
           state: "error"
@@ -996,7 +963,7 @@ export function ConsoleChatPage() {
                         <span className="text-[11px] text-muted-foreground">{timestamp}</span>
                       </div>
                       <p className={expanded ? "whitespace-pre-wrap leading-relaxed text-foreground/90" : "truncate leading-relaxed text-foreground/90"}>
-                        {expanded ? item.detail : singleLine(item.detail)}
+                        {expanded ? item.detail : singleLine(item.detail, 108)}
                       </p>
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         {expanded ? "点击收起" : "点击展开"}

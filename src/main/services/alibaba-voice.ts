@@ -6,7 +6,7 @@ type WsLike = {
   close: () => void;
 };
 
-export type AlibabaRegion = "cn" | "intl";
+type AlibabaRegion = "cn" | "intl";
 
 interface VoiceAuthInput {
   apiKey: string;

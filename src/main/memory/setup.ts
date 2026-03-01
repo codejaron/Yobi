@@ -31,12 +31,30 @@ interface CursorHistoryInput extends MemoryResourceContext {
   limit?: number;
 }
 
-export interface PendingTopic {
+interface PendingTopic {
   id: string;
   text: string;
   source: string;
   createdAt: string;
   expiresAt: string | null;
+}
+
+interface TextPart {
+  type: "text";
+  text: string;
+}
+
+function isTextPart(value: unknown): value is TextPart {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as {
+    type?: unknown;
+    text?: unknown;
+  };
+
+  return candidate.type === "text" && typeof candidate.text === "string";
 }
 
 function normalizeRole(role: MastraDBMessage["role"]): "system" | "user" | "assistant" {
@@ -57,8 +75,8 @@ function extractTextFromMessage(message: MastraDBMessage): string {
   }
 
   const textParts = rawContent?.parts
-    ?.filter((part) => part?.type === "text" && typeof (part as any).text === "string")
-    .map((part) => ((part as any).text as string).trim())
+    ?.filter((part): part is TextPart => isTextPart(part))
+    .map((part) => part.text.trim())
     .filter(Boolean);
 
   if (textParts && textParts.length > 0) {

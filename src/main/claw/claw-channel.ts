@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ClawEvent, ClawHistoryItem, ClawOrigin } from "@shared/types";
+import { isRecord, summarizeUnknown } from "@main/utils/guards";
 import type { ClawClient } from "./claw-client";
 import type { ClawEventFrame } from "./protocol";
 
@@ -16,10 +17,6 @@ type Listener = (event: ClawEvent) => void;
 
 type AgentStream = "tool" | "assistant" | "lifecycle" | "unknown";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -28,17 +25,6 @@ function maybeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function summarizeUnknown(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
 
 function trimOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -94,7 +80,7 @@ function extractContentText(content: unknown): string {
 }
 
 function extractTextFromValue(value: unknown, depth = 0): string {
-  if (depth > 3) {
+  if (depth > 2) {
     return "";
   }
 
@@ -118,18 +104,7 @@ function extractTextFromValue(value: unknown, depth = 0): string {
     return contentText;
   }
 
-  if (Array.isArray(value.parts)) {
-    const text = value.parts
-      .map((part) => extractTextFromValue(part, depth + 1))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    if (text) {
-      return text;
-    }
-  }
-
-  const nestedCandidates = [value.message, value.payload, value.data, value.result];
+  const nestedCandidates = [value.message, value.data];
   for (const candidate of nestedCandidates) {
     const text = extractTextFromValue(candidate, depth + 1).trim();
     if (text) {
@@ -177,7 +152,7 @@ function extractChatErrorMessage(payload: unknown): string {
     }
   }
 
-  const nestedCandidates = [payload.error, payload.message, payload.payload, payload.data];
+  const nestedCandidates = [payload.message, payload.data];
   for (const candidate of nestedCandidates) {
     const text = extractText(candidate).trim();
     if (text) {
@@ -189,7 +164,7 @@ function extractChatErrorMessage(payload: unknown): string {
 }
 
 function extractRunId(value: unknown, depth = 0): string {
-  if (depth > 4 || !isRecord(value)) {
+  if (depth > 2 || !isRecord(value)) {
     return "";
   }
 
@@ -200,7 +175,7 @@ function extractRunId(value: unknown, depth = 0): string {
     }
   }
 
-  const nestedCandidates = [value.run, value.meta, value.payload, value.data, value.result, value.error];
+  const nestedCandidates = [value.run, value.meta, value.message, value.data];
   for (const candidate of nestedCandidates) {
     const nested = extractRunId(candidate, depth + 1);
     if (nested) {

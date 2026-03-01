@@ -1,8 +1,6 @@
 import type {
   AppConfig,
-  AppStatus,
-  CharacterProfile,
-  WorkingMemoryDocument
+  AppStatus
 } from "@shared/types";
 
 export type PageId =
@@ -19,11 +17,4 @@ export interface PageProps {
   setConfig: (next: AppConfig) => void;
   status: AppStatus | null;
   refreshStatus: () => Promise<void>;
-}
-
-export interface DataBundle {
-  config: AppConfig;
-  status: AppStatus | null;
-  character: CharacterProfile | null;
-  workingMemory: WorkingMemoryDocument | null;
 }

@@ -11,6 +11,7 @@ import {
   type ClawReqFrame,
   type ClawResFrame
 } from "./protocol";
+import { isRecord, summarizeUnknown } from "@main/utils/guards";
 
 const CONNECT_TIMEOUT_MS = 12_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -26,7 +27,7 @@ interface WsLike {
   send(data: string, callback?: (error?: Error) => void): void;
   close(code?: number, data?: string): void;
   on(event: "open", listener: () => void): this;
-  on(event: "message", listener: (data: unknown) => void): this;
+  on(event: "message", listener: (data: string | Buffer) => void): this;
   on(event: "close", listener: (code: number, reason: Buffer) => void): this;
   on(event: "error", listener: (error: Error) => void): this;
 }
@@ -44,18 +45,6 @@ export type ClawConnectionState =
   | "reconnecting"
   | "disconnected-manual";
 
-function summarizeUnknown(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (typeof error === "string") {
-    return error;
-  }
-
-  return String(error);
-}
-
 function toMessageText(payload: unknown): string {
   if (typeof payload === "string") {
     return payload;
@@ -64,23 +53,8 @@ function toMessageText(payload: unknown): string {
   if (payload instanceof Buffer) {
     return payload.toString("utf8");
   }
-
-  if (Array.isArray(payload)) {
-    const merged = payload
-      .map((chunk) => (chunk instanceof Buffer ? chunk : Buffer.from(String(chunk))))
-      .reduce((acc, chunk) => Buffer.concat([acc, chunk]), Buffer.alloc(0));
-    return merged.toString("utf8");
-  }
-
-  if (payload instanceof ArrayBuffer) {
-    return Buffer.from(payload).toString("utf8");
-  }
-
-  if (ArrayBuffer.isView(payload)) {
-    return Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf8");
-  }
-
-  return typeof payload === "string" ? payload : "";
+ 
+  return "";
 }
 
 function normalizeGatewayWsUrl(gatewayUrl: string): string {
@@ -123,10 +97,6 @@ async function createWebSocket(url: string): Promise<WsLike> {
 
 function resolveClientPlatform(): string {
   return process.platform;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function extractNonce(payload: unknown): string | null {

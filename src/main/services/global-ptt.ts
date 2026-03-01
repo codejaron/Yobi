@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 
 export type GlobalPttPhase = "down" | "up";
 
-export interface GlobalPttStartInput {
+interface GlobalPttStartInput {
   hotkey: string;
   onPhase: (phase: GlobalPttPhase) => void;
 }

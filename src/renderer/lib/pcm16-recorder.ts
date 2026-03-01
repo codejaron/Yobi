@@ -1,4 +1,4 @@
-export interface Pcm16Capture {
+interface Pcm16Capture {
   pcm16Base64: string;
   durationMs: number;
   sampleRate: number;

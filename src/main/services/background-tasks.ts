@@ -2,6 +2,7 @@ import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import type { AppConfig, HistoryMessage } from "@shared/types";
 import type { ModelFactory } from "@main/core/model-factory";
+import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
 import type { McpManager } from "@main/services/mcp-manager";
 
@@ -122,7 +123,7 @@ export class BackgroundTaskService {
 
     const result = await generateObject({
       model,
-      providerOptions: this.buildProviderOptions(config),
+      providerOptions: resolveOpenAIStoreOption(config),
       schema: recallSchema,
       system: [
         "你负责在后台整理主动聊天候选话题。",
@@ -135,7 +136,7 @@ export class BackgroundTaskService {
         `最近历史:\n${formatHistory(history)}`,
         "请给出 0-2 个一句话话题。"
       ].join("\n\n")
-    } as any);
+    });
 
     const topics = recallSchema.parse(result.object ?? { topics: [] }).topics;
     for (const topic of topics) {
@@ -162,7 +163,7 @@ export class BackgroundTaskService {
 
     const plan = await generateObject({
       model,
-      providerOptions: this.buildProviderOptions(config),
+      providerOptions: resolveOpenAIStoreOption(config),
       schema: wanderPlanSchema,
       system: [
         "你在后台为用户挑选一个可搜索的新鲜话题方向。",
@@ -174,7 +175,7 @@ export class BackgroundTaskService {
         `最近历史:\n${formatHistory(history)}`,
         "返回 shouldSearch 和 query。"
       ].join("\n\n")
-    } as any);
+    });
 
     const parsedPlan = wanderPlanSchema.parse(plan.object ?? {
       shouldSearch: false
@@ -195,7 +196,7 @@ export class BackgroundTaskService {
 
     const digest = await generateText({
       model,
-      providerOptions: this.buildProviderOptions(config),
+      providerOptions: resolveOpenAIStoreOption(config),
       system: [
         "你负责把搜索结果浓缩成一个口语化、可直接开聊的话题。",
         "输出一句中文，不要编号，不要解释推理过程。",
@@ -207,7 +208,7 @@ export class BackgroundTaskService {
         "请输出一句可用于主动聊天的话题。"
       ].join("\n\n"),
       maxOutputTokens: 120
-    } as any);
+    });
 
     const topic = digest.text.replace(/\s+/g, " ").trim();
     if (!topic) {
@@ -219,27 +220,5 @@ export class BackgroundTaskService {
       source: "wander",
       expiresAt: hoursFromNow(48)
     });
-  }
-
-  private buildProviderOptions(config: AppConfig): Record<string, unknown> | undefined {
-    const route = config.modelRouting.chat;
-    const provider = config.providers.find((candidate) => candidate.id === route.providerId);
-    if (!provider) {
-      return undefined;
-    }
-
-    const usesResponsesApi =
-      (provider.kind === "openai" || provider.kind === "custom-openai") &&
-      provider.apiMode === "responses";
-
-    if (!usesResponsesApi) {
-      return undefined;
-    }
-
-    return {
-      openai: {
-        store: false
-      }
-    };
   }
 }

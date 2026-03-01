@@ -1,3 +1,5 @@
+import { isRecord } from "@main/utils/guards";
+
 export interface ClawReqFrame {
   type: "req";
   id: string;
@@ -25,11 +27,7 @@ export interface ClawEventFrame {
   payload?: unknown;
 }
 
-export type ClawFrame = ClawReqFrame | ClawResFrame | ClawEventFrame;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+type ClawFrame = ClawReqFrame | ClawResFrame | ClawEventFrame;
 
 function toStringValue(value: unknown): string {
   return typeof value === "string" ? value : "";

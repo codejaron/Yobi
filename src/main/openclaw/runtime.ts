@@ -8,6 +8,7 @@ import { app } from "electron";
 import type { ChildProcess } from "node:child_process";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
+import { isRecord } from "@main/utils/guards";
 
 const execFileAsync = promisify(execFile);
 const GATEWAY_HEALTH_WAIT_TIMEOUT_MS = 15_000;
@@ -17,10 +18,6 @@ const OPENCLAW_CUSTOM_OPENAI_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) OpenC
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function resolveOpenClawBin(): string {
@@ -402,7 +399,6 @@ export class OpenClawRuntime {
     await fs.mkdir(this.paths.openclawStateDir, {
       recursive: true
     });
-    await this.removeLegacyHooksConfig();
 
     const fingerprint = this.buildSyncFingerprint(bootstrap);
     const [configExists, syncState] = await Promise.all([
@@ -411,43 +407,13 @@ export class OpenClawRuntime {
     ]);
 
     if (configExists && syncState?.fingerprint === fingerprint) {
-      await this.syncModelProviders(bootstrap);
       await this.syncMainAgentState(bootstrap);
       return;
     }
 
-    await this.runConfigSet("gateway.auth.mode", "token", bootstrap.env);
-    await this.runConfigSet("gateway.auth.token", bootstrap.gatewayToken, bootstrap.env);
-    await this.runConfigSet("gateway.http.endpoints.responses.enabled", true, bootstrap.env);
-    await this.runConfigSet("agents.defaults.model.primary", bootstrap.modelRef, bootstrap.env);
-    await this.runConfigSet("agents.defaults.model.fallbacks", bootstrap.fallbackModelRefs, bootstrap.env);
-    await this.runConfigSet(
-      "agents.defaults.thinkingDefault",
-      bootstrap.managed.thinkingDefault,
-      bootstrap.env
-    );
-    await this.runConfigSet("agents.defaults.contextTokens", bootstrap.managed.contextTokens, bootstrap.env);
-    await this.runConfigSet("agents.defaults.timeoutSeconds", bootstrap.managed.timeoutSeconds, bootstrap.env);
-    await this.runConfigSet("agents.defaults.maxConcurrent", bootstrap.managed.maxConcurrent, bootstrap.env);
-    await this.runConfigSet("agents.defaults.sandbox.mode", bootstrap.managed.sandboxMode, bootstrap.env);
-    await this.runConfigSet("agents.defaults.heartbeat.every", bootstrap.managed.heartbeatEvery, bootstrap.env);
-    await this.runConfigSet("browser.enabled", bootstrap.managed.browserEnabled, bootstrap.env);
-    await this.runConfigSet("browser.defaultProfile", bootstrap.managed.browserProfile, bootstrap.env);
-    await this.runConfigSet("browser.headless", bootstrap.managed.browserHeadless, bootstrap.env);
-    await this.runConfigSet("tools.web.search.enabled", bootstrap.managed.toolWebSearchEnabled, bootstrap.env);
-    await this.runConfigSet("tools.web.fetch.enabled", bootstrap.managed.toolWebFetchEnabled, bootstrap.env);
-    await this.runConfigSet("tools.exec.security", bootstrap.managed.toolExecSecurity, bootstrap.env);
-    await this.runConfigSet("tools.elevated.enabled", bootstrap.managed.toolElevatedEnabled, bootstrap.env);
-    if (bootstrap.managed.browserExecutablePath) {
-      await this.runConfigSet(
-        "browser.executablePath",
-        bootstrap.managed.browserExecutablePath,
-        bootstrap.env
-      );
-    } else {
-      await this.runConfigUnset("browser.executablePath", bootstrap.env);
-    }
-    await this.syncModelProviders(bootstrap);
+    const existing = await this.readOpenClawConfig();
+    const nextConfig = this.buildManagedOpenClawConfig(existing, bootstrap);
+    await fs.writeFile(this.paths.openclawConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
 
     await this.syncMainAgentState(bootstrap);
 
@@ -462,29 +428,115 @@ export class OpenClawRuntime {
     await this.syncMainSessionRouting(bootstrap);
   }
 
-  private async syncModelProviders(bootstrap: GatewayBootstrap): Promise<void> {
-    await this.runConfigSet("models.mode", "merge", bootstrap.env);
-    await this.runConfigSet("models.providers", bootstrap.providerConfigs, bootstrap.env);
-  }
-
-  private async removeLegacyHooksConfig(): Promise<void> {
+  private async readOpenClawConfig(): Promise<Record<string, unknown>> {
     let parsed: unknown;
     try {
       const raw = await fs.readFile(this.paths.openclawConfigPath, "utf8");
       parsed = JSON.parse(raw);
     } catch {
-      return;
+      return {};
     }
 
-    if (!isRecord(parsed) || !("hooks" in parsed)) {
-      return;
+    if (!isRecord(parsed)) {
+      return {};
     }
 
-    const next = {
-      ...parsed
-    };
+    return this.cloneRecord(parsed);
+  }
+
+  private buildManagedOpenClawConfig(
+    existing: Record<string, unknown>,
+    bootstrap: GatewayBootstrap
+  ): Record<string, unknown> {
+    const next = this.cloneRecord(existing);
     delete next.hooks;
-    await fs.writeFile(this.paths.openclawConfigPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+
+    this.setConfigPath(next, ["gateway", "auth", "mode"], "token");
+    this.setConfigPath(next, ["gateway", "auth", "token"], bootstrap.gatewayToken);
+    this.setConfigPath(next, ["gateway", "http", "endpoints", "responses", "enabled"], true);
+
+    this.setConfigPath(next, ["agents", "defaults", "model", "primary"], bootstrap.modelRef);
+    this.setConfigPath(next, ["agents", "defaults", "model", "fallbacks"], bootstrap.fallbackModelRefs);
+    this.setConfigPath(
+      next,
+      ["agents", "defaults", "thinkingDefault"],
+      bootstrap.managed.thinkingDefault
+    );
+    this.setConfigPath(next, ["agents", "defaults", "contextTokens"], bootstrap.managed.contextTokens);
+    this.setConfigPath(next, ["agents", "defaults", "timeoutSeconds"], bootstrap.managed.timeoutSeconds);
+    this.setConfigPath(next, ["agents", "defaults", "maxConcurrent"], bootstrap.managed.maxConcurrent);
+    this.setConfigPath(next, ["agents", "defaults", "sandbox", "mode"], bootstrap.managed.sandboxMode);
+    this.setConfigPath(next, ["agents", "defaults", "heartbeat", "every"], bootstrap.managed.heartbeatEvery);
+
+    this.setConfigPath(next, ["browser", "enabled"], bootstrap.managed.browserEnabled);
+    this.setConfigPath(next, ["browser", "defaultProfile"], bootstrap.managed.browserProfile);
+    this.setConfigPath(next, ["browser", "headless"], bootstrap.managed.browserHeadless);
+    if (bootstrap.managed.browserExecutablePath) {
+      this.setConfigPath(
+        next,
+        ["browser", "executablePath"],
+        bootstrap.managed.browserExecutablePath
+      );
+    } else {
+      this.deleteConfigPath(next, ["browser", "executablePath"]);
+    }
+
+    this.setConfigPath(next, ["tools", "web", "search", "enabled"], bootstrap.managed.toolWebSearchEnabled);
+    this.setConfigPath(next, ["tools", "web", "fetch", "enabled"], bootstrap.managed.toolWebFetchEnabled);
+    this.setConfigPath(next, ["tools", "exec", "security"], bootstrap.managed.toolExecSecurity);
+    this.setConfigPath(next, ["tools", "elevated", "enabled"], bootstrap.managed.toolElevatedEnabled);
+
+    this.setConfigPath(next, ["models", "mode"], "merge");
+    this.setConfigPath(next, ["models", "providers"], bootstrap.providerConfigs);
+
+    return next;
+  }
+
+  private setConfigPath(root: Record<string, unknown>, pathParts: string[], value: unknown): void {
+    let cursor: Record<string, unknown> = root;
+
+    for (let index = 0; index < pathParts.length - 1; index += 1) {
+      const part = pathParts[index];
+      const current = cursor[part];
+      if (!isRecord(current)) {
+        const next: Record<string, unknown> = {};
+        cursor[part] = next;
+        cursor = next;
+        continue;
+      }
+
+      cursor = current;
+    }
+
+    cursor[pathParts[pathParts.length - 1]] = value;
+  }
+
+  private deleteConfigPath(root: Record<string, unknown>, pathParts: string[]): void {
+    if (pathParts.length === 0) {
+      return;
+    }
+
+    let cursor: Record<string, unknown> = root;
+    for (let index = 0; index < pathParts.length - 1; index += 1) {
+      const current = cursor[pathParts[index]];
+      if (!isRecord(current)) {
+        return;
+      }
+
+      cursor = current;
+    }
+
+    delete cursor[pathParts[pathParts.length - 1]];
+  }
+
+  private cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+    try {
+      return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+    } catch {
+      return {
+        ...value
+      };
+    }
   }
 
   private async syncMainAgentModelsFile(bootstrap: GatewayBootstrap): Promise<void> {
@@ -572,35 +624,6 @@ export class OpenClawRuntime {
       providerId: normalized.slice(0, slashIndex),
       modelId: normalized.slice(slashIndex + 1)
     };
-  }
-
-  private async runConfigSet(pathName: string, value: unknown, env: NodeJS.ProcessEnv): Promise<void> {
-    const encoded = JSON.stringify(value);
-    if (typeof encoded !== "string") {
-      throw new Error(`OpenClaw config failed: value for ${pathName} is not serializable`);
-    }
-
-    try {
-      await execFileAsync(resolveOpenClawBin(), ["config", "set", pathName, encoded, "--strict-json"], {
-        env
-      });
-    } catch (error) {
-      throw new Error(`OpenClaw config set ${pathName} failed: ${this.formatExecError(error)}`);
-    }
-  }
-
-  private async runConfigUnset(pathName: string, env: NodeJS.ProcessEnv): Promise<void> {
-    try {
-      await execFileAsync(resolveOpenClawBin(), ["config", "unset", pathName], {
-        env
-      });
-    } catch (error) {
-      const message = this.formatExecError(error);
-      if (message.includes("Config path not found")) {
-        return;
-      }
-      throw new Error(`OpenClaw config unset ${pathName} failed: ${message}`);
-    }
   }
 
   private parseConfiguredModelInput(
@@ -743,13 +766,6 @@ export class OpenClawRuntime {
     }
 
     return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
-  }
-
-  private formatExecError(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
-    }
-    return String(error);
   }
 
   private resolveBaseEnv(): NodeJS.ProcessEnv {

@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 
-export function normalizeCustomOpenAIBaseUrl(raw: string): string {
+function normalizeCustomOpenAIBaseUrl(raw: string): string {
   const input = raw.trim();
   if (!input) {
     return input;
