@@ -252,6 +252,16 @@ export class CompanionRuntime {
     };
   }
 
+  getClawConnectionEvent(): ClawEvent {
+    const status = this.clawClient.getConnectionStatus();
+    return {
+      type: "connection",
+      state: status.state,
+      message: status.message,
+      timestamp: new Date().toISOString()
+    };
+  }
+
   getConfig(): AppConfig {
     return this.configStore.getConfig();
   }
@@ -1247,7 +1257,12 @@ export class CompanionRuntime {
       });
     }
 
-    if (JSON.stringify(previousConfig.openclaw) !== JSON.stringify(nextConfig.openclaw)) {
+    const openclawChanged =
+      JSON.stringify(previousConfig.openclaw) !== JSON.stringify(nextConfig.openclaw) ||
+      JSON.stringify(previousConfig.providers) !== JSON.stringify(nextConfig.providers) ||
+      JSON.stringify(previousConfig.modelRouting) !== JSON.stringify(nextConfig.modelRouting);
+
+    if (openclawChanged) {
       await this.runConfigSideEffect("重启 OpenClaw", 20_000, async () => {
         await this.clawChannel.disconnect();
         await this.openclawRuntime.start(nextConfig);

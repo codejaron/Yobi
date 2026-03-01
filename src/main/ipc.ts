@@ -11,9 +11,26 @@ import { runtime } from "./app-runtime";
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
 const CLAW_EVENT_CHANNEL = "runtime:claw-event";
-const statusSubscriptions = new Map<number, () => void>();
-const consoleRunSubscriptions = new Map<number, () => void>();
-const clawEventSubscriptions = new Map<number, () => void>();
+
+interface IpcSubscription {
+  unsubscribe: () => void;
+  onDestroyed: () => void;
+}
+
+const statusSubscriptions = new Map<number, IpcSubscription>();
+const consoleRunSubscriptions = new Map<number, IpcSubscription>();
+const clawEventSubscriptions = new Map<number, IpcSubscription>();
+
+function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSubscription>): void {
+  const current = subscriptions.get(target.id);
+  if (!current) {
+    return;
+  }
+
+  target.removeListener("destroyed", current.onDestroyed);
+  current.unsubscribe();
+  subscriptions.delete(target.id);
+}
 
 export function registerIpcHandlers(): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
@@ -142,82 +159,74 @@ export function registerIpcHandlers(): void {
 }
 
 function subscribeToStatus(target: WebContents): void {
-  const previous = statusSubscriptions.get(target.id);
-  if (previous) {
-    previous();
-    statusSubscriptions.delete(target.id);
-  }
+  clearSubscription(target, statusSubscriptions);
 
   const unsubscribe = runtime.onStatus((status) => {
     if (target.isDestroyed()) {
-      unsubscribe();
-      statusSubscriptions.delete(target.id);
+      clearSubscription(target, statusSubscriptions);
       return;
     }
 
     target.send(STATUS_CHANNEL, status);
   });
-  statusSubscriptions.set(target.id, unsubscribe);
 
-  target.once("destroyed", () => {
-    const active = statusSubscriptions.get(target.id);
-    if (active) {
-      active();
-      statusSubscriptions.delete(target.id);
-    }
+  const onDestroyed = () => {
+    clearSubscription(target, statusSubscriptions);
+  };
+
+  statusSubscriptions.set(target.id, {
+    unsubscribe,
+    onDestroyed
   });
+  target.on("destroyed", onDestroyed);
 }
 
 function subscribeToConsoleRun(target: WebContents): void {
-  const previous = consoleRunSubscriptions.get(target.id);
-  if (previous) {
-    previous();
-    consoleRunSubscriptions.delete(target.id);
-  }
+  clearSubscription(target, consoleRunSubscriptions);
 
   const unsubscribe = runtime.onConsoleRunEvent((event) => {
     if (target.isDestroyed()) {
-      unsubscribe();
-      consoleRunSubscriptions.delete(target.id);
+      clearSubscription(target, consoleRunSubscriptions);
       return;
     }
 
     target.send(CONSOLE_RUN_EVENT_CHANNEL, event);
   });
-  consoleRunSubscriptions.set(target.id, unsubscribe);
 
-  target.once("destroyed", () => {
-    const active = consoleRunSubscriptions.get(target.id);
-    if (active) {
-      active();
-      consoleRunSubscriptions.delete(target.id);
-    }
+  const onDestroyed = () => {
+    clearSubscription(target, consoleRunSubscriptions);
+  };
+
+  consoleRunSubscriptions.set(target.id, {
+    unsubscribe,
+    onDestroyed
   });
+  target.on("destroyed", onDestroyed);
 }
 
 function subscribeToClawEvents(target: WebContents): void {
-  const previous = clawEventSubscriptions.get(target.id);
-  if (previous) {
-    previous();
-    clawEventSubscriptions.delete(target.id);
-  }
+  clearSubscription(target, clawEventSubscriptions);
 
   const unsubscribe = runtime.onClawEvent((event: ClawEvent) => {
     if (target.isDestroyed()) {
-      unsubscribe();
-      clawEventSubscriptions.delete(target.id);
+      clearSubscription(target, clawEventSubscriptions);
       return;
     }
 
     target.send(CLAW_EVENT_CHANNEL, event);
   });
-  clawEventSubscriptions.set(target.id, unsubscribe);
 
-  target.once("destroyed", () => {
-    const active = clawEventSubscriptions.get(target.id);
-    if (active) {
-      active();
-      clawEventSubscriptions.delete(target.id);
-    }
+  const onDestroyed = () => {
+    clearSubscription(target, clawEventSubscriptions);
+  };
+
+  clawEventSubscriptions.set(target.id, {
+    unsubscribe,
+    onDestroyed
   });
+  target.on("destroyed", onDestroyed);
+
+  if (!target.isDestroyed()) {
+    target.send(CLAW_EVENT_CHANNEL, runtime.getClawConnectionEvent());
+  }
 }

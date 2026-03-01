@@ -147,7 +147,25 @@ export const appConfigSchema = z
       .object({
         enabled: z.boolean().default(false),
         gatewayUrl: z.string().url().default("http://127.0.0.1:18789"),
-        approvalRequired: z.boolean().default(true)
+        approvalRequired: z.boolean().default(true),
+        modelPrimary: z.string().default(""),
+        modelFallbacks: z.array(z.string().min(1)).default([]),
+        thinkingDefault: z
+          .enum(["off", "low", "medium", "high", "xhigh", "minimal"])
+          .default("low"),
+        contextTokens: z.number().int().min(1).max(2_000_000).default(200_000),
+        timeoutSeconds: z.number().int().min(30).max(7_200).default(600),
+        browserEnabled: z.boolean().default(true),
+        browserProfile: z.enum(["openclaw", "chrome"]).default("openclaw"),
+        browserHeadless: z.boolean().default(false),
+        browserExecutablePath: z.string().default(""),
+        heartbeatEvery: z.string().default("30m"),
+        toolWebSearchEnabled: z.boolean().default(true),
+        toolWebFetchEnabled: z.boolean().default(true),
+        toolExecEnabled: z.boolean().default(true),
+        toolElevatedEnabled: z.boolean().default(false),
+        maxConcurrent: z.number().int().min(1).max(32).default(1),
+        sandboxMode: z.enum(["off", "non-main", "all"]).default("non-main")
       })
       .strict(),
     tools: z
@@ -470,7 +488,23 @@ export const DEFAULT_CONFIG: AppConfig = {
   openclaw: {
     enabled: false,
     gatewayUrl: "http://127.0.0.1:18789",
-    approvalRequired: true
+    approvalRequired: true,
+    modelPrimary: "",
+    modelFallbacks: [],
+    thinkingDefault: "low",
+    contextTokens: 200_000,
+    timeoutSeconds: 600,
+    browserEnabled: true,
+    browserProfile: "openclaw",
+    browserHeadless: false,
+    browserExecutablePath: "",
+    heartbeatEvery: "30m",
+    toolWebSearchEnabled: true,
+    toolWebFetchEnabled: true,
+    toolExecEnabled: true,
+    toolElevatedEnabled: false,
+    maxConcurrent: 1,
+    sandboxMode: "non-main"
   },
   tools: {
     mcp: {

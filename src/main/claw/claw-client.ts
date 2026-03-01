@@ -165,6 +165,7 @@ export class ClawClient {
 
   private socket: WsLike | null = null;
   private connectionState: ClawConnectionState = "idle";
+  private connectionMessage = "未连接";
   private connectPromise: Promise<void> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -178,6 +179,16 @@ export class ClawClient {
 
   getState(): ClawConnectionState {
     return this.connectionState;
+  }
+
+  getConnectionStatus(): {
+    state: ClawConnectionState;
+    message: string;
+  } {
+    return {
+      state: this.connectionState,
+      message: this.connectionMessage
+    };
   }
 
   onConnection(listener: (state: ClawConnectionState, message: string) => void): () => void {
@@ -207,6 +218,7 @@ export class ClawClient {
     }
 
     if (this.connectionState === "connected") {
+      this.emitter.emit("connection", this.connectionState, this.connectionMessage);
       return;
     }
 
@@ -619,6 +631,7 @@ export class ClawClient {
 
   private setConnectionState(state: ClawConnectionState, message: string): void {
     this.connectionState = state;
+    this.connectionMessage = message;
     this.emitter.emit("connection", state, message);
   }
 }

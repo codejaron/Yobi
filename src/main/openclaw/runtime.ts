@@ -8,7 +8,6 @@ import { app } from "electron";
 import type { ChildProcess } from "node:child_process";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
-import { OPENCLAW_HOOK_PATH, OPENCLAW_HOOK_TOKEN } from "./constants";
 
 const execFileAsync = promisify(execFile);
 const GATEWAY_HEALTH_WAIT_TIMEOUT_MS = 15_000;
@@ -66,11 +65,27 @@ interface OpenClawStatus {
 interface GatewayBootstrap {
   env: NodeJS.ProcessEnv;
   modelRef: string;
+  fallbackModelRefs: string[];
   gatewayToken: string;
   sessionModelProvider: string;
   sessionModelId: string;
-  customProviderId?: string;
-  customProviderConfig?: Record<string, unknown>;
+  providerConfigs: Record<string, Record<string, unknown>>;
+  managed: {
+    thinkingDefault: AppConfig["openclaw"]["thinkingDefault"];
+    contextTokens: number;
+    timeoutSeconds: number;
+    browserEnabled: boolean;
+    browserProfile: AppConfig["openclaw"]["browserProfile"];
+    browserHeadless: boolean;
+    browserExecutablePath: string;
+    heartbeatEvery: string;
+    toolWebSearchEnabled: boolean;
+    toolWebFetchEnabled: boolean;
+    toolExecSecurity: "deny" | "full";
+    toolElevatedEnabled: boolean;
+    maxConcurrent: number;
+    sandboxMode: AppConfig["openclaw"]["sandboxMode"];
+  };
 }
 
 interface OpenClawSyncState {
@@ -243,9 +258,22 @@ export class OpenClawRuntime {
 
   private buildBootstrap(config: AppConfig): GatewayBootstrap {
     const route = config.modelRouting.chat;
-    const provider = config.providers.find((item) => item.id === route.providerId);
-    if (!provider) {
-      throw new Error(`OpenClaw config failed: missing provider ${route.providerId}`);
+    const primaryTarget = config.openclaw.modelPrimary.trim()
+      ? this.parseConfiguredModelInput(config.openclaw.modelPrimary.trim(), route.providerId)
+      : {
+          providerId: route.providerId,
+          modelId: route.model.trim()
+        };
+
+    const fallbackTargets = config.openclaw.modelFallbacks
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => this.parseConfiguredModelInput(item, primaryTarget.providerId));
+
+    const providerById = new Map(config.providers.map((item) => [item.id, item]));
+    const primaryProvider = providerById.get(primaryTarget.providerId);
+    if (!primaryProvider) {
+      throw new Error(`OpenClaw config failed: missing provider ${primaryTarget.providerId}`);
     }
 
     const env = this.resolveBaseEnv();
@@ -256,32 +284,116 @@ export class OpenClawRuntime {
     delete env.OPENAI_API_KEY;
     delete env.OPENROUTER_API_KEY;
 
-    const customProviderId =
-      provider.kind === "custom-openai" ? this.resolveCustomProviderId(provider.id) : undefined;
-    const modelRef = this.resolveModelRef(provider, route.model, customProviderId);
-    const routing = this.splitModelRef(modelRef);
-    const bootstrap: GatewayBootstrap = {
-      env,
-      modelRef,
-      gatewayToken: this.gatewayAuthToken,
-      sessionModelProvider: routing.providerId,
-      sessionModelId: routing.modelId
+    const customModelsByProvider = new Map<string, Set<string>>();
+    const customProviderById = new Map<string, ProviderConfig>();
+
+    const resolveTargetModelRef = (target: {
+      providerId: string;
+      modelId: string;
+    }): string => {
+      const provider = providerById.get(target.providerId);
+      if (!provider) {
+        throw new Error(`OpenClaw config failed: missing provider ${target.providerId}`);
+      }
+
+      const customProviderId =
+        provider.kind === "custom-openai" ? this.resolveCustomProviderId(provider.id) : undefined;
+      const resolvedModelRef = this.resolveModelRef(provider, target.modelId, customProviderId);
+
+      if (customProviderId) {
+        customProviderById.set(customProviderId, provider);
+        const set = customModelsByProvider.get(customProviderId) ?? new Set<string>();
+        set.add(this.splitModelRef(resolvedModelRef).modelId);
+        customModelsByProvider.set(customProviderId, set);
+      }
+
+      return resolvedModelRef;
     };
 
-    if (provider.kind === "anthropic" && provider.apiKey.trim()) {
-      env.ANTHROPIC_API_KEY = provider.apiKey.trim();
-    } else if (provider.kind === "openai" && provider.apiKey.trim()) {
-      env.OPENAI_API_KEY = provider.apiKey.trim();
-    } else if (provider.kind === "openrouter" && provider.apiKey.trim()) {
-      env.OPENROUTER_API_KEY = provider.apiKey.trim();
-    } else if (provider.kind === "custom-openai" && customProviderId) {
-      bootstrap.customProviderId = customProviderId;
-      bootstrap.customProviderConfig = this.buildCustomProviderConfig(
+    const modelRef = resolveTargetModelRef(primaryTarget);
+    const fallbackModelRefs = Array.from(
+      new Set(fallbackTargets.map((target) => resolveTargetModelRef(target)).filter((item) => item !== modelRef))
+    );
+    const routing = this.splitModelRef(modelRef);
+
+    const providerConfigs: Record<string, Record<string, unknown>> = {};
+
+    const resolvePreferredProviderKey = (
+      kind: "anthropic" | "openai" | "openrouter"
+    ): string | undefined => {
+      const preferred = primaryProvider.kind === kind ? primaryProvider : undefined;
+      const candidate =
+        preferred && preferred.apiKey.trim()
+          ? preferred
+          : config.providers.find((item) => item.kind === kind && item.enabled && item.apiKey.trim()) ??
+            config.providers.find((item) => item.kind === kind && item.apiKey.trim());
+
+      const key = candidate?.apiKey.trim();
+      return key || undefined;
+    };
+
+    const anthropicApiKey = resolvePreferredProviderKey("anthropic");
+    if (anthropicApiKey) {
+      env.ANTHROPIC_API_KEY = anthropicApiKey;
+      providerConfigs.anthropic = {
+        apiKey: anthropicApiKey
+      };
+    }
+
+    const openaiApiKey = resolvePreferredProviderKey("openai");
+    if (openaiApiKey) {
+      env.OPENAI_API_KEY = openaiApiKey;
+      providerConfigs.openai = {
+        apiKey: openaiApiKey
+      };
+    }
+
+    const openrouterApiKey = resolvePreferredProviderKey("openrouter");
+    if (openrouterApiKey) {
+      env.OPENROUTER_API_KEY = openrouterApiKey;
+      providerConfigs.openrouter = {
+        apiKey: openrouterApiKey
+      };
+    }
+
+    for (const [customProviderId, modelIds] of customModelsByProvider.entries()) {
+      const provider = customProviderById.get(customProviderId);
+      if (!provider) {
+        continue;
+      }
+
+      providerConfigs[customProviderId] = this.buildCustomProviderConfig(
         provider,
-        route.model,
+        Array.from(modelIds.values()),
         customProviderId
       );
     }
+
+    const bootstrap: GatewayBootstrap = {
+      env,
+      modelRef,
+      fallbackModelRefs,
+      gatewayToken: this.gatewayAuthToken,
+      sessionModelProvider: routing.providerId,
+      sessionModelId: routing.modelId,
+      providerConfigs,
+      managed: {
+        thinkingDefault: config.openclaw.thinkingDefault,
+        contextTokens: config.openclaw.contextTokens,
+        timeoutSeconds: config.openclaw.timeoutSeconds,
+        browserEnabled: config.openclaw.browserEnabled,
+        browserProfile: config.openclaw.browserProfile,
+        browserHeadless: config.openclaw.browserHeadless,
+        browserExecutablePath: config.openclaw.browserExecutablePath.trim(),
+        heartbeatEvery: config.openclaw.heartbeatEvery.trim() || "30m",
+        toolWebSearchEnabled: config.openclaw.toolWebSearchEnabled,
+        toolWebFetchEnabled: config.openclaw.toolWebFetchEnabled,
+        toolExecSecurity: config.openclaw.toolExecEnabled ? "full" : "deny",
+        toolElevatedEnabled: config.openclaw.toolElevatedEnabled,
+        maxConcurrent: config.openclaw.maxConcurrent,
+        sandboxMode: config.openclaw.sandboxMode
+      }
+    };
 
     return bootstrap;
   }
@@ -290,6 +402,7 @@ export class OpenClawRuntime {
     await fs.mkdir(this.paths.openclawStateDir, {
       recursive: true
     });
+    await this.removeLegacyHooksConfig();
 
     const fingerprint = this.buildSyncFingerprint(bootstrap);
     const [configExists, syncState] = await Promise.all([
@@ -303,13 +416,37 @@ export class OpenClawRuntime {
       return;
     }
 
-    await this.runConfigSet("hooks.enabled", true, bootstrap.env);
-    await this.runConfigSet("hooks.path", OPENCLAW_HOOK_PATH, bootstrap.env);
-    await this.runConfigSet("hooks.token", OPENCLAW_HOOK_TOKEN, bootstrap.env);
     await this.runConfigSet("gateway.auth.mode", "token", bootstrap.env);
     await this.runConfigSet("gateway.auth.token", bootstrap.gatewayToken, bootstrap.env);
     await this.runConfigSet("gateway.http.endpoints.responses.enabled", true, bootstrap.env);
     await this.runConfigSet("agents.defaults.model.primary", bootstrap.modelRef, bootstrap.env);
+    await this.runConfigSet("agents.defaults.model.fallbacks", bootstrap.fallbackModelRefs, bootstrap.env);
+    await this.runConfigSet(
+      "agents.defaults.thinkingDefault",
+      bootstrap.managed.thinkingDefault,
+      bootstrap.env
+    );
+    await this.runConfigSet("agents.defaults.contextTokens", bootstrap.managed.contextTokens, bootstrap.env);
+    await this.runConfigSet("agents.defaults.timeoutSeconds", bootstrap.managed.timeoutSeconds, bootstrap.env);
+    await this.runConfigSet("agents.defaults.maxConcurrent", bootstrap.managed.maxConcurrent, bootstrap.env);
+    await this.runConfigSet("agents.defaults.sandbox.mode", bootstrap.managed.sandboxMode, bootstrap.env);
+    await this.runConfigSet("agents.defaults.heartbeat.every", bootstrap.managed.heartbeatEvery, bootstrap.env);
+    await this.runConfigSet("browser.enabled", bootstrap.managed.browserEnabled, bootstrap.env);
+    await this.runConfigSet("browser.defaultProfile", bootstrap.managed.browserProfile, bootstrap.env);
+    await this.runConfigSet("browser.headless", bootstrap.managed.browserHeadless, bootstrap.env);
+    await this.runConfigSet("tools.web.search.enabled", bootstrap.managed.toolWebSearchEnabled, bootstrap.env);
+    await this.runConfigSet("tools.web.fetch.enabled", bootstrap.managed.toolWebFetchEnabled, bootstrap.env);
+    await this.runConfigSet("tools.exec.security", bootstrap.managed.toolExecSecurity, bootstrap.env);
+    await this.runConfigSet("tools.elevated.enabled", bootstrap.managed.toolElevatedEnabled, bootstrap.env);
+    if (bootstrap.managed.browserExecutablePath) {
+      await this.runConfigSet(
+        "browser.executablePath",
+        bootstrap.managed.browserExecutablePath,
+        bootstrap.env
+      );
+    } else {
+      await this.runConfigUnset("browser.executablePath", bootstrap.env);
+    }
     await this.syncModelProviders(bootstrap);
 
     await this.syncMainAgentState(bootstrap);
@@ -327,12 +464,27 @@ export class OpenClawRuntime {
 
   private async syncModelProviders(bootstrap: GatewayBootstrap): Promise<void> {
     await this.runConfigSet("models.mode", "merge", bootstrap.env);
-    const providers: Record<string, Record<string, unknown>> = {};
-    if (bootstrap.customProviderId && bootstrap.customProviderConfig) {
-      providers[bootstrap.customProviderId] = bootstrap.customProviderConfig;
+    await this.runConfigSet("models.providers", bootstrap.providerConfigs, bootstrap.env);
+  }
+
+  private async removeLegacyHooksConfig(): Promise<void> {
+    let parsed: unknown;
+    try {
+      const raw = await fs.readFile(this.paths.openclawConfigPath, "utf8");
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
     }
 
-    await this.runConfigSet("models.providers", providers, bootstrap.env);
+    if (!isRecord(parsed) || !("hooks" in parsed)) {
+      return;
+    }
+
+    const next = {
+      ...parsed
+    };
+    delete next.hooks;
+    await fs.writeFile(this.paths.openclawConfigPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
   }
 
   private async syncMainAgentModelsFile(bootstrap: GatewayBootstrap): Promise<void> {
@@ -343,13 +495,8 @@ export class OpenClawRuntime {
       recursive: true
     });
 
-    const providers: Record<string, Record<string, unknown>> = {};
-    if (bootstrap.customProviderId && bootstrap.customProviderConfig) {
-      providers[bootstrap.customProviderId] = bootstrap.customProviderConfig;
-    }
-
     const modelsPayload = {
-      providers
+      providers: bootstrap.providerConfigs
     };
 
     await fs.writeFile(modelsPath, `${JSON.stringify(modelsPayload, null, 2)}\n`, "utf8");
@@ -442,6 +589,47 @@ export class OpenClawRuntime {
     }
   }
 
+  private async runConfigUnset(pathName: string, env: NodeJS.ProcessEnv): Promise<void> {
+    try {
+      await execFileAsync(resolveOpenClawBin(), ["config", "unset", pathName], {
+        env
+      });
+    } catch (error) {
+      const message = this.formatExecError(error);
+      if (message.includes("Config path not found")) {
+        return;
+      }
+      throw new Error(`OpenClaw config unset ${pathName} failed: ${message}`);
+    }
+  }
+
+  private parseConfiguredModelInput(
+    modelRef: string,
+    fallbackProviderId: string
+  ): {
+    providerId: string;
+    modelId: string;
+  } {
+    const normalized = modelRef.trim();
+    if (!normalized) {
+      throw new Error("OpenClaw config failed: model ref is empty");
+    }
+
+    if (!normalized.includes("/")) {
+      const providerId = fallbackProviderId.trim();
+      if (!providerId) {
+        throw new Error(`OpenClaw config failed: invalid model ref ${normalized}`);
+      }
+
+      return {
+        providerId,
+        modelId: normalized
+      };
+    }
+
+    return this.splitModelRef(normalized);
+  }
+
   private resolveModelRef(
     provider: ProviderConfig,
     model: string,
@@ -466,10 +654,20 @@ export class OpenClawRuntime {
 
   private buildCustomProviderConfig(
     provider: ProviderConfig,
-    model: string,
+    models: string[],
     customProviderId: string
   ): Record<string, unknown> {
-    const normalizedModel = this.normalizeCustomModelId(model.trim(), customProviderId);
+    const normalizedModels = Array.from(
+      new Set(
+        models
+          .map((model) => this.normalizeCustomModelId(model.trim(), customProviderId))
+          .filter(Boolean)
+      )
+    );
+    if (normalizedModels.length === 0) {
+      throw new Error(`OpenClaw config failed: custom provider ${customProviderId} has no models`);
+    }
+
     const apiMode = provider.apiMode === "responses" ? "openai-responses" : "openai-completions";
     const config: Record<string, unknown> = {
       baseUrl: this.normalizeCustomOpenAIBaseUrl(provider.baseUrl),
@@ -481,12 +679,10 @@ export class OpenClawRuntime {
         "User-Agent": OPENCLAW_CUSTOM_OPENAI_USER_AGENT,
         Accept: "application/json"
       },
-      models: [
-        {
-          id: normalizedModel,
-          name: normalizedModel
-        }
-      ]
+      models: normalizedModels.map((modelId) => ({
+        id: modelId,
+        name: modelId
+      }))
     };
 
     if (!provider.apiKey.trim()) {
@@ -565,20 +761,16 @@ export class OpenClawRuntime {
 
   private buildSyncFingerprint(bootstrap: GatewayBootstrap): string {
     return JSON.stringify({
-      hooks: {
-        enabled: true,
-        path: OPENCLAW_HOOK_PATH,
-        token: OPENCLAW_HOOK_TOKEN
-      },
       gateway: {
         authMode: "token",
         authToken: bootstrap.gatewayToken,
         responsesEnabled: true
       },
-      providerSyncVersion: 2,
+      providerSyncVersion: 4,
       modelRef: bootstrap.modelRef,
-      customProviderId: bootstrap.customProviderId ?? null,
-      customProviderConfig: bootstrap.customProviderConfig ?? null
+      fallbackModelRefs: bootstrap.fallbackModelRefs,
+      providerConfigs: bootstrap.providerConfigs,
+      managed: bootstrap.managed
     });
   }
 
