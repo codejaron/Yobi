@@ -218,7 +218,6 @@ export class ClawClient {
     }
 
     if (this.connectionState === "connected") {
-      this.emitter.emit("connection", this.connectionState, this.connectionMessage);
       return;
     }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClawConnectionState, ClawEvent, ClawHistoryItem } from "@shared/types";
-import { Loader2, Plug2, PlugZap, Send, Square } from "lucide-react";
+import { Loader2, Send, Square } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -16,15 +16,23 @@ interface ClawTabPanelProps {
   active: boolean;
 }
 
-type ClawItemKind = "assistant" | "tool" | "system" | "error" | "user";
+type ClawChatRole = "assistant" | "user" | "error";
 
-interface ClawRenderableItem {
+interface ClawChatItem {
   id: string;
-  kind: ClawItemKind;
+  role: ClawChatRole;
   title: string;
-  detail: string;
+  text: string;
   timestamp: string;
   streaming?: boolean;
+}
+
+interface ClawActionItem {
+  id: string;
+  kind: "tool" | "status" | "error";
+  label: string;
+  detail: string;
+  timestamp: string;
 }
 
 function makeId(prefix: string): string {
@@ -47,6 +55,10 @@ function summarize(value: unknown): string {
   }
 }
 
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function formatConnectionLabel(state: ClawConnectionState): string {
   if (state === "connected") {
     return "已连接";
@@ -67,13 +79,13 @@ function formatConnectionLabel(state: ClawConnectionState): string {
   return "未连接";
 }
 
-function historyItemToRenderable(item: ClawHistoryItem): ClawRenderableItem {
+function historyItemToChat(item: ClawHistoryItem): ClawChatItem | null {
   if (item.role === "assistant") {
     return {
       id: item.id,
-      kind: "assistant",
+      role: "assistant",
       title: "Claw",
-      detail: item.text,
+      text: item.text,
       timestamp: item.timestamp ?? new Date().toISOString(),
       streaming: false
     };
@@ -82,66 +94,78 @@ function historyItemToRenderable(item: ClawHistoryItem): ClawRenderableItem {
   if (item.role === "user") {
     return {
       id: item.id,
-      kind: "user",
+      role: "user",
       title: "你",
-      detail: item.text,
+      text: item.text,
       timestamp: item.timestamp ?? new Date().toISOString(),
       streaming: false
     };
   }
 
-  if (item.role === "tool") {
-    return {
-      id: item.id,
-      kind: "tool",
-      title: "工具记录",
-      detail: item.text,
-      timestamp: item.timestamp ?? new Date().toISOString(),
-      streaming: false
-    };
-  }
-
-  return {
-    id: item.id,
-    kind: "system",
-    title: "系统",
-    detail: item.text,
-    timestamp: item.timestamp ?? new Date().toISOString(),
-    streaming: false
-  };
+  return null;
 }
 
-function itemClassName(item: ClawRenderableItem): string {
-  if (item.kind === "assistant") {
+function historyItemToAction(item: ClawHistoryItem): ClawActionItem | null {
+  if (item.role === "tool") {
+    return {
+      id: `history-action-${item.id}`,
+      kind: "tool",
+      label: "历史工具记录",
+      detail: item.text,
+      timestamp: item.timestamp ?? new Date().toISOString()
+    };
+  }
+
+  if (item.role === "system") {
+    return {
+      id: `history-action-${item.id}`,
+      kind: "status",
+      label: "历史系统记录",
+      detail: item.text,
+      timestamp: item.timestamp ?? new Date().toISOString()
+    };
+  }
+
+  return null;
+}
+
+function chatItemClassName(item: ClawChatItem): string {
+  if (item.role === "assistant") {
     return "mr-auto w-fit max-w-[88%] rounded-2xl border border-border/80 bg-white/88 px-4 py-3 text-sm text-foreground";
   }
 
-  if (item.kind === "user") {
+  if (item.role === "user") {
     return "ml-auto w-fit max-w-[80%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground";
   }
 
-  if (item.kind === "tool") {
-    return "mr-auto w-full rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-950";
+  return "mr-auto w-fit max-w-[88%] rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900";
+}
+
+function actionItemClassName(kind: ClawActionItem["kind"]): string {
+  if (kind === "tool") {
+    return "border-amber-200 bg-amber-50/90 text-amber-950";
   }
 
-  if (item.kind === "error") {
-    return "mr-auto w-full rounded-xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-900";
+  if (kind === "error") {
+    return "border-rose-200 bg-rose-50/90 text-rose-900";
   }
 
-  return "mr-auto w-full rounded-xl border border-border/70 bg-white/70 px-4 py-3 text-sm text-foreground";
+  return "border-border/70 bg-white/75 text-foreground";
 }
 
 export function ClawTabPanel({ active }: ClawTabPanelProps) {
-  const [items, setItems] = useState<ClawRenderableItem[]>([]);
+  const [chatItems, setChatItems] = useState<ClawChatItem[]>([]);
+  const [actionItems, setActionItems] = useState<ClawActionItem[]>([]);
+  const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
   const [connectionState, setConnectionState] = useState<ClawConnectionState>("idle");
   const [connectionMessage, setConnectionMessage] = useState("等待连接");
   const [sending, setSending] = useState(false);
-  const [connecting, setConnecting] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState("");
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const actionBottomRef = useRef<HTMLDivElement | null>(null);
   const streamMessageIdRef = useRef<string | null>(null);
   const loadedHistoryAfterConnectRef = useRef(false);
   const lastErrorRef = useRef<{
@@ -153,19 +177,32 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     timestampMs: number;
   } | null>(null);
 
-  const appendItem = useCallback((item: Omit<ClawRenderableItem, "id"> & { id?: string }) => {
-    setItems((prev) => [
+  const appendChatItem = useCallback((item: Omit<ClawChatItem, "id"> & { id?: string }) => {
+    setChatItems((prev) => [
       ...prev,
       {
-        id: item.id ?? makeId("claw-item"),
+        id: item.id ?? makeId("claw-chat"),
         ...item
       }
     ].slice(-240));
   }, []);
 
+  const appendActionItem = useCallback((item: Omit<ClawActionItem, "id"> & { id?: string }) => {
+    setActionItems((prev) => [
+      ...prev,
+      {
+        id: item.id ?? makeId("claw-action"),
+        ...item
+      }
+    ].slice(-320));
+  }, []);
+
   const applyHistory = useCallback((historyItems: ClawHistoryItem[]) => {
-    setItems((prev) => {
-      const mapped = historyItems.map((item) => historyItemToRenderable(item));
+    setChatItems((prev) => {
+      const mapped = historyItems
+        .map((item) => historyItemToChat(item))
+        .filter((item): item is ClawChatItem => item !== null);
+
       if (prev.length === 0) {
         return mapped;
       }
@@ -177,6 +214,24 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
       }
 
       return [...additions, ...prev].slice(-240);
+    });
+
+    setActionItems((prev) => {
+      const mapped = historyItems
+        .map((item) => historyItemToAction(item))
+        .filter((item): item is ClawActionItem => item !== null);
+
+      if (prev.length === 0) {
+        return mapped;
+      }
+
+      const existingIds = new Set(prev.map((item) => item.id));
+      const additions = mapped.filter((item) => !existingIds.has(item.id));
+      if (additions.length === 0) {
+        return prev;
+      }
+
+      return [...additions, ...prev].slice(-320);
     });
   }, []);
 
@@ -199,9 +254,8 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
       setConnectionState(event.state);
       setConnectionMessage(event.message);
 
-      if (event.state === "connected") {
+      if (event.state !== "connected") {
         streamMessageIdRef.current = null;
-      } else {
         loadedHistoryAfterConnectRef.current = false;
       }
       return;
@@ -213,7 +267,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     }
 
     if (event.type === "assistant-delta") {
-      setItems((prev) => {
+      setChatItems((prev) => {
         const streamingId = streamMessageIdRef.current;
         if (!streamingId) {
           const id = makeId("claw-assistant");
@@ -222,9 +276,9 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
             ...prev,
             {
               id,
-              kind: "assistant" as const,
+              role: "assistant" as const,
               title: "Claw",
-              detail: event.delta,
+              text: event.delta,
               timestamp: event.timestamp,
               streaming: true
             }
@@ -239,9 +293,9 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
             ...prev,
             {
               id,
-              kind: "assistant" as const,
+              role: "assistant" as const,
               title: "Claw",
-              detail: event.delta,
+              text: event.delta,
               timestamp: event.timestamp,
               streaming: true
             }
@@ -251,7 +305,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         const next = [...prev];
         next[index] = {
           ...next[index],
-          detail: `${next[index].detail}${event.delta}`,
+          text: `${next[index].text}${event.delta}`,
           timestamp: event.timestamp,
           streaming: true
         };
@@ -261,45 +315,54 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     }
 
     if (event.type === "assistant-final") {
-      setItems((prev) => {
+      setChatItems((prev) => {
         const streamingId = streamMessageIdRef.current;
-        if (!streamingId) {
-          return [
-            ...prev,
-            {
-              id: makeId("claw-final"),
-              kind: "assistant" as const,
-              title: "Claw",
-              detail: event.text,
-              timestamp: event.timestamp,
-              streaming: false
-            }
-          ].slice(-240);
-        }
-
-        const index = prev.findIndex((item) => item.id === streamingId);
-        if (index < 0) {
-          return [
-            ...prev,
-            {
-              id: makeId("claw-final"),
-              kind: "assistant" as const,
-              title: "Claw",
-              detail: event.text,
-              timestamp: event.timestamp,
-              streaming: false
-            }
-          ].slice(-240);
-        }
-
-        const next = [...prev];
-        next[index] = {
-          ...next[index],
-          detail: event.text,
-          timestamp: event.timestamp,
-          streaming: false
+        const replaceAt = (index: number): ClawChatItem[] => {
+          const next = [...prev];
+          next[index] = {
+            ...next[index],
+            text: event.text,
+            timestamp: event.timestamp,
+            streaming: false
+          };
+          return next;
         };
-        return next;
+
+        if (streamingId) {
+          const index = prev.findIndex((item) => item.id === streamingId);
+          if (index >= 0) {
+            return replaceAt(index);
+          }
+        }
+
+        const fallbackReverseIndex = [...prev]
+          .reverse()
+          .findIndex((item) => item.role === "assistant" && item.streaming);
+        if (fallbackReverseIndex >= 0) {
+          const index = prev.length - 1 - fallbackReverseIndex;
+          return replaceAt(index);
+        }
+
+        const latestAssistant = [...prev].reverse().find((item) => item.role === "assistant");
+        if (latestAssistant && !latestAssistant.streaming && latestAssistant.text === event.text) {
+          const latestMs = Date.parse(latestAssistant.timestamp);
+          const finalMs = Date.parse(event.timestamp);
+          if (Number.isFinite(latestMs) && Number.isFinite(finalMs) && Math.abs(finalMs - latestMs) < 2_000) {
+            return prev;
+          }
+        }
+
+        return [
+          ...prev,
+          {
+            id: makeId("claw-final"),
+            role: "assistant" as const,
+            title: "Claw",
+            text: event.text,
+            timestamp: event.timestamp,
+            streaming: false
+          }
+        ].slice(-240);
       });
 
       streamMessageIdRef.current = null;
@@ -318,9 +381,9 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         detailParts.push(`错误:\n${event.error}`);
       }
 
-      appendItem({
+      appendActionItem({
         kind: event.phase === "error" ? "error" : "tool",
-        title:
+        label:
           event.phase === "start"
             ? `调用工具 · ${event.toolName}`
             : event.phase === "result"
@@ -360,9 +423,9 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         timestampMs: nowMs
       };
 
-      appendItem({
-        kind: "system",
-        title: `任务状态 · ${normalizedStatus}`,
+      appendActionItem({
+        kind: "status",
+        label: `任务状态 · ${normalizedStatus}`,
         detail: detail || "状态更新",
         timestamp: event.timestamp
       });
@@ -370,6 +433,12 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     }
 
     if (event.type === "status") {
+      appendActionItem({
+        kind: "status",
+        label: "状态",
+        detail: event.message,
+        timestamp: event.timestamp
+      });
       return;
     }
 
@@ -389,13 +458,13 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
       timestampMs: nowMs
     };
 
-    appendItem({
+    appendActionItem({
       kind: "error",
-      title: "错误",
+      label: "错误",
       detail: event.message,
       timestamp: event.timestamp
     });
-  }, [appendItem, applyHistory]);
+  }, [appendActionItem, applyHistory]);
 
   useEffect(() => {
     return window.companion.onClawEvent((event) => {
@@ -414,37 +483,31 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [items]);
+  }, [chatItems]);
 
-  const handleConnect = useCallback(async () => {
-    setConnecting(true);
-    setHistoryError("");
-    try {
-      const result = await window.companion.clawConnect();
-      if (!result.connected) {
-        setHistoryError(result.message);
-        return;
-      }
-    } finally {
-      setConnecting(false);
-    }
-  }, []);
-
-  const handleDisconnect = useCallback(async () => {
-    await window.companion.clawDisconnect();
-  }, []);
+  useEffect(() => {
+    actionBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [actionItems]);
 
   const handleAbort = useCallback(async () => {
     const result = await window.companion.clawAbort();
     if (!result.accepted) {
-      appendItem({
+      appendActionItem({
         kind: "error",
-        title: "中止失败",
+        label: "中止失败",
         detail: result.message,
         timestamp: new Date().toISOString()
       });
+      return;
     }
-  }, [appendItem]);
+
+    appendActionItem({
+      kind: "status",
+      label: "状态",
+      detail: result.message,
+      timestamp: new Date().toISOString()
+    });
+  }, [appendActionItem]);
 
   const handleSubmit = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -454,10 +517,10 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     }
 
     setDraft("");
-    appendItem({
-      kind: "user",
+    appendChatItem({
+      role: "user",
       title: "你",
-      detail: text,
+      text,
       timestamp: new Date().toISOString()
     });
 
@@ -465,17 +528,24 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     try {
       const result = await window.companion.clawSend(text);
       if (!result.accepted) {
-        appendItem({
-          kind: "error",
+        const timestamp = new Date().toISOString();
+        appendChatItem({
+          role: "error",
           title: "发送失败",
+          text: result.message,
+          timestamp
+        });
+        appendActionItem({
+          kind: "error",
+          label: "发送失败",
           detail: result.message,
-          timestamp: new Date().toISOString()
+          timestamp
         });
       }
     } finally {
       setSending(false);
     }
-  }, [appendItem, draft, sending]);
+  }, [appendActionItem, appendChatItem, draft, sending]);
 
   const connectionBadge = useMemo(() => {
     const label = formatConnectionLabel(connectionState);
@@ -499,7 +569,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
           <div className="flex items-center justify-between gap-3">
             <div>
               <CardTitle>Claw 实时会话</CardTitle>
-              <CardDescription>直接与 OpenClaw 对话，查看完整执行过程。</CardDescription>
+              <CardDescription>正文仅展示 chat 流；tool/lifecycle 在右侧日志展示。</CardDescription>
             </div>
             <Badge className={connectionBadge.className}>{connectionBadge.label}</Badge>
           </div>
@@ -509,20 +579,20 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
 
         <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
-            {items.length === 0 ? (
+            {chatItems.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-4 text-sm text-muted-foreground">
-                暂无 Claw 消息。你可以直接在下方发送指令，或点击连接后查看历史。
+                暂无 Claw 正文消息，直接在下方输入即可。
               </p>
             ) : (
-              items.map((item) => (
-                <div key={item.id} className={itemClassName(item)}>
+              chatItems.map((item) => (
+                <div key={item.id} className={chatItemClassName(item)}>
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <span className="text-xs font-medium opacity-80">{item.title}</span>
                     <span className="text-[11px] opacity-70">
                       {new Date(item.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
-                  <p className="whitespace-pre-wrap leading-relaxed">{item.detail}</p>
+                  <p className="whitespace-pre-wrap leading-relaxed">{item.text}</p>
                   {item.streaming ? (
                     <p className="mt-1 text-xs text-muted-foreground">流式输出中...</p>
                   ) : null}
@@ -558,55 +628,68 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
 
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
         <CardHeader>
-          <CardTitle>连接控制</CardTitle>
-          <CardDescription>手动连接、断开、刷新历史或中止当前任务。</CardDescription>
+          <CardTitle>执行日志</CardTitle>
+          <CardDescription>过程消息默认折叠；仅保留任务中止控制。</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
           <Button
             type="button"
-            onClick={() => void handleConnect()}
-            disabled={connecting}
-            className="w-full"
+            variant="outline"
+            onClick={() => void handleAbort()}
+            className="w-full border-rose-200 text-rose-700 hover:bg-rose-50"
           >
-            {connecting ? (
-              <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                连接中...
-              </>
-            ) : (
-              <>
-                <PlugZap className="mr-1.5 h-4 w-4" />
-                连接 Claw
-              </>
-            )}
-          </Button>
-
-          <Button type="button" variant="outline" onClick={() => void handleDisconnect()} className="w-full">
-            <Plug2 className="mr-1.5 h-4 w-4" />
-            断开连接
-          </Button>
-
-          <Button type="button" variant="outline" onClick={() => void loadHistory()} disabled={loadingHistory} className="w-full">
-            {loadingHistory ? (
-              <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                拉取历史中...
-              </>
-            ) : (
-              "刷新最近 50 条历史"
-            )}
-          </Button>
-
-          <Button type="button" variant="outline" onClick={() => void handleAbort()} className="w-full border-rose-200 text-rose-700 hover:bg-rose-50">
             <Square className="mr-1.5 h-4 w-4" />
             中止当前任务
           </Button>
+
+          {loadingHistory ? (
+            <p className="rounded-md border border-border/70 bg-white/75 px-3 py-2 text-xs text-muted-foreground">
+              正在加载历史...
+            </p>
+          ) : null}
 
           {historyError ? (
             <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               {historyError}
             </p>
           ) : null}
+
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            {actionItems.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-3 text-xs text-muted-foreground">
+                等待过程事件...
+              </p>
+            ) : (
+              actionItems.map((item) => {
+                const expanded = expandedActions[item.id] === true;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() =>
+                      setExpandedActions((prev) => ({
+                        ...prev,
+                        [item.id]: !expanded
+                      }))
+                    }
+                    className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition hover:brightness-[0.99] ${actionItemClassName(item.kind)}`}
+                  >
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <Badge>{item.label}</Badge>
+                      <span className="text-[11px] text-muted-foreground">
+                        {new Date(item.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    <p className={expanded ? "whitespace-pre-wrap leading-relaxed" : "truncate leading-relaxed"}>
+                      {expanded ? item.detail : singleLine(item.detail)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{expanded ? "点击收起" : "点击展开"}</p>
+                  </button>
+                );
+              })
+            )}
+            <div ref={actionBottomRef} />
+          </div>
         </CardContent>
       </Card>
     </div>

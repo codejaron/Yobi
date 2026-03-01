@@ -354,6 +354,7 @@ export class ClawChannel {
   private readonly originQueue = new Map<string, ClawOrigin[]>();
   private readonly runOrigins = new Map<string, ClawOrigin>();
   private readonly sessionRunIds = new Map<string, string>();
+  private readonly chatDeltaCache = new Map<string, string>();
   private readonly unsubscribeFns: Array<() => void> = [];
 
   constructor(
@@ -424,6 +425,7 @@ export class ClawChannel {
       throw new Error("消息不能为空");
     }
 
+    this.clearChatDelta(normalizedSession);
     this.enqueueOrigin(normalizedSession, "yobi-tool");
 
     try {
@@ -460,6 +462,7 @@ export class ClawChannel {
       throw new Error("消息不能为空");
     }
 
+    this.clearChatDelta(normalizedSession);
     this.enqueueOrigin(normalizedSession, "claw-tab");
 
     try {
@@ -596,17 +599,6 @@ export class ClawChannel {
     const stream = extractAgentStream(payload);
 
     if (stream === "assistant") {
-      const delta = extractText(payload);
-      if (!delta.trim()) {
-        return;
-      }
-
-      this.emit({
-        type: "assistant-delta",
-        sessionKey,
-        delta,
-        timestamp: new Date().toISOString()
-      });
       return;
     }
 
@@ -660,8 +652,8 @@ export class ClawChannel {
     const state = extractChatState(payload);
 
     if (state === "delta") {
-      const delta = extractText(payload);
-      if (!delta.trim()) {
+      const delta = this.resolveChatDelta(sessionKey, extractText(payload));
+      if (!delta) {
         return;
       }
 
@@ -699,6 +691,7 @@ export class ClawChannel {
           timestamp
         });
       }
+      this.clearChatDelta(sessionKey);
       return;
     }
 
@@ -722,6 +715,7 @@ export class ClawChannel {
           timestamp
         });
       }
+      this.clearChatDelta(sessionKey);
     }
   }
 
@@ -752,6 +746,51 @@ export class ClawChannel {
     }
 
     return normalized;
+  }
+
+  private resolveChatDelta(sessionKey: string, raw: string): string {
+    const incoming = raw;
+    if (!incoming) {
+      return "";
+    }
+
+    const key = this.toOriginSessionKey(sessionKey);
+    const previous = this.chatDeltaCache.get(key) ?? "";
+    if (!previous) {
+      this.chatDeltaCache.set(key, incoming);
+      return incoming;
+    }
+
+    if (incoming === previous) {
+      return "";
+    }
+
+    if (incoming.startsWith(previous)) {
+      const delta = incoming.slice(previous.length);
+      this.chatDeltaCache.set(key, incoming);
+      return delta;
+    }
+
+    if (previous.startsWith(incoming)) {
+      return "";
+    }
+
+    let overlap = 0;
+    const max = Math.min(previous.length, incoming.length);
+    for (let size = max; size > 0; size -= 1) {
+      if (previous.slice(-size) === incoming.slice(0, size)) {
+        overlap = size;
+        break;
+      }
+    }
+
+    const delta = overlap > 0 ? incoming.slice(overlap) : incoming;
+    this.chatDeltaCache.set(key, `${previous}${delta}`);
+    return delta;
+  }
+
+  private clearChatDelta(sessionKey: string): void {
+    this.chatDeltaCache.delete(this.toOriginSessionKey(sessionKey));
   }
 
   private emit(event: ClawEvent): void {
