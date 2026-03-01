@@ -148,6 +148,10 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     message: string;
     timestampMs: number;
   } | null>(null);
+  const lastLifecycleRef = useRef<{
+    signature: string;
+    timestampMs: number;
+  } | null>(null);
 
   const appendItem = useCallback((item: Omit<ClawRenderableItem, "id"> & { id?: string }) => {
     setItems((prev) => [
@@ -329,10 +333,37 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
     }
 
     if (event.type === "lifecycle") {
+      const status = event.status.trim();
+      const detail = (event.detail ?? "").trim();
+      if (!status && !detail) {
+        return;
+      }
+
+      const normalizedStatus = status || "update";
+      if (normalizedStatus.toLowerCase() === "update" && !detail) {
+        return;
+      }
+
+      const signature = `${normalizedStatus}::${detail || "状态更新"}`;
+      const nowMs = Date.now();
+      const previousLifecycle = lastLifecycleRef.current;
+      if (
+        previousLifecycle &&
+        previousLifecycle.signature === signature &&
+        nowMs - previousLifecycle.timestampMs < 4_000
+      ) {
+        return;
+      }
+
+      lastLifecycleRef.current = {
+        signature,
+        timestampMs: nowMs
+      };
+
       appendItem({
         kind: "system",
-        title: `任务状态 · ${event.status}`,
-        detail: event.detail ?? "状态更新",
+        title: `任务状态 · ${normalizedStatus}`,
+        detail: detail || "状态更新",
         timestamp: event.timestamp
       });
       return;

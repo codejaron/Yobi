@@ -14,200 +14,10 @@ const execFileAsync = promisify(execFile);
 const GATEWAY_HEALTH_WAIT_TIMEOUT_MS = 15_000;
 const GATEWAY_HEALTH_RETRY_INTERVAL_MS = 350;
 const GATEWAY_HEALTH_CHECK_TIMEOUT_MS = 1_500;
-const OPENCLAW_HTTP_AUDIT_HOOK_FILE = "http-audit-hook.cjs";
-const OPENCLAW_HTTP_AUDIT_LOG_FILE = "http-audit.log";
 const OPENCLAW_CUSTOM_OPENAI_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) OpenClaw/2026.2.14";
-const OPENCLAW_HTTP_AUDIT_HOOK_SOURCE = `'use strict';
-
-const fs = require('node:fs');
-const path = require('node:path');
-
-const LOG_FILE = process.env.OPENCLAW_HTTP_AUDIT_LOG || '/tmp/openclaw/http-audit.log';
-
-function ensureParentDir() {
-  try {
-    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
-  } catch {}
-}
-
-function redactHeader(name, value) {
-  if (typeof value !== 'string') {
-    return value;
-  }
-
-  const lower = String(name || '').toLowerCase();
-  if (
-    lower === 'authorization' ||
-    lower.includes('api-key') ||
-    lower.includes('token') ||
-    lower.includes('secret')
-  ) {
-    return '***';
-  }
-
-  return value;
-}
-
-function headersToObject(headers) {
-  const result = {};
-  if (!headers) {
-    return result;
-  }
-
-  try {
-    if (typeof headers.forEach === 'function') {
-      headers.forEach((value, key) => {
-        result[String(key)] = redactHeader(key, String(value));
-      });
-      return result;
-    }
-  } catch {}
-
-  if (Array.isArray(headers)) {
-    for (const entry of headers) {
-      if (!Array.isArray(entry) || entry.length < 2) {
-        continue;
-      }
-      const key = String(entry[0]);
-      result[key] = redactHeader(key, String(entry[1]));
-    }
-    return result;
-  }
-
-  if (typeof headers === 'object') {
-    for (const [key, value] of Object.entries(headers)) {
-      result[String(key)] = redactHeader(key, String(value));
-    }
-  }
-
-  return result;
-}
-
-function summarizeBody(body) {
-  if (body == null) {
-    return undefined;
-  }
-
-  if (typeof body === 'string') {
-    return body.length > 4000 ? body.slice(0, 4000) + '...<truncated>' : body;
-  }
-
-  if (body instanceof URLSearchParams) {
-    const text = body.toString();
-    return text.length > 4000 ? text.slice(0, 4000) + '...<truncated>' : text;
-  }
-
-  if (Buffer.isBuffer(body)) {
-    return '<Buffer length=' + body.length + '>';
-  }
-
-  if (body instanceof ArrayBuffer) {
-    return '<ArrayBuffer length=' + body.byteLength + '>';
-  }
-
-  if (ArrayBuffer.isView(body)) {
-    return '<ArrayBufferView length=' + body.byteLength + '>';
-  }
-
-  return '<' + Object.prototype.toString.call(body) + '>';
-}
-
-function resolveUrl(input) {
-  if (typeof input === 'string') {
-    return input;
-  }
-
-  if (input instanceof URL) {
-    return input.toString();
-  }
-
-  if (input && typeof input.url === 'string') {
-    return input.url;
-  }
-
-  return String(input);
-}
-
-function resolveMethod(input, init) {
-  if (init && typeof init.method === 'string' && init.method) {
-    return init.method.toUpperCase();
-  }
-
-  if (input && typeof input.method === 'string' && input.method) {
-    return input.method.toUpperCase();
-  }
-
-  return 'GET';
-}
-
-function log(entry) {
-  try {
-    ensureParentDir();
-    fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + '\\n', 'utf8');
-  } catch {}
-}
-
-if (!globalThis.__openclawHttpAuditInstalled && typeof globalThis.fetch === 'function') {
-  const originalFetch = globalThis.fetch.bind(globalThis);
-  globalThis.__openclawHttpAuditInstalled = true;
-
-  globalThis.fetch = async (input, init) => {
-    const startedAt = Date.now();
-    const url = resolveUrl(input);
-    const method = resolveMethod(input, init);
-    const requestHeaders = headersToObject((init && init.headers) || (input && input.headers));
-    const requestBody = summarizeBody(init ? init.body : undefined);
-
-    log({
-      ts: new Date().toISOString(),
-      type: 'request',
-      method,
-      url,
-      headers: requestHeaders,
-      body: requestBody
-    });
-
-    try {
-      const response = await originalFetch(input, init);
-      log({
-        ts: new Date().toISOString(),
-        type: 'response',
-        method,
-        url,
-        status: response.status,
-        durationMs: Date.now() - startedAt,
-        headers: headersToObject(response.headers)
-      });
-      return response;
-    } catch (error) {
-      log({
-        ts: new Date().toISOString(),
-        type: 'error',
-        method,
-        url,
-        durationMs: Date.now() - startedAt,
-        error: error && error.message ? error.message : String(error)
-      });
-      throw error;
-    }
-  };
-}
-`;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function appendPath(baseUrl: string, pathName: string): string {
-  if (!baseUrl) {
-    return pathName;
-  }
-
-  if (baseUrl.endsWith("/") && pathName.startsWith("/")) {
-    return `${baseUrl}${pathName.slice(1)}`;
-  }
-
-  return `${baseUrl}${pathName}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -312,7 +122,6 @@ export class OpenClawRuntime {
 
       this.setStatus(false, "checking-config");
       const bootstrap = this.buildBootstrap(config);
-      this.logGatewayRouting(bootstrap);
       await this.syncOpenClawConfig(bootstrap);
       this.setStatus(false, "starting-gateway");
       await this.startGateway(config, bootstrap.env);
@@ -356,11 +165,10 @@ export class OpenClawRuntime {
     const host = url.hostname || "127.0.0.1";
     const bindMode = this.resolveBindMode(host);
     const args = ["gateway", "run", "--allow-unconfigured", "--bind", bindMode, "--port", String(port)];
-    const gatewayEnv = await this.withGatewayHttpAuditEnv(env);
 
     const child = spawn(resolveOpenClawBin(), args, {
       stdio: "ignore",
-      env: gatewayEnv
+      env
     });
     this.gatewayProcess = child;
 
@@ -396,38 +204,6 @@ export class OpenClawRuntime {
     if (this.gatewayProcess !== child || child.killed || child.exitCode !== null) {
       throw new Error("OpenClaw gateway 启动失败");
     }
-  }
-
-  private async withGatewayHttpAuditEnv(env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
-    const hookPath = await this.ensureGatewayHttpAuditHook();
-    const logsDir = path.join(this.paths.openclawStateDir, "logs");
-    const logPath = path.join(logsDir, OPENCLAW_HTTP_AUDIT_LOG_FILE);
-    const requireArg = `--require=${hookPath}`;
-    const nodeOptions = (env.NODE_OPTIONS ?? "").trim();
-
-    const nextEnv: NodeJS.ProcessEnv = {
-      ...env,
-      OPENCLAW_HTTP_AUDIT_LOG: logPath
-    };
-
-    nextEnv.NODE_OPTIONS = nodeOptions.includes(requireArg)
-      ? nodeOptions
-      : nodeOptions
-        ? `${nodeOptions} ${requireArg}`
-        : requireArg;
-
-    console.info(`[openclaw] http audit enabled log=${logPath}`);
-    return nextEnv;
-  }
-
-  private async ensureGatewayHttpAuditHook(): Promise<string> {
-    const runtimeDir = path.join(this.paths.openclawStateDir, "runtime");
-    const hookPath = path.join(runtimeDir, OPENCLAW_HTTP_AUDIT_HOOK_FILE);
-    await fs.mkdir(runtimeDir, {
-      recursive: true
-    });
-    await fs.writeFile(hookPath, OPENCLAW_HTTP_AUDIT_HOOK_SOURCE, "utf8");
-    return hookPath;
   }
 
   private async waitForGatewayHealthy(config: AppConfig): Promise<void> {
@@ -664,34 +440,6 @@ export class OpenClawRuntime {
     } catch (error) {
       throw new Error(`OpenClaw config set ${pathName} failed: ${this.formatExecError(error)}`);
     }
-  }
-
-  private logGatewayRouting(bootstrap: GatewayBootstrap): void {
-    console.info(
-      `[openclaw] route modelRef=${bootstrap.modelRef} provider=${bootstrap.sessionModelProvider} model=${bootstrap.sessionModelId}`
-    );
-
-    if (!bootstrap.customProviderId || !bootstrap.customProviderConfig) {
-      return;
-    }
-
-    const baseUrl =
-      typeof bootstrap.customProviderConfig.baseUrl === "string"
-        ? bootstrap.customProviderConfig.baseUrl
-        : "";
-    const api =
-      typeof bootstrap.customProviderConfig.api === "string" ? bootstrap.customProviderConfig.api : "";
-    const endpointPath =
-      api === "openai-responses"
-        ? "/responses"
-        : api === "openai-completions"
-          ? "/chat/completions"
-          : "";
-    const endpoint = endpointPath ? appendPath(baseUrl, endpointPath) : "";
-
-    console.info(
-      `[openclaw] provider id=${bootstrap.customProviderId} api=${api || "unknown"} baseUrl=${baseUrl || "unknown"} endpoint=${endpoint || "unknown"}`
-    );
   }
 
   private resolveModelRef(

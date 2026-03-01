@@ -57,15 +57,6 @@ function compactSummary(value: unknown, maxLength = 400): string {
   return `${summary.slice(0, maxLength)}...`;
 }
 
-function stringifyForLog(value: unknown, maxLength = 8000): string {
-  const text = summarizeUnknown(value);
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  return `${text.slice(0, maxLength)}...<truncated>`;
-}
-
 function extractContentText(content: unknown): string {
   if (typeof content === "string" && content.trim()) {
     return content;
@@ -442,9 +433,6 @@ export class ClawChannel {
         this.sessionRunIds.set(this.toOriginSessionKey(normalizedSession), runId);
         this.runOrigins.set(runId, "yobi-tool");
       }
-      console.info(
-        `[claw] chat.send accepted origin=yobi-tool session=${normalizedSession} runId=${runId || "unknown"} payload=${stringifyForLog(response)}`
-      );
       this.emit({
         type: "status",
         sessionKey: normalizedSession,
@@ -481,9 +469,6 @@ export class ClawChannel {
         this.sessionRunIds.set(this.toOriginSessionKey(normalizedSession), runId);
         this.runOrigins.set(runId, "claw-tab");
       }
-      console.info(
-        `[claw] chat.send accepted origin=claw-tab session=${normalizedSession} runId=${runId || "unknown"} payload=${stringifyForLog(response)}`
-      );
       return response;
     } catch (error) {
       this.rollbackLastOrigin(normalizedSession, "claw-tab");
@@ -656,12 +641,8 @@ export class ClawChannel {
 
     if (stream === "lifecycle") {
       const lifecycle = extractLifecycleStatus(payload);
-      const statusLower = lifecycle.status.toLowerCase();
-      if (statusLower.includes("error") || statusLower.includes("fail")) {
-        const runId = this.resolveRunId(sessionKey, payload);
-        console.error(
-          `[claw] lifecycle error session=${sessionKey} runId=${runId || "unknown"} status=${lifecycle.status} detail=${lifecycle.detail || ""} payload=${stringifyForLog(payload)}`
-        );
+      if (lifecycle.status.toLowerCase() === "update" && !lifecycle.detail) {
+        return;
       }
       this.emit({
         type: "lifecycle",
@@ -702,9 +683,6 @@ export class ClawChannel {
       const runId = this.resolveRunId(sessionKey, payload);
       const origin = this.consumeOrigin(sessionKey, runId);
       const timestamp = new Date().toISOString();
-      console.info(
-        `[claw] chat.final session=${sessionKey} origin=${origin} runId=${runId || "unknown"} payload=${stringifyForLog(payload)}`
-      );
 
       this.emit({
         type: "assistant-final",
@@ -729,9 +707,6 @@ export class ClawChannel {
       const origin = this.consumeOrigin(sessionKey, runId);
       const message = extractChatErrorMessage(payload) || "Claw 任务失败";
       const timestamp = new Date().toISOString();
-      console.error(
-        `[claw] chat.error session=${sessionKey} origin=${origin} runId=${runId || "unknown"} message=${message} payload=${stringifyForLog(payload)}`
-      );
 
       this.emit({
         type: "error",

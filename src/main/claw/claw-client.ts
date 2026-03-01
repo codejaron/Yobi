@@ -32,8 +32,6 @@ interface WsLike {
 }
 
 type PendingRequest = {
-  method: string;
-  createdAt: number;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -56,21 +54,6 @@ function summarizeUnknown(error: unknown): string {
   }
 
   return String(error);
-}
-
-function summarizeForLog(value: unknown, maxLength = 6000): string {
-  let text: string;
-  try {
-    text = typeof value === "string" ? value : JSON.stringify(value);
-  } catch {
-    text = String(value);
-  }
-
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  return `${text.slice(0, maxLength)}...<truncated>`;
 }
 
 function toMessageText(payload: unknown): string {
@@ -144,23 +127,6 @@ function resolveClientPlatform(): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function sanitizeParamsForLog(method: string, params: unknown): unknown {
-  if (method !== "connect" || !isRecord(params)) {
-    return params;
-  }
-
-  const cloned: Record<string, unknown> = {
-    ...params
-  };
-  if (isRecord(cloned.auth)) {
-    cloned.auth = {
-      ...cloned.auth,
-      token: "***"
-    };
-  }
-  return cloned;
 }
 
 function extractNonce(payload: unknown): string | null {
@@ -537,9 +503,6 @@ export class ClawClient {
     }
 
     const id = randomUUID();
-    const startedAt = Date.now();
-    const safeParams = sanitizeParamsForLog(method, params);
-    console.info(`[claw-rpc] req id=${id} method=${method} params=${summarizeForLog(safeParams)}`);
     const frame: ClawReqFrame = {
       type: "req",
       id,
@@ -551,13 +514,10 @@ export class ClawClient {
       const timeoutMs = options?.timeoutMs ?? REQUEST_TIMEOUT_MS;
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
-        console.warn(`[claw-rpc] timeout id=${id} method=${method} timeoutMs=${timeoutMs}`);
         reject(new Error(`请求超时：${method}`));
       }, timeoutMs);
 
       this.pendingRequests.set(id, {
-        method,
-        createdAt: startedAt,
         resolve,
         reject,
         timer
@@ -576,9 +536,6 @@ export class ClawClient {
 
           clearTimeout(pending.timer);
           this.pendingRequests.delete(id);
-          console.error(
-            `[claw-rpc] send-failed id=${id} method=${pending.method} durationMs=${Date.now() - pending.createdAt} error=${error.message}`
-          );
           pending.reject(error);
         });
       } catch (error) {
@@ -590,9 +547,6 @@ export class ClawClient {
         clearTimeout(pending.timer);
         this.pendingRequests.delete(id);
         const normalized = error instanceof Error ? error : new Error(summarizeUnknown(error));
-        console.error(
-          `[claw-rpc] send-throw id=${id} method=${pending.method} durationMs=${Date.now() - pending.createdAt} error=${normalized.message}`
-        );
         pending.reject(normalized);
       }
     });
@@ -608,16 +562,10 @@ export class ClawClient {
     this.pendingRequests.delete(frame.id);
 
     if (isClawResponseOk(frame)) {
-      console.info(
-        `[claw-rpc] res id=${frame.id} method=${pending.method} ok=true durationMs=${Date.now() - pending.createdAt} result=${summarizeForLog(frame.result)}`
-      );
       pending.resolve(frame.result);
       return;
     }
 
-    console.error(
-      `[claw-rpc] res id=${frame.id} method=${pending.method} ok=false durationMs=${Date.now() - pending.createdAt} payload=${summarizeForLog(frame)}`
-    );
     pending.reject(new Error(summarizeClawError(frame)));
   }
 
