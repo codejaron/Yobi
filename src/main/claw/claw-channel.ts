@@ -309,6 +309,104 @@ function extractHistoryArray(raw: unknown): unknown[] {
   return [];
 }
 
+function normalizeHistoryRole(value: unknown): ClawHistoryItem["role"] | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]/g, "");
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "user" || normalized === "human") {
+    return "user";
+  }
+
+  if (normalized === "assistant" || normalized === "model") {
+    return "assistant";
+  }
+
+  if (normalized === "system" || normalized === "developer") {
+    return "system";
+  }
+
+  if (
+    normalized === "tool" ||
+    normalized === "toolcall" ||
+    normalized === "toolresult" ||
+    normalized === "function" ||
+    normalized === "functioncall" ||
+    normalized === "functionresult"
+  ) {
+    return "tool";
+  }
+
+  return null;
+}
+
+function unwrapHistoryRecord(raw: unknown): Record<string, unknown> | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  if (isRecord(raw.message)) {
+    return raw.message;
+  }
+
+  return raw;
+}
+
+function normalizeHistoryText(text: string, maxLength = 8000): string {
+  const normalized = text.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}\n...(truncated)...`;
+}
+
+function extractHistoryText(entry: Record<string, unknown>, role: ClawHistoryItem["role"]): string {
+  const contentText = extractContentText(entry.content);
+  if (contentText.trim()) {
+    return normalizeHistoryText(contentText);
+  }
+
+  const directCandidates = [
+    entry.text,
+    entry.outputText,
+    entry.output_text,
+    entry.errorMessage,
+    entry.error,
+    entry.summary,
+    entry.reason
+  ];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return normalizeHistoryText(candidate);
+    }
+  }
+
+  if (typeof entry.message === "string" && entry.message.trim()) {
+    return normalizeHistoryText(entry.message);
+  }
+
+  if (role === "tool" || role === "system") {
+    const fallback = compactSummary(
+      entry.details ?? entry.output ?? entry.result ?? entry.payload ?? entry.data
+    );
+    if (fallback) {
+      return normalizeHistoryText(fallback);
+    }
+  }
+
+  return "";
+}
+
 function normalizeHistoryItem(raw: unknown): ClawHistoryItem | null {
   if (typeof raw === "string" && raw.trim()) {
     return {
@@ -322,29 +420,39 @@ function normalizeHistoryItem(raw: unknown): ClawHistoryItem | null {
     return null;
   }
 
-  const roleRaw = readString(raw.role).trim().toLowerCase();
-  const role: ClawHistoryItem["role"] =
-    roleRaw === "user" || roleRaw === "assistant" || roleRaw === "system" || roleRaw === "tool"
-      ? roleRaw
-      : "assistant";
-
-  const text =
-    extractText(raw) ||
-    (isRecord(raw.payload) ? extractText(raw.payload) : "") ||
-    (isRecord(raw.message) ? extractText(raw.message) : "");
-
-  if (!text.trim()) {
+  const entry = unwrapHistoryRecord(raw);
+  if (!entry) {
     return null;
   }
 
-  const id = maybeString(raw.id) ?? maybeString(raw.messageId) ?? randomUUID();
+  const role = normalizeHistoryRole(entry.role ?? raw.role);
+  if (!role) {
+    return null;
+  }
+
+  const text = extractHistoryText(entry, role);
+  if (!text) {
+    return null;
+  }
+
+  const id =
+    maybeString(entry.id) ??
+    maybeString(raw.id) ??
+    maybeString(entry.messageId) ??
+    maybeString(raw.messageId) ??
+    randomUUID();
 
   return {
     id,
     role,
-    text: text.trim(),
+    text,
     timestamp:
-      maybeString(raw.timestamp) ?? maybeString(raw.createdAt) ?? maybeString(raw.created_at)
+      maybeString(entry.timestamp) ??
+      maybeString(raw.timestamp) ??
+      maybeString(entry.createdAt) ??
+      maybeString(raw.createdAt) ??
+      maybeString(entry.created_at) ??
+      maybeString(raw.created_at)
   };
 }
 
