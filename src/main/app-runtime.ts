@@ -939,6 +939,7 @@ export class CompanionRuntime {
 
   private shouldRestartTelegram(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
     return (
+      previousConfig.telegram.enabled !== nextConfig.telegram.enabled ||
       previousConfig.telegram.botToken !== nextConfig.telegram.botToken ||
       previousConfig.telegram.chatId !== nextConfig.telegram.chatId
     );

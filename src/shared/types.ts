@@ -63,6 +63,7 @@ export const appConfigSchema = z
     characterId: z.string().default("default"),
     telegram: z
       .object({
+        enabled: z.boolean().default(false),
         botToken: z.string().default(""),
         chatId: z.string().default("")
       })
@@ -416,6 +417,7 @@ export const DEFAULT_WORKING_MEMORY_TEMPLATE = `# 用户档案
 export const DEFAULT_CONFIG: AppConfig = {
   characterId: "default",
   telegram: {
+    enabled: false,
     botToken: "",
     chatId: ""
   },

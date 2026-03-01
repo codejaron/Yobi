@@ -16,6 +16,8 @@ interface TelegramChannelCardProps {
 }
 
 export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardProps) {
+  const telegramEnabled = config.telegram.enabled;
+
   return (
     <Card>
       <CardHeader>
@@ -23,11 +25,28 @@ export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardPr
         <CardDescription>填入 Bot Token 和目标 Chat ID，保存后自动重连。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+          <Label>启用 Telegram 通道</Label>
+          <Switch
+            checked={telegramEnabled}
+            onChange={(checked) =>
+              setConfig({
+                ...config,
+                telegram: {
+                  ...config.telegram,
+                  enabled: checked
+                }
+              })
+            }
+          />
+        </div>
+
         <div className="space-y-1.5">
           <Label>Bot Token</Label>
           <Input
             type="password"
             value={config.telegram.botToken}
+            disabled={!telegramEnabled}
             onChange={(event) =>
               setConfig({
                 ...config,
@@ -44,6 +63,7 @@ export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardPr
           <Label>Chat ID</Label>
           <Input
             value={config.telegram.chatId}
+            disabled={!telegramEnabled}
             placeholder="例如: 123456789"
             onChange={(event) =>
               setConfig({
@@ -61,6 +81,7 @@ export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardPr
           <Label>主动消息不再推送到 Telegram</Label>
           <Switch
             checked={config.proactive.localOnly}
+            disabled={!telegramEnabled}
             onChange={(checked) =>
               setConfig({
                 ...config,

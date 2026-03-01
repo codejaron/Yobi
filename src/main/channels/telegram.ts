@@ -24,11 +24,13 @@ export class TelegramChannel implements ChatChannel {
 
   async start(onMessage: (message: InboundMessage) => Promise<void>): Promise<void> {
     const { telegram } = this.getConfig();
+    const enabled = telegram.enabled;
     const botToken = telegram.botToken.trim();
     this.targetChatId = telegram.chatId.trim();
 
-    if (!botToken) {
+    if (!enabled || !botToken) {
       this.connected = false;
+      this.bot = null;
       return;
     }
 

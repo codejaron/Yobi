@@ -97,6 +97,12 @@ function migrateRawConfig(raw: unknown): unknown {
   }
 
   const migratedRaw = deepClone(raw) as Record<string, unknown>;
+  const telegram = migratedRaw.telegram;
+  if (isPlainRecord(telegram) && typeof telegram.enabled !== "boolean") {
+    const token = typeof telegram.botToken === "string" ? telegram.botToken.trim() : "";
+    telegram.enabled = token.length > 0;
+  }
+
   const qq = migratedRaw.qq;
   if (isPlainRecord(qq)) {
     const hasAppSecret = typeof qq.appSecret === "string" && qq.appSecret.trim().length > 0;
