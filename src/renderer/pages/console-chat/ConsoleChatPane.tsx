@@ -10,6 +10,7 @@ import {
   CardTitle
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
+import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { APPROVAL_OPTIONS } from "./types";
 import type { ConsoleMessage, PendingApproval } from "./types";
 
@@ -130,7 +131,11 @@ export function ConsoleChatPane({
                     <span className="text-[11px] text-muted-foreground">来自 Claw 执行结果</span>
                   </div>
                 ) : null}
-                <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
+                {item.role === "assistant" ? (
+                  <MarkdownContent variant="chat" markdown={item.text || "..."} />
+                ) : (
+                  <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
+                )}
                 {item.role === "assistant" && item.state === "streaming" ? (
                   <p className="mt-2 text-xs text-muted-foreground">流式输出中...</p>
                 ) : null}

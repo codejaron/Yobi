@@ -43,4 +43,315 @@
     @apply rounded-2xl border border-white/40 bg-white/70 backdrop-blur-md;
     box-shadow: 0 24px 80px rgba(20, 58, 74, 0.12);
   }
+
+  .yobi-markdown {
+    color: inherit;
+  }
+
+  .yobi-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .yobi-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .yobi-markdown--chat {
+    font-size: 0.93rem;
+    line-height: 1.62;
+  }
+
+  .yobi-markdown--memory {
+    font-size: 0.875rem;
+    line-height: 1.43;
+    font-family: inherit;
+  }
+
+  .yobi-markdown p {
+    margin: 0.52rem 0;
+  }
+
+  .yobi-markdown h1,
+  .yobi-markdown h2,
+  .yobi-markdown h3,
+  .yobi-markdown h4 {
+    margin: 1rem 0 0.56rem;
+    font-family: "Alegreya", "Times New Roman", serif;
+    letter-spacing: 0.01em;
+    line-height: 1.35;
+  }
+
+  .yobi-markdown h1 {
+    font-size: 1.58rem;
+  }
+
+  .yobi-markdown h2 {
+    font-size: 1.38rem;
+  }
+
+  .yobi-markdown h3 {
+    font-size: 1.2rem;
+  }
+
+  .yobi-markdown h4 {
+    font-size: 1.08rem;
+  }
+
+  .yobi-markdown--chat h1 {
+    font-size: 1.36rem;
+  }
+
+  .yobi-markdown--chat h2 {
+    font-size: 1.22rem;
+  }
+
+  .yobi-markdown ul,
+  .yobi-markdown ol {
+    margin: 0.56rem 0;
+    padding-left: 1.32rem;
+  }
+
+  .yobi-markdown ul {
+    list-style: disc outside;
+  }
+
+  .yobi-markdown ol {
+    list-style: decimal outside;
+  }
+
+  .yobi-markdown ul ul {
+    list-style-type: circle;
+  }
+
+  .yobi-markdown ul ul ul {
+    list-style-type: square;
+  }
+
+  .yobi-markdown ol ol {
+    list-style-type: lower-alpha;
+  }
+
+  .yobi-markdown ol ol ol {
+    list-style-type: lower-roman;
+  }
+
+  .yobi-markdown li {
+    margin: 0.26rem 0;
+  }
+
+  .yobi-markdown li::marker {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .yobi-markdown li > ul,
+  .yobi-markdown li > ol {
+    margin: 0.28rem 0;
+  }
+
+  .yobi-markdown blockquote {
+    margin: 0.72rem 0;
+    border-left: 3px solid hsl(var(--border));
+    background: hsl(var(--secondary) / 0.45);
+    border-radius: 0.55rem;
+    padding: 0.45rem 0.75rem;
+    color: hsl(var(--foreground) / 0.92);
+  }
+
+  .yobi-markdown hr {
+    margin: 0.8rem 0;
+    border: 0;
+    border-top: 1px dashed hsl(var(--border));
+  }
+
+  .yobi-markdown a {
+    color: hsl(var(--primary));
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: hsl(var(--primary) / 0.45);
+    text-underline-offset: 0.19em;
+    transition: color 0.18s ease, text-decoration-color 0.18s ease;
+  }
+
+  .yobi-markdown a:hover {
+    color: hsl(var(--accent));
+    text-decoration-color: hsl(var(--accent) / 0.5);
+  }
+
+  .yobi-markdown img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0.65rem 0;
+    border-radius: 0.7rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--card));
+    box-shadow: 0 10px 28px rgba(26, 64, 82, 0.14);
+  }
+
+  .yobi-markdown :not(pre) > code {
+    border-radius: 0.4rem;
+    border: 1px solid hsl(var(--border) / 0.85);
+    background: hsl(var(--muted) / 0.84);
+    padding: 0.08rem 0.35rem;
+    font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    font-size: 0.84em;
+    word-break: break-word;
+  }
+
+  .yobi-markdown__code-block {
+    position: relative;
+    margin: 0.74rem 0;
+    border-radius: 0.74rem;
+    border: 1px solid hsl(var(--border) / 0.9);
+    background: linear-gradient(180deg, rgba(41, 69, 86, 0.08), rgba(41, 69, 86, 0.03));
+    overflow: hidden;
+  }
+
+  .yobi-markdown__code-block pre {
+    margin: 0 !important;
+    background: transparent !important;
+    overflow-x: auto !important;
+  }
+
+  .yobi-markdown__code-block code {
+    font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace !important;
+  }
+
+  .yobi-markdown__copy-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22rem;
+    border-radius: 0.45rem;
+    border: 1px solid hsl(var(--border) / 0.75);
+    background: hsl(var(--card) / 0.9);
+    color: hsl(var(--muted-foreground));
+    padding: 0.18rem 0.4rem;
+    font-size: 0.68rem;
+    transition: all 0.18s ease;
+    z-index: 1;
+  }
+
+  .yobi-markdown__copy-btn:hover {
+    border-color: hsl(var(--primary) / 0.5);
+    color: hsl(var(--foreground));
+    background: hsl(var(--card));
+  }
+
+  .yobi-markdown__copy-btn--success {
+    border-color: rgba(16, 185, 129, 0.5);
+    color: rgb(6, 95, 70);
+    background: rgba(16, 185, 129, 0.18);
+  }
+
+  .yobi-markdown__table-wrap {
+    margin: 0.7rem 0;
+    overflow-x: auto;
+    border-radius: 0.62rem;
+    border: 1px solid hsl(var(--border) / 0.88);
+    background: hsl(var(--card) / 0.8);
+  }
+
+  .yobi-markdown table {
+    width: 100%;
+    min-width: 360px;
+    border-collapse: collapse;
+    font-size: 0.88em;
+  }
+
+  .yobi-markdown th,
+  .yobi-markdown td {
+    border-bottom: 1px solid hsl(var(--border) / 0.8);
+    border-right: 1px solid hsl(var(--border) / 0.62);
+    padding: 0.43rem 0.58rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .yobi-markdown th:last-child,
+  .yobi-markdown td:last-child {
+    border-right: 0;
+  }
+
+  .yobi-markdown thead th {
+    background: hsl(var(--secondary) / 0.66);
+    font-weight: 600;
+  }
+
+  .yobi-markdown tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .yobi-markdown ul.contains-task-list {
+    list-style: none;
+    padding-left: 0.1rem;
+  }
+
+  .yobi-markdown li.task-list-item {
+    list-style: none;
+  }
+
+  .yobi-markdown li.task-list-item input[type="checkbox"] {
+    margin-right: 0.45rem;
+    accent-color: hsl(var(--primary));
+    transform: translateY(1px);
+  }
+
+  .yobi-markdown .footnotes {
+    margin-top: 1rem;
+    border-top: 1px dashed hsl(var(--border));
+    padding-top: 0.66rem;
+  }
+
+  .yobi-markdown .footnotes ol {
+    margin-top: 0.44rem;
+  }
+
+  .yobi-markdown--memory h1,
+  .yobi-markdown--memory h2,
+  .yobi-markdown--memory h3,
+  .yobi-markdown--memory h4 {
+    margin: 0.72rem 0 0.4rem;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 1.35;
+  }
+
+  .yobi-markdown--memory h1 {
+    font-size: 1.36em;
+  }
+
+  .yobi-markdown--memory h2 {
+    font-size: 1.24em;
+  }
+
+  .yobi-markdown--memory h3 {
+    font-size: 1.14em;
+  }
+
+  .yobi-markdown--memory h4 {
+    font-size: 1.06em;
+  }
+
+  .yobi-markdown--memory p,
+  .yobi-markdown--memory ul,
+  .yobi-markdown--memory ol,
+  .yobi-markdown--memory blockquote,
+  .yobi-markdown--memory .yobi-markdown__table-wrap,
+  .yobi-markdown--memory .yobi-markdown__code-block,
+  .yobi-markdown--memory hr {
+    margin: 0.32rem 0;
+  }
+
+  .yobi-markdown--memory li {
+    margin: 0.16rem 0;
+  }
+
+  .yobi-markdown--memory ul,
+  .yobi-markdown--memory ol {
+    padding-left: 1.2rem;
+  }
 }

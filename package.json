@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.4",
-    "@libsql/client": "^0.15.15",
     "@ai-sdk/openai": "^2.0.10",
+    "@libsql/client": "^0.15.15",
     "@mastra/libsql": "^1.6.2",
     "@mastra/memory": "^1.5.2",
     "@modelcontextprotocol/sdk": "^1.17.5",
@@ -35,6 +35,9 @@
     "pixi.js": "^6.5.10",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.1",
     "uiohook-napi": "^1.5.4",
     "zod": "^4.1.5"
@@ -44,6 +47,7 @@
     "@types/node": "^24.3.0",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^5.0.2",
     "autoprefixer": "^10.4.21",
     "electron": "^37.4.0",

@@ -10,6 +10,7 @@ import {
   CardTitle
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
+import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { chatItemClassName } from "./useClawTabController";
 import type { ClawChatItem, ConnectionBadge } from "./types";
 
@@ -63,7 +64,11 @@ export function ClawChatPane({
                     {new Date(item.timestamp).toLocaleTimeString()}
                   </span>
                 </div>
-                <p className="whitespace-pre-wrap leading-relaxed">{item.text}</p>
+                {item.role === "assistant" ? (
+                  <MarkdownContent variant="chat" markdown={item.text} />
+                ) : (
+                  <p className="whitespace-pre-wrap leading-relaxed">{item.text}</p>
+                )}
                 {item.streaming ? (
                   <p className="mt-1 text-xs text-muted-foreground">流式输出中...</p>
                 ) : null}
