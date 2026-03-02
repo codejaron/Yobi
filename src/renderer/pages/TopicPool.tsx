@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, Trash2 } from "lucide-react";
 import type { AppStatus, TopicPoolItem } from "@shared/types";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -75,9 +75,22 @@ export function TopicPoolPage({
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [topicAction, setTopicAction] = useState<
+    | {
+        kind: "delete";
+        topicId: string;
+      }
+    | {
+        kind: "clear";
+      }
+    | null
+  >(null);
   const items = [...(status?.topicPool ?? [])].sort(topicSort);
   const pendingCount = items.filter((item) => !item.used).length;
   const usedCount = items.length - pendingCount;
+  const deletingTopicId = topicAction?.kind === "delete" ? topicAction.topicId : null;
+  const clearingAllTopics = topicAction?.kind === "clear";
+  const topicActionBusy = topicAction !== null;
 
   useEffect(() => {
     if (!taskNotice) {
@@ -198,11 +211,58 @@ export function TopicPoolPage({
 
       <Card>
         <CardHeader>
-          <CardDescription>话题池列表</CardDescription>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <MessageCircle className="h-4 w-4" />
-            当前话题（含已使用）
-          </CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardDescription>话题池列表</CardDescription>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <MessageCircle className="h-4 w-4" />
+                当前话题（含已使用）
+              </CardTitle>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-rose-200 text-rose-700 hover:bg-rose-50"
+              disabled={topicActionBusy || items.length === 0}
+              onClick={() => {
+                if (topicActionBusy || items.length === 0) {
+                  return;
+                }
+
+                const confirmed = window.confirm(`确认清空全部 ${items.length} 条话题吗？此操作不可撤销。`);
+                if (!confirmed) {
+                  return;
+                }
+
+                setTaskNotice(null);
+                setTopicAction({
+                  kind: "clear"
+                });
+                void window.companion
+                  .clearTopicPool()
+                  .then(async (result) => {
+                    setTaskNotice({
+                      type: result.accepted ? "success" : "error",
+                      message: result.message
+                    });
+                    await refreshStatus();
+                  })
+                  .catch((error) => {
+                    setTaskNotice({
+                      type: "error",
+                      message: error instanceof Error ? error.message : "清空话题池失败。"
+                    });
+                  })
+                  .finally(() => {
+                    setTopicAction(null);
+                  });
+              }}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {clearingAllTopics ? "清空中..." : "清空全部"}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-2">
           {items.length > 0 ? (
@@ -211,9 +271,54 @@ export function TopicPoolPage({
                 key={topic.id}
                 className="rounded-md border border-border/70 bg-white/70 px-3 py-2"
               >
-                <p className={`text-sm ${topic.used ? "text-muted-foreground line-through" : ""}`}>
-                  {topic.text}
-                </p>
+                <div className="flex items-start justify-between gap-3">
+                  <p className={`text-sm ${topic.used ? "text-muted-foreground line-through" : ""}`}>
+                    {topic.text}
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-rose-700 hover:bg-rose-50"
+                    disabled={topicActionBusy}
+                    onClick={() => {
+                      if (topicActionBusy) {
+                        return;
+                      }
+
+                      const confirmed = window.confirm("确认删除这条话题吗？");
+                      if (!confirmed) {
+                        return;
+                      }
+
+                      setTaskNotice(null);
+                      setTopicAction({
+                        kind: "delete",
+                        topicId: topic.id
+                      });
+                      void window.companion
+                        .deleteTopicPoolItem(topic.id)
+                        .then(async (result) => {
+                          setTaskNotice({
+                            type: result.accepted ? "success" : "error",
+                            message: result.message
+                          });
+                          await refreshStatus();
+                        })
+                        .catch((error) => {
+                          setTaskNotice({
+                            type: "error",
+                            message: error instanceof Error ? error.message : "删除话题失败。"
+                          });
+                        })
+                        .finally(() => {
+                          setTopicAction(null);
+                        });
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="sr-only">删除话题</span>
+                  </Button>
+                </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <Badge className="border-slate-300 bg-white/70">{formatTopicSource(topic.source)}</Badge>
                   <Badge
@@ -235,6 +340,7 @@ export function TopicPoolPage({
                     {topic.used ? "已使用" : "待触发"}
                   </Badge>
                   <span>入池时间 {formatDateTime(topic.createdAt)}</span>
+                  {deletingTopicId === topic.id ? <span className="text-rose-700">删除中...</span> : null}
                 </div>
               </div>
             ))

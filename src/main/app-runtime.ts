@@ -347,6 +347,24 @@ export class CompanionRuntime {
     return result;
   }
 
+  async deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {
+    const removed = await this.memory.deleteTopic(topicId);
+    await this.emitStatus();
+    return {
+      accepted: removed,
+      message: removed ? "话题已删除。" : "未找到该话题，可能已被清理。"
+    };
+  }
+
+  async clearTopicPool(): Promise<{ accepted: boolean; message: string }> {
+    const removedCount = await this.memory.clearTopicPool();
+    await this.emitStatus();
+    return {
+      accepted: true,
+      message: removedCount > 0 ? `已清空话题池，共删除 ${removedCount} 条。` : "话题池已经是空的。"
+    };
+  }
+
   async openSystemPermissionSettings(
     permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }> {

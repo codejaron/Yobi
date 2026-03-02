@@ -50,6 +50,14 @@ const api: CompanionApi = {
   triggerWanderTask(): Promise<{ accepted: boolean; message: string }> {
     return ipcRenderer.invoke("background:wander:trigger");
   },
+  deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("topic-pool:item:delete", {
+      topicId
+    });
+  },
+  clearTopicPool(): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("topic-pool:clear");
+  },
   openSystemPermissionSettings(
     permission: "accessibility" | "microphone" | "screenCapture"
   ): Promise<{ opened: boolean; prompted: boolean }> {

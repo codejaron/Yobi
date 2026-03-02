@@ -405,6 +405,49 @@ export class YobiMemory {
       .filter((item): item is TopicPoolItem => item !== null);
   }
 
+  async deleteTopic(topicId: string): Promise<boolean> {
+    const client = await this.ensureTopicClient();
+    const id = topicId.trim();
+    if (!id) {
+      return false;
+    }
+
+    const existing = await client.execute({
+      sql: `SELECT id
+            FROM pending_topics
+            WHERE id = ?
+            LIMIT 1`,
+      args: [id]
+    });
+    if (existing.rows.length === 0) {
+      return false;
+    }
+
+    await client.execute({
+      sql: `DELETE FROM pending_topics
+            WHERE id = ?`,
+      args: [id]
+    });
+    return true;
+  }
+
+  async clearTopicPool(): Promise<number> {
+    const client = await this.ensureTopicClient();
+    const countResult = await client.execute({
+      sql: `SELECT COUNT(*) AS total
+            FROM pending_topics`
+    });
+    const total = parseSqlCount(countResult.rows[0]?.total);
+    if (total <= 0) {
+      return 0;
+    }
+
+    await client.execute({
+      sql: `DELETE FROM pending_topics`
+    });
+    return total;
+  }
+
   async markUsed(topicId: string): Promise<void> {
     const client = await this.ensureTopicClient();
     const id = topicId.trim();

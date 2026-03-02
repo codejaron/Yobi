@@ -32,6 +32,8 @@ export interface CompanionApi {
   getStatus(): Promise<AppStatus>;
   triggerRecallTask(): Promise<{ accepted: boolean; message: string }>;
   triggerWanderTask(): Promise<{ accepted: boolean; message: string }>;
+  deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }>;
+  clearTopicPool(): Promise<{ accepted: boolean; message: string }>;
   openSystemPermissionSettings(
     permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }>;

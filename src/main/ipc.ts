@@ -50,6 +50,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("status:get", () => runtime.getStatus());
   ipcMain.handle("background:recall:trigger", () => runtime.triggerRecallTask());
   ipcMain.handle("background:wander:trigger", () => runtime.triggerWanderTask());
+  ipcMain.handle("topic-pool:item:delete", (_, payload: { topicId?: string }) =>
+    runtime.deleteTopicPoolItem(payload?.topicId ?? "")
+  );
+  ipcMain.handle("topic-pool:clear", () => runtime.clearTopicPool());
   ipcMain.handle(
     "system:permissions:open-settings",
     (
