@@ -9,6 +9,7 @@ import type {
   AppConfig,
   CharacterProfile,
   HistoryMessage,
+  TopicPoolItem,
   WorkingMemoryDocument
 } from "@shared/types";
 import { DEFAULT_WORKING_MEMORY_TEMPLATE } from "@shared/types";
@@ -37,6 +38,7 @@ interface PendingTopic {
   source: string;
   createdAt: string;
   expiresAt: string | null;
+  used: boolean;
 }
 
 interface TextPart {
@@ -66,6 +68,25 @@ function normalizeRole(role: MastraDBMessage["role"]): "system" | "user" | "assi
 
 function normalizeTopicText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
+}
+
+function parseSqlCount(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return 0;
 }
 
 function extractTextFromMessage(message: MastraDBMessage): string {
@@ -258,28 +279,39 @@ export class YobiMemory {
     text: string;
     source: string;
     expiresAt?: string | null;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const client = await this.ensureTopicClient();
     const text = normalizeTopicText(input.text);
     if (!text) {
-      return;
+      return false;
     }
 
     await this.cleanup();
     const now = new Date().toISOString();
     const normalizedText = text.toLowerCase();
+    const activeCountResult = await client.execute({
+      sql: `SELECT COUNT(*) AS total
+            FROM pending_topics
+            WHERE used = 0
+              AND (expires_at IS NULL OR expires_at > ?)`,
+      args: [now]
+    });
+    const activeCount = parseSqlCount(activeCountResult.rows[0]?.total);
+    if (activeCount >= 10) {
+      return false;
+    }
+
     const existing = await client.execute({
       sql: `SELECT id
             FROM pending_topics
             WHERE normalized_text = ?
-              AND used = 0
-              AND (expires_at IS NULL OR expires_at > ?)
+              AND (used = 1 OR expires_at IS NULL OR expires_at > ?)
             LIMIT 1`,
       args: [normalizedText, now]
     });
 
     if (existing.rows.length > 0) {
-      return;
+      return false;
     }
 
     const expiresAt = input.expiresAt ? input.expiresAt : null;
@@ -288,6 +320,7 @@ export class YobiMemory {
             VALUES (?, ?, ?, ?, ?, ?, 0)`,
       args: [randomUUID(), text, normalizedText, input.source, now, expiresAt]
     });
+    return true;
   }
 
   async listActive(limit = 3): Promise<PendingTopic[]> {
@@ -323,10 +356,53 @@ export class YobiMemory {
           text,
           source,
           createdAt,
-          expiresAt
+          expiresAt,
+          used: false
         };
       })
       .filter((item): item is PendingTopic => item !== null);
+  }
+
+  async listTopicPool(limit = 20): Promise<TopicPoolItem[]> {
+    const client = await this.ensureTopicClient();
+    await this.cleanup();
+    const now = new Date().toISOString();
+    const safeLimit = Math.max(1, Math.min(100, limit));
+    const result = await client.execute({
+      sql: `SELECT id, text, source, created_at, expires_at, used
+            FROM pending_topics
+            WHERE used = 1
+               OR expires_at IS NULL
+               OR expires_at > ?
+            ORDER BY created_at DESC
+            LIMIT ?`,
+      args: [now, safeLimit]
+    });
+
+    return result.rows
+      .map((row) => {
+        const id = typeof row.id === "string" ? row.id : "";
+        const text = typeof row.text === "string" ? row.text : "";
+        const source = typeof row.source === "string" ? row.source : "";
+        const createdAt = typeof row.created_at === "string" ? row.created_at : "";
+        const rawExpiresAt = row.expires_at;
+        const expiresAt = typeof rawExpiresAt === "string" && rawExpiresAt ? rawExpiresAt : null;
+        const rawUsed = row.used;
+        const used = rawUsed === 1 || rawUsed === "1";
+        if (!id || !text || !source || !createdAt) {
+          return null;
+        }
+
+        return {
+          id,
+          text,
+          source,
+          createdAt,
+          expiresAt,
+          used
+        };
+      })
+      .filter((item): item is TopicPoolItem => item !== null);
   }
 
   async markUsed(topicId: string): Promise<void> {
@@ -338,20 +414,37 @@ export class YobiMemory {
 
     await client.execute({
       sql: `UPDATE pending_topics
-            SET used = 1
+            SET used = 1,
+                used_at = ?
             WHERE id = ?`,
-      args: [id]
+      args: [new Date().toISOString(), id]
     });
+  }
+
+  async countUnusedTopics(): Promise<number> {
+    const client = await this.ensureTopicClient();
+    await this.cleanup();
+    const now = new Date().toISOString();
+    const result = await client.execute({
+      sql: `SELECT COUNT(*) AS total
+            FROM pending_topics
+            WHERE used = 0
+              AND (expires_at IS NULL OR expires_at > ?)`,
+      args: [now]
+    });
+
+    return parseSqlCount(result.rows[0]?.total);
   }
 
   async cleanup(): Promise<void> {
     const client = await this.ensureTopicClient();
     const now = new Date().toISOString();
+    const usedRetentionCutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
     await client.execute({
       sql: `DELETE FROM pending_topics
-            WHERE used = 1
-               OR (expires_at IS NOT NULL AND expires_at <= ?)`,
-      args: [now]
+            WHERE (used = 0 AND expires_at IS NOT NULL AND expires_at <= ?)
+               OR (used = 1 AND COALESCE(used_at, created_at) <= ?)`,
+      args: [now, usedRetentionCutoff]
     });
   }
 
@@ -544,13 +637,20 @@ export class YobiMemory {
         source TEXT NOT NULL,
         created_at TEXT NOT NULL,
         expires_at TEXT,
-        used INTEGER NOT NULL DEFAULT 0
+        used INTEGER NOT NULL DEFAULT 0,
+        used_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_pending_topics_active
         ON pending_topics (used, expires_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_pending_topics_normalized
         ON pending_topics (normalized_text, used, expires_at);
     `);
+
+    const tableInfo = await this.topicClient.execute("PRAGMA table_info(pending_topics)");
+    const hasUsedAt = tableInfo.rows.some((row) => row.name === "used_at");
+    if (!hasUsedAt) {
+      await this.topicClient.execute("ALTER TABLE pending_topics ADD COLUMN used_at TEXT");
+    }
 
     this.topicTableReady = true;
     return this.topicClient;

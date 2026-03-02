@@ -48,6 +48,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("memory:save", (_, input: { markdown: string }) => runtime.saveWorkingMemory(input));
 
   ipcMain.handle("status:get", () => runtime.getStatus());
+  ipcMain.handle("background:recall:trigger", () => runtime.triggerRecallTask());
+  ipcMain.handle("background:wander:trigger", () => runtime.triggerWanderTask());
   ipcMain.handle(
     "system:permissions:open-settings",
     (

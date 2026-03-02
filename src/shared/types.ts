@@ -371,6 +371,15 @@ export interface SystemPermissionStatus {
   screenCapture: PermissionState;
 }
 
+export interface TopicPoolItem {
+  id: string;
+  text: string;
+  source: string;
+  createdAt: string;
+  expiresAt: string | null;
+  used: boolean;
+}
+
 export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
@@ -379,7 +388,7 @@ export interface AppStatus {
   lastProactiveAt: string | null;
   historyCount: number;
   keepAwakeActive: boolean;
-  pendingReminders: number;
+  topicPool: TopicPoolItem[];
   petOnline: boolean;
   openclawOnline: boolean;
   openclawStatus: string;

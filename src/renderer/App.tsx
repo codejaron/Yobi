@@ -9,6 +9,7 @@ import { SideNav } from "@renderer/components/layout/SideNav";
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
 import { DashboardPage } from "@renderer/pages/Dashboard";
+import { TopicPoolPage } from "@renderer/pages/TopicPool";
 import { ConsoleChatPage } from "@renderer/pages/ConsoleChat";
 import { ProvidersPage } from "@renderer/pages/Providers";
 import { CharacterPage } from "@renderer/pages/Character";
@@ -21,6 +22,8 @@ function pageTitle(page: PageId): string {
   switch (page) {
     case "dashboard":
       return "运行仪表盘";
+    case "topics":
+      return "话题池";
     case "providers":
       return "Provider 与模型路由";
     case "console":
@@ -151,6 +154,10 @@ export default function App() {
 
     if (activePage === "console") {
       return <ConsoleChatPage />;
+    }
+
+    if (activePage === "topics") {
+      return <TopicPoolPage status={status} refreshStatus={refreshStatus} />;
     }
 
     if (activePage === "providers") {

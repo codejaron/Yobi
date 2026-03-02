@@ -2,6 +2,7 @@ import {
   Bot,
   Brain,
   Gauge,
+  ListChecks,
   MessageSquare,
   MessageCircleHeart,
   Plug,
@@ -17,6 +18,7 @@ const items: Array<{
   icon: ComponentType<{ className?: string }>;
 }> = [
   { id: "dashboard", label: "仪表盘", icon: Gauge },
+  { id: "topics", label: "话题池", icon: ListChecks },
   { id: "console", label: "聊天", icon: MessageSquare },
   { id: "providers", label: "Provider", icon: Bot },
   { id: "character", label: "角色", icon: MessageCircleHeart },

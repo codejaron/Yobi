@@ -44,6 +44,12 @@ const api: CompanionApi = {
   getStatus(): Promise<AppStatus> {
     return ipcRenderer.invoke("status:get");
   },
+  triggerRecallTask(): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("background:recall:trigger");
+  },
+  triggerWanderTask(): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("background:wander:trigger");
+  },
   openSystemPermissionSettings(
     permission: "accessibility" | "microphone" | "screenCapture"
   ): Promise<{ opened: boolean; prompted: boolean }> {

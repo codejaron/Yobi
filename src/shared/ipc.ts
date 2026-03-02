@@ -30,6 +30,8 @@ export interface CompanionApi {
   saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument>;
 
   getStatus(): Promise<AppStatus>;
+  triggerRecallTask(): Promise<{ accepted: boolean; message: string }>;
+  triggerWanderTask(): Promise<{ accepted: boolean; message: string }>;
   openSystemPermissionSettings(
     permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }>;

@@ -25,6 +25,10 @@ export class CompanionPaths {
     return path.join(this.baseDir, "reminders.json");
   }
 
+  get backgroundTaskStatePath(): string {
+    return path.join(this.baseDir, "background-tasks.json");
+  }
+
   get logsDir(): string {
     return path.join(this.baseDir, "logs");
   }

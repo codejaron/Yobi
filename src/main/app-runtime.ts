@@ -97,7 +97,9 @@ export class CompanionRuntime {
     () => this.configStore.getConfig(),
     {
       resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID
+      threadId: PRIMARY_THREAD_ID,
+      statePath: this.paths.backgroundTaskStatePath,
+      onTopicPoolUpdated: () => this.emitStatus()
     }
   );
 
@@ -331,6 +333,18 @@ export class CompanionRuntime {
 
   async getStatus(): Promise<AppStatus> {
     return this.collectStatus();
+  }
+
+  async triggerRecallTask(): Promise<{ accepted: boolean; message: string }> {
+    const result = await this.backgroundTasks.triggerRecallNow();
+    await this.emitStatus();
+    return result;
+  }
+
+  async triggerWanderTask(): Promise<{ accepted: boolean; message: string }> {
+    const result = await this.backgroundTasks.triggerWanderNow();
+    await this.emitStatus();
+    return result;
   }
 
   async openSystemPermissionSettings(
@@ -868,7 +882,7 @@ export class CompanionRuntime {
         threadId: PRIMARY_THREAD_ID
       }),
       keepAwakeActive: this.keepAwake.isActive(),
-      pendingReminders: this.reminderService.count(),
+      topicPool: await this.memory.listTopicPool(50),
       petOnline: this.petService.isPetOnline(),
       openclawOnline: openclawStatus.online,
       openclawStatus: openclawStatus.message,

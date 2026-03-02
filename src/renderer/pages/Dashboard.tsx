@@ -1,4 +1,4 @@
-import { Bot, Clock3, ShieldCheck, Sparkles, AlarmClock, PawPrint, MessageCircle } from "lucide-react";
+import { Bot, Clock3, ShieldCheck, Sparkles, PawPrint, MessageCircle } from "lucide-react";
 import type { AppStatus, PermissionState } from "@shared/types";
 import { useEffect, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
@@ -247,8 +247,8 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <Card className="animate-float">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Card>
           <CardHeader>
             <CardDescription>Telegram</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -263,7 +263,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           </CardContent>
         </Card>
 
-        <Card className="animate-float">
+        <Card>
           <CardHeader>
             <CardDescription>QQ</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -295,21 +295,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>提醒任务</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlarmClock className="h-4 w-4" />
-              {status?.pendingReminders ?? 0} 条待执行
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              到点后会主动 Telegram 推送提醒。
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardDescription>OpenClaw</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
               <Sparkles className="h-4 w-4" />
@@ -324,7 +309,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
         </Card>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardDescription>系统权限</CardDescription>
@@ -392,7 +377,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           </CardContent>
         </Card>
       </div>
-
     </div>
   );
 }
