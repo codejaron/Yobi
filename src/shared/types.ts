@@ -290,6 +290,13 @@ export type ClawEvent =
       timestamp: string;
     }
   | {
+      type: "user-message";
+      sessionKey: string;
+      text: string;
+      origin: ClawOrigin;
+      timestamp: string;
+    }
+  | {
       type: "status";
       sessionKey: string;
       message: string;

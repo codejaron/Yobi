@@ -518,11 +518,20 @@ export class ClawChannel {
         this.sessionRunIds.set(this.toOriginSessionKey(normalizedSession), runId);
         this.runOrigins.set(runId, "yobi-tool");
       }
+
+      const timestamp = new Date().toISOString();
+      this.emit({
+        type: "user-message",
+        sessionKey: normalizedSession,
+        text: normalizedMessage,
+        origin: "yobi-tool",
+        timestamp
+      });
       this.emit({
         type: "status",
         sessionKey: normalizedSession,
         message: "已将任务交给 Claw 执行",
-        timestamp: new Date().toISOString()
+        timestamp
       });
       return response;
     } catch (error) {

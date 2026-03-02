@@ -245,6 +245,16 @@ export function useClawTabController(active: boolean): ClawTabController {
       return;
     }
 
+    if (event.type === "user-message") {
+      appendChatItem({
+        role: "user",
+        title: event.origin === "yobi-tool" ? "Yobi" : "你",
+        text: event.text,
+        timestamp: event.timestamp
+      });
+      return;
+    }
+
     if (event.type === "assistant-delta") {
       setChatItems((prev) => {
         const streamingId = streamMessageIdRef.current;
