@@ -3,6 +3,7 @@ import type { AppConfig } from "@shared/types";
 import type { CharacterStore } from "./character";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
+import { stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 
@@ -25,6 +26,8 @@ export interface ChatReplyStreamListener {
 }
 
 export class ConversationEngine {
+  private turnsSinceRefresh = 0;
+
   constructor(
     private readonly memory: YobiMemory,
     private readonly modelFactory: ModelFactory,
@@ -168,7 +171,9 @@ export class ConversationEngine {
       throw new Error(lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。");
     }
 
-    const finalText = trimmedText || "我这次没有生成有效回复，请重试一次。";
+    const fallbackReply = "我这次没有生成有效回复，请重试一次。";
+    const rawFinalText = trimmedText || fallbackReply;
+    const finalText = stripEmotionTags(rawFinalText).trim() || fallbackReply;
 
     await this.memory.rememberMessage({
       threadId: input.threadId,
@@ -180,16 +185,14 @@ export class ConversationEngine {
       }
     });
 
-    void this.refreshWorkingMemory({
+    this.scheduleWorkingMemoryRefresh({
       threadId: input.threadId,
       resourceId: input.resourceId,
-      userText: normalizedText,
-      assistantText: finalText,
       currentWorkingMemory: recalled.workingMemory,
       workingMemoryTemplate: character.workingMemoryTemplate ?? recalled.workingMemory
     });
 
-    return finalText;
+    return rawFinalText;
   }
 
   async rememberAssistantMessage(input: {
@@ -200,10 +203,11 @@ export class ConversationEngine {
     metadata?: Record<string, unknown>;
     userTextForWorkingMemory?: string;
   }): Promise<void> {
-    const normalizedText = input.text.trim();
-    if (!normalizedText) {
+    const rawText = input.text.trim();
+    if (!rawText) {
       return;
     }
+    const normalizedText = stripEmotionTags(rawText).trim() || rawText;
 
     await this.memory.rememberMessage({
       threadId: input.threadId,
@@ -222,49 +226,76 @@ export class ConversationEngine {
     });
     const character = await this.characterStore.getCharacter(this.getConfig().characterId);
 
-    void this.refreshWorkingMemory({
+    this.scheduleWorkingMemoryRefresh({
       threadId: input.threadId,
       resourceId: input.resourceId,
-      userText: input.userTextForWorkingMemory?.trim() || "(无，本轮为助手主动消息)",
-      assistantText: normalizedText,
       currentWorkingMemory: recalled.workingMemory,
       workingMemoryTemplate: character.workingMemoryTemplate ?? recalled.workingMemory
     });
   }
 
+  private scheduleWorkingMemoryRefresh(input: {
+    threadId: string;
+    resourceId: string;
+    currentWorkingMemory: string;
+    workingMemoryTemplate: string;
+  }): void {
+    this.turnsSinceRefresh += 1;
+
+    const isBlankMemory = input.currentWorkingMemory === input.workingMemoryTemplate;
+    if (!isBlankMemory && this.turnsSinceRefresh < 50) {
+      return;
+    }
+
+    this.turnsSinceRefresh = 0;
+    void this.refreshWorkingMemory(input);
+  }
+
   private async refreshWorkingMemory(input: {
     threadId: string;
     resourceId: string;
-    userText: string;
-    assistantText: string;
     currentWorkingMemory: string;
     workingMemoryTemplate: string;
   }): Promise<void> {
     try {
+      const historyPage = await this.memory.listHistoryByCursor({
+        threadId: input.threadId,
+        resourceId: input.resourceId,
+        limit: 50
+      });
+      const history = historyPage.items;
+
+      if (history.length === 0) {
+        return;
+      }
+
+      const exchanges = history
+        .map((message) => `${message.role === "user" ? "用户" : "Yobi"}: ${message.text}`)
+        .join("\n");
+
       const model = this.modelFactory.getChatModel();
       const response = await generateText({
         model,
         providerOptions: resolveOpenAIStoreOption(this.getConfig()),
         system: [
-          "你负责维护 Yobi 的工作记忆。这份记忆是 Yobi 对用户和自身状态的持续认知，每轮对话后更新。",
-          "输出必须是 markdown，结构严格沿用模板的所有 section，不要省略任何 section，不要添加解释性文字。",
-          "更新规则：",
-          "- 「用户」「兴趣与偏好」：只在用户明确透露新信息时更新。不要从单次对话过度推断。",
-          "- 「交流偏好」：通过多轮对话积累判断——用户的回复长度、语气、对哪种风格回应更积极。不要在前几次对话就下结论。",
-          '- 「重要记忆」：只记录具体事件，带时间感。好的例子：“用户提到下周三有面试，有点紧张”。坏的例子：“用户是一个容易紧张的人”。最多保留 15 条，太旧且不再相关的移除。',
-          "- 「待跟进」：新增用户提到但未完结的事项。如果某事已有后续（用户反馈了结果或不再相关），移除或移入重要记忆。",
-          "- 「关系」：阶段变化应该很慢。不要因为一次愉快的聊天就从“初识”跳到“老朋友”。里程碑只记录真正有意义的节点。当前氛围基于最近 3-5 次交流的整体感觉判断。",
-          "- 「Yobi 自身」：基于当前对话内容和历史更新 Yobi 的情绪。如果用户分享了好事 → 开心。如果用户好几天没说话刚回来 → 可以带点小委屈。如果对话很无聊 → 可以是有点无聊。「对用户的小观察」记录 Yobi 注意到但不适合直接说出口的东西。",
-          "- 「当前对话」：每轮都更新。总结本次对话到目前的主线、走向、以及用户随口提到但没展开的点。如果本轮是新对话的开始，清空上次的内容重新开始。"
+          "你负责维护 Yobi 的工作记忆。这份记忆同时记录用户画像和 Yobi 自身的状态。",
+          "",
+          "更新原则：",
+          "- 有新信息才更新对应字段，没有则保持原内容不变。",
+          "- 「交流风格」要从用户的实际行为推断（消息长度、用词习惯、对吐槽的反应），不要问用户。",
+          "- 「关系阶段」根据互动深度和时间自然演进，不要跳级。新用户默认'新认识'。",
+          "- 「Yobi 自身」要基于对话内容更新 Yobi 的心情、看法和关注点。Yobi 不总是开心的——如果用户冷淡，Yobi 可以记录'有点无聊'；如果聊得投机，可以记录'挺开心'。",
+          "- 「重要记忆」只记录真正重要的事（承诺、里程碑、用户分享的重要经历），不要把每轮闲聊都塞进去。",
+          "- 如果用户纠正了之前的信息，直接更新，不保留旧的错误版本。",
+          "",
+          "输出完整的 markdown，结构必须沿用模板，不添加解释。"
         ].join("\n"),
         prompt: [
-          `工作记忆模板:\n${input.workingMemoryTemplate}`,
+          `模板结构:\n${input.workingMemoryTemplate}`,
           `当前工作记忆:\n${input.currentWorkingMemory}`,
-          `本轮用户消息:\n${input.userText}`,
-          `本轮助手回复:\n${input.assistantText}`,
-          "请返回更新后的完整工作记忆 markdown。"
-        ].join("\n\n"),
-        maxOutputTokens: 800
+          `最近 ${history.length} 轮对话:\n${exchanges}`,
+          "请返回更新后的完整工作记忆。"
+        ].join("\n\n")
       });
 
       const markdown = response.text.trim();

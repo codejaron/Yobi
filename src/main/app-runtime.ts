@@ -14,6 +14,7 @@ import { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
 import { ReminderStore } from "@main/storage/reminder-store";
 import { CharacterStore } from "@main/core/character";
+import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
 import { ModelFactory } from "@main/core/model-factory";
 import { YobiMemory } from "@main/memory/setup";
 import { ConversationEngine } from "@main/core/conversation";
@@ -553,15 +554,15 @@ export class CompanionRuntime {
     this.toolRegistry.register(createClawToolDefinition(this.clawChannel));
 
     for (const builtin of createBuiltinTools({
-      reminderService: this.reminderService,
-      voiceRouter: this.voiceRouter,
-      petBridge: this.pet
+      reminderService: this.reminderService
     })) {
       this.toolRegistry.register(builtin);
     }
   }
 
   private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
+    const deltaStripper = createEmotionTagStripper();
+
     this.consoleChannel.emit({
       requestId,
       type: "thinking",
@@ -577,10 +578,15 @@ export class CompanionRuntime {
           threadId: PRIMARY_THREAD_ID,
           stream: {
             onTextDelta: (delta) => {
+              const visibleDelta = deltaStripper.push(delta);
+              if (!visibleDelta) {
+                return;
+              }
+
               this.consoleChannel.emit({
                 requestId,
                 type: "text-delta",
-                delta,
+                delta: visibleDelta,
                 timestamp: new Date().toISOString()
               });
             },
@@ -614,14 +620,33 @@ export class CompanionRuntime {
         "LLM 回复超时"
       );
 
+      const trailingDelta = deltaStripper.flush();
+      if (trailingDelta) {
+        this.consoleChannel.emit({
+          requestId,
+          type: "text-delta",
+          delta: trailingDelta,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const parsedReply = extractEmotionTag(reply);
+      const visibleReply = parsedReply.cleanedText.trim() || "我这次没有生成有效回复，请重试一次。";
+      if (parsedReply.emotion) {
+        this.pet.emitEvent({
+          type: "emotion",
+          value: parsedReply.emotion
+        });
+      }
+
       this.consoleChannel.emit({
         requestId,
         type: "final",
-        rawText: reply,
-        displayText: reply,
+        rawText: visibleReply,
+        displayText: visibleReply,
         timestamp: new Date().toISOString()
       });
-      this.petService.emitPetTalkingReply(reply);
+      this.petService.emitPetTalkingReply(visibleReply);
 
       this.lastUserAt = new Date().toISOString();
       await this.emitStatus();
@@ -731,11 +756,20 @@ export class CompanionRuntime {
         CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
         "LLM 回复超时"
       );
+      const parsedReply = extractEmotionTag(reply);
+      const visibleReply = parsedReply.cleanedText.trim();
 
-      if (reply.trim()) {
+      if (parsedReply.emotion) {
+        this.pet.emitEvent({
+          type: "emotion",
+          value: parsedReply.emotion
+        });
+      }
+
+      if (visibleReply) {
         await this.telegram.send({
           kind: "text",
-          text: reply,
+          text: visibleReply,
           chatId: inbound.chatId
         });
       }
@@ -765,11 +799,20 @@ export class CompanionRuntime {
         CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
         "LLM 回复超时"
       );
+      const parsedReply = extractEmotionTag(reply);
+      const visibleReply = parsedReply.cleanedText.trim();
 
-      if (reply.trim()) {
+      if (parsedReply.emotion) {
+        this.pet.emitEvent({
+          type: "emotion",
+          value: parsedReply.emotion
+        });
+      }
+
+      if (visibleReply) {
         await this.qqChannel?.send({
           kind: "text",
-          text: reply,
+          text: visibleReply,
           chatId: inbound.chatId
         });
       }
@@ -847,11 +890,24 @@ export class CompanionRuntime {
       return;
     }
 
+    const parsedMessage = extractEmotionTag(decision.message);
+    const proactiveMessage = parsedMessage.cleanedText.trim() || decision.message.trim();
+    if (!proactiveMessage) {
+      return;
+    }
+
+    if (parsedMessage.emotion) {
+      this.pet.emitEvent({
+        type: "emotion",
+        value: parsedMessage.emotion
+      });
+    }
+
     await this.conversation.rememberAssistantMessage({
       threadId: PRIMARY_THREAD_ID,
       resourceId: PRIMARY_RESOURCE_ID,
       channel: "console",
-      text: decision.message,
+      text: proactiveMessage,
       metadata: {
         proactive: true
       }
@@ -860,7 +916,7 @@ export class CompanionRuntime {
     try {
       const config = this.getConfig();
       const audio = await this.voiceRouter.synthesize({
-        text: decision.message,
+        text: proactiveMessage,
         edgeConfig: {
           voice: config.voice.ttsVoice,
           rate: config.voice.ttsRate,

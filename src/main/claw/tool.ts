@@ -9,7 +9,7 @@ export function createClawToolDefinition(channel: ClawChannel): ToolDefinition<{
     name: "claw",
     source: "builtin",
     description:
-      "将操作指令交给 Claw 执行（打开应用、浏览网页、文件操作、命令执行等），并在 Claw 页查看实时进度。",
+      "Claw 是一个运行在用户电脑上的自主 agent，能操作浏览器、执行终端命令、读写文件、搜索网页，并自主规划多步任务。将自然语言指令交给 Claw，它会自行拆解并完成。",
     parameters: z.object({
       instruction: z.string().min(1)
     }),

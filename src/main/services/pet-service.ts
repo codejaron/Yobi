@@ -13,6 +13,7 @@ import {
 } from "@main/services/global-ptt";
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { SystemPermissionsService } from "@main/services/system-permissions";
+import { extractEmotionTag } from "@main/core/emotion-tags";
 
 interface PetServiceInput {
   paths: CompanionPaths;
@@ -117,10 +118,20 @@ export class PetService {
         "LLM 回复超时"
       );
 
-      this.emitPetTalkingReply(reply);
+      const parsed = extractEmotionTag(reply);
+      const replyText = parsed.cleanedText.trim() || "我这次没有生成有效回复，请重试一次。";
+
+      if (parsed.emotion) {
+        this.input.pet.emitEvent({
+          type: "emotion",
+          value: parsed.emotion
+        });
+      }
+
+      this.emitPetTalkingReply(replyText);
 
       return {
-        replyText: reply
+        replyText
       };
     } finally {
       this.input.pet.emitEvent({
