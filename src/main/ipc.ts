@@ -234,5 +234,6 @@ function subscribeToClawEvents(target: WebContents): void {
 
   if (!target.isDestroyed()) {
     target.send(CLAW_EVENT_CHANNEL, runtime.getClawConnectionEvent());
+    target.send(CLAW_EVENT_CHANNEL, runtime.getClawTaskMonitorEvent());
   }
 }

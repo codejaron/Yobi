@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, RefObject } from "react";
-import type { ClawConnectionState, ClawEvent, ClawHistoryItem } from "@shared/types";
+import type {
+  ClawConnectionState,
+  ClawEvent,
+  ClawHistoryItem,
+  ClawTaskSessionItem
+} from "@shared/types";
 import { makeClientId, summarizeUnknown } from "@renderer/pages/chat-utils";
-import type { ClawActionItem, ClawChatItem, ConnectionBadge } from "./types";
+import type { ClawActionItem, ClawChatItem, ClawTaskItem, ConnectionBadge } from "./types";
 
 const CLAW_HISTORY_LIMIT = 50;
 const CLAW_CHAT_LIMIT = 240;
@@ -78,6 +83,18 @@ function historyItemToAction(item: ClawHistoryItem): ClawActionItem | null {
   return null;
 }
 
+function mapTaskSession(item: ClawTaskSessionItem): ClawTaskItem {
+  return {
+    sessionKey: item.sessionKey,
+    displayName: item.displayName || item.sessionKey,
+    status: item.status,
+    activeRunCount: item.activeRunCount,
+    updatedAt: item.updatedAt,
+    lastError: item.lastError,
+    lastTransitionAt: item.lastTransitionAt
+  };
+}
+
 export function chatItemClassName(item: ClawChatItem): string {
   if (item.role === "assistant") {
     return "mr-auto w-fit max-w-[88%] rounded-2xl border border-border/80 bg-white/88 px-4 py-3 text-sm text-foreground";
@@ -105,6 +122,7 @@ export function actionItemClassName(kind: ClawActionItem["kind"]): string {
 export interface ClawTabController {
   chatItems: ClawChatItem[];
   actionItems: ClawActionItem[];
+  taskSessions: ClawTaskItem[];
   expandedActions: Record<string, boolean>;
   logEnabled: boolean;
   setLogEnabled: (enabled: boolean) => void;
@@ -126,6 +144,7 @@ export interface ClawTabController {
 export function useClawTabController(active: boolean): ClawTabController {
   const [chatItems, setChatItems] = useState<ClawChatItem[]>([]);
   const [actionItems, setActionItems] = useState<ClawActionItem[]>([]);
+  const [taskSessions, setTaskSessions] = useState<ClawTaskItem[]>([]);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [logEnabled, setLogEnabled] = useState(false);
   const [draft, setDraft] = useState("");
@@ -242,6 +261,11 @@ export function useClawTabController(active: boolean): ClawTabController {
 
     if (event.type === "history") {
       applyHistory(event.items);
+      return;
+    }
+
+    if (event.type === "task-monitor") {
+      setTaskSessions(event.sessions.map((item) => mapTaskSession(item)));
       return;
     }
 
@@ -481,6 +505,10 @@ export function useClawTabController(active: boolean): ClawTabController {
       return;
     }
 
+    if (event.type !== "error") {
+      return;
+    }
+
     const previousError = lastErrorRef.current;
     const currentError = event.message.trim();
     const nowMs = Date.now();
@@ -616,6 +644,7 @@ export function useClawTabController(active: boolean): ClawTabController {
   return {
     chatItems,
     actionItems,
+    taskSessions,
     expandedActions,
     logEnabled,
     setLogEnabled,

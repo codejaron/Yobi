@@ -10,6 +10,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
   const {
     chatItems,
     actionItems,
+    taskSessions,
     expandedActions,
     logEnabled,
     setLogEnabled,
@@ -44,6 +45,7 @@ export function ClawTabPanel({ active }: ClawTabPanelProps) {
         logEnabled={logEnabled}
         setLogEnabled={setLogEnabled}
         clearActionLogs={clearActionLogs}
+        taskSessions={taskSessions}
         actionItems={actionItems}
         expandedActions={expandedActions}
         toggleActionExpanded={toggleActionExpanded}

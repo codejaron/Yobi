@@ -38,6 +38,19 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export interface ClawListSessionsParams {
+  limit?: number;
+  activeMinutes?: number;
+  includeGlobal?: boolean;
+  includeUnknown?: boolean;
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  label?: string;
+  spawnedBy?: string;
+  agentId?: string;
+  search?: string;
+}
+
 export type ClawConnectionState =
   | "idle"
   | "connecting"
@@ -286,6 +299,17 @@ export class ClawClient {
     await this.connect();
     return this.sendRequest("chat.abort", {
       sessionKey
+    });
+  }
+
+  async listSessions(params: ClawListSessionsParams = {}): Promise<unknown> {
+    await this.connect();
+    return this.sendRequest("sessions.list", {
+      agentId: "main",
+      includeGlobal: false,
+      includeUnknown: false,
+      limit: 40,
+      ...params
     });
   }
 

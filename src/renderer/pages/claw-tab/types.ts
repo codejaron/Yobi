@@ -17,6 +17,16 @@ export interface ClawActionItem {
   timestamp: string;
 }
 
+export interface ClawTaskItem {
+  sessionKey: string;
+  displayName: string;
+  status: "idle" | "running" | "error";
+  activeRunCount: number;
+  updatedAt: string;
+  lastError?: string;
+  lastTransitionAt: string;
+}
+
 export interface ConnectionBadge {
   label: string;
   className: string;

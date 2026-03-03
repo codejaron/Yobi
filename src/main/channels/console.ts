@@ -24,7 +24,7 @@ export class ConsoleChannel {
     }
   }
 
-  emitExternalAssistantMessage(input: { text: string; source: "claw" }): void {
+  emitExternalAssistantMessage(input: { text: string; source: "claw" | "yobi" }): void {
     const text = input.text.trim();
     if (!text) {
       return;

@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { Square, Trash2 } from "lucide-react";
+import { Loader2, Square, Trash2 } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -12,12 +12,13 @@ import {
 import { Switch } from "@renderer/components/ui/switch";
 import { singleLine } from "@renderer/pages/chat-utils";
 import { actionItemClassName } from "./useClawTabController";
-import type { ClawActionItem } from "./types";
+import type { ClawActionItem, ClawTaskItem } from "./types";
 
 interface ClawActionPaneProps {
   logEnabled: boolean;
   setLogEnabled: (enabled: boolean) => void;
   clearActionLogs: () => void;
+  taskSessions: ClawTaskItem[];
   actionItems: ClawActionItem[];
   expandedActions: Record<string, boolean>;
   toggleActionExpanded: (id: string) => void;
@@ -27,10 +28,66 @@ interface ClawActionPaneProps {
   actionBottomRef: RefObject<HTMLDivElement | null>;
 }
 
+function resolveTaskStatusMeta(status: ClawTaskItem["status"]): {
+  label: string;
+  className: string;
+  spinning: boolean;
+} {
+  if (status === "running") {
+    return {
+      label: "执行中",
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      spinning: true
+    };
+  }
+
+  if (status === "error") {
+    return {
+      label: "异常",
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      spinning: false
+    };
+  }
+
+  return {
+    label: "空闲",
+    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    spinning: false
+  };
+}
+
+function formatMonitorActivityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "--";
+  }
+
+  const now = new Date();
+  const isSameDay =
+    now.getFullYear() === date.getFullYear() &&
+    now.getMonth() === date.getMonth() &&
+    now.getDate() === date.getDate();
+
+  if (isSameDay) {
+    return date.toLocaleTimeString("zh-CN", {
+      hour12: false
+    });
+  }
+
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export function ClawActionPane({
   logEnabled,
   setLogEnabled,
   clearActionLogs,
+  taskSessions,
   actionItems,
   expandedActions,
   toggleActionExpanded,
@@ -70,6 +127,41 @@ export function ClawActionPane({
         </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+        <div className="space-y-2 rounded-lg border border-border/70 bg-white/70 p-2.5">
+          <p className="text-xs font-medium text-foreground/90">任务监控</p>
+          {taskSessions.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border/70 bg-white/60 px-2.5 py-2 text-[11px] text-muted-foreground">
+              暂无任务记录。
+            </p>
+          ) : (
+            taskSessions.map((session) => {
+              const statusMeta = resolveTaskStatusMeta(session.status);
+              return (
+                <div key={session.sessionKey} className="rounded-md border border-border/70 bg-white/80 px-2.5 py-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <p className="truncate text-xs font-medium text-foreground" title={session.sessionKey}>
+                      {session.displayName}
+                    </p>
+                    <Badge className={`${statusMeta.className} min-w-[60px] shrink-0 justify-center whitespace-nowrap`}>
+                      {statusMeta.spinning ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                      {statusMeta.label}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                    <span>运行中 {session.activeRunCount}</span>
+                    <span className="whitespace-nowrap">最近活动 {formatMonitorActivityTime(session.updatedAt)}</span>
+                  </div>
+                  {session.status === "error" && session.lastError ? (
+                    <p className="mt-1 whitespace-pre-wrap break-words text-[11px] text-rose-700">
+                      {session.lastError}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
+
         <Button
           type="button"
           variant="outline"

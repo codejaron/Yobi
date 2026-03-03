@@ -5,6 +5,7 @@ import type { CharacterStore } from "@main/core/character";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
+import { isWithinQuietHours } from "./proactive-time-window";
 
 export type ProactiveTrigger = {
   type: "silence";
@@ -50,11 +51,10 @@ export class ProactiveService {
       }
     }
 
-    const hour = new Date().getHours();
-    if (hour >= 1 && hour < 7) {
+    if (isWithinQuietHours(new Date(), config.proactive.quietHours)) {
       return {
         speak: false,
-        reason: "nighttime"
+        reason: "quiet-hours"
       };
     }
 

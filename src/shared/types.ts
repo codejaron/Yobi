@@ -58,6 +58,18 @@ export const DEFAULT_MCP_SERVERS: Array<z.output<typeof mcpServerSchema>> = [
   }
 ] as const;
 
+const proactiveQuietHoursSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    startMinuteOfDay: z.number().int().min(0).max(1439).default(60),
+    endMinuteOfDay: z.number().int().min(0).max(1439).default(420)
+  })
+  .strict()
+  .refine((value) => value.startMinuteOfDay !== value.endMinuteOfDay, {
+    path: ["endMinuteOfDay"],
+    message: "quiet hours start/end cannot be the same"
+  });
+
 export const appConfigSchema = z
   .object({
     characterId: z.string().default("default"),
@@ -136,7 +148,12 @@ export const appConfigSchema = z
         enabled: z.boolean().default(false),
         localOnly: z.boolean().default(true),
         cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
-        silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000)
+        silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000),
+        quietHours: proactiveQuietHoursSchema.default({
+          enabled: true,
+          startMinuteOfDay: 60,
+          endMinuteOfDay: 420
+        })
       })
       .strict(),
     memory: z
@@ -262,7 +279,7 @@ export type ConsoleRunEventV2 =
       type: "external-assistant-message";
       messageId: string;
       text: string;
-      source: "claw";
+      source: "claw" | "yobi";
       timestamp: string;
     };
 
@@ -281,6 +298,18 @@ export type ClawConnectionState =
   | "connected"
   | "reconnecting"
   | "disconnected-manual";
+
+export type ClawTaskStatus = "idle" | "running" | "error";
+
+export interface ClawTaskSessionItem {
+  sessionKey: string;
+  displayName: string;
+  status: ClawTaskStatus;
+  activeRunCount: number;
+  updatedAt: string;
+  lastError?: string;
+  lastTransitionAt: string;
+}
 
 export type ClawEvent =
   | {
@@ -336,6 +365,11 @@ export type ClawEvent =
       type: "history";
       sessionKey: string;
       items: ClawHistoryItem[];
+      timestamp: string;
+    }
+  | {
+      type: "task-monitor";
+      sessions: ClawTaskSessionItem[];
       timestamp: string;
     }
   | {
@@ -524,7 +558,12 @@ export const DEFAULT_CONFIG: AppConfig = {
     enabled: false,
     localOnly: true,
     cooldownMs: 25 * 60 * 1000,
-    silenceThresholdMs: 40 * 60 * 1000
+    silenceThresholdMs: 40 * 60 * 1000,
+    quietHours: {
+      enabled: true,
+      startMinuteOfDay: 60,
+      endMinuteOfDay: 420
+    }
   },
   memory: {
     recentMessages: 40,

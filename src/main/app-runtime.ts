@@ -13,6 +13,10 @@ import type {
 import { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
 import { ReminderStore } from "@main/storage/reminder-store";
+import {
+  RuntimeContextStore,
+  type RuntimeInboundChannel
+} from "@main/storage/runtime-context-store";
 import { CharacterStore } from "@main/core/character";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
 import { ModelFactory } from "@main/core/model-factory";
@@ -61,6 +65,7 @@ export class CompanionRuntime {
   private readonly paths = new CompanionPaths();
   private readonly configStore = new ConfigStore(this.paths);
   private readonly reminderStore = new ReminderStore(this.paths);
+  private readonly runtimeContextStore = new RuntimeContextStore(this.paths);
   private readonly characterStore = new CharacterStore(this.paths);
 
   private readonly memory = new YobiMemory(
@@ -177,13 +182,16 @@ export class CompanionRuntime {
   private clawEventListeners = new Set<(event: ClawEvent) => void>();
   private lastUserAt: string | null = null;
   private lastProactiveAt: string | null = null;
+  private lastInboundChannel: RuntimeInboundChannel | null = null;
+  private lastInboundChatId: string | null = null;
   private silenceTimer: NodeJS.Timeout | null = null;
-  private lastSilenceHandledAt: string | null = null;
+  private lastSilenceEvaluatedAt: string | null = null;
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
     await this.configStore.init();
     await this.reminderStore.init();
+    await this.runtimeContextStore.init();
     await this.characterStore.init();
 
     this.registerBuiltinTools();
@@ -197,6 +205,7 @@ export class CompanionRuntime {
   }
 
   async start(): Promise<void> {
+    this.loadRuntimeContext();
     await this.reminderService.init();
     await this.startTelegram();
     await this.startQQ();
@@ -267,6 +276,10 @@ export class CompanionRuntime {
       message: status.message,
       timestamp: new Date().toISOString()
     };
+  }
+
+  getClawTaskMonitorEvent(): ClawEvent {
+    return this.clawChannel.getTaskMonitorEvent();
   }
 
   getConfig(): AppConfig {
@@ -570,6 +583,10 @@ export class CompanionRuntime {
       timestamp: new Date().toISOString()
     });
 
+    await this.recordUserActivity({
+      channel: "console"
+    });
+
     try {
       const reply = await this.withTimeout(
         this.channelRouter.handleConsole({
@@ -647,8 +664,6 @@ export class CompanionRuntime {
         timestamp: new Date().toISOString()
       });
       this.petService.emitPetTalkingReply(visibleReply);
-
-      this.lastUserAt = new Date().toISOString();
       await this.emitStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : "处理消息时出现未知错误。";
@@ -744,6 +759,10 @@ export class CompanionRuntime {
       type: "thinking",
       value: "start"
     });
+    await this.recordUserActivity({
+      channel: "telegram",
+      chatId: inbound.chatId
+    });
 
     try {
       const reply = await this.withTimeout(
@@ -773,7 +792,6 @@ export class CompanionRuntime {
           chatId: inbound.chatId
         });
       }
-      this.lastUserAt = new Date().toISOString();
     } finally {
       this.pet.emitEvent({
         type: "thinking",
@@ -786,6 +804,10 @@ export class CompanionRuntime {
     this.pet.emitEvent({
       type: "thinking",
       value: "start"
+    });
+    await this.recordUserActivity({
+      channel: "qq",
+      chatId: inbound.chatId
     });
 
     try {
@@ -816,7 +838,6 @@ export class CompanionRuntime {
           chatId: inbound.chatId
         });
       }
-      this.lastUserAt = new Date().toISOString();
     } finally {
       this.pet.emitEvent({
         type: "thinking",
@@ -838,33 +859,58 @@ export class CompanionRuntime {
   private async checkSilence(): Promise<void> {
     const proactiveConfig = this.getConfig().proactive;
     if (!proactiveConfig.enabled) {
-      this.lastSilenceHandledAt = null;
+      this.lastSilenceEvaluatedAt = null;
       return;
     }
 
     if (!this.lastUserAt) {
+      this.lastSilenceEvaluatedAt = null;
       return;
     }
 
     const now = Date.now();
-    const silenceMs = now - new Date(this.lastUserAt).getTime();
+    const lastUserTime = new Date(this.lastUserAt).getTime();
+    if (!Number.isFinite(lastUserTime)) {
+      this.lastSilenceEvaluatedAt = null;
+      return;
+    }
+
+    const silenceMs = now - lastUserTime;
 
     if (silenceMs < proactiveConfig.silenceThresholdMs) {
-      this.lastSilenceHandledAt = null;
+      this.lastSilenceEvaluatedAt = null;
       return;
     }
 
-    if (this.lastSilenceHandledAt === this.lastUserAt) {
-      return;
-    }
-
-    this.lastSilenceHandledAt = this.lastUserAt;
-    await this.handleProactive({
-      trigger: {
-        type: "silence",
-        detail: `用户已沉默 ${Math.floor(silenceMs / 60000)} 分钟`
+    if (this.lastProactiveAt) {
+      const lastProactiveTime = new Date(this.lastProactiveAt).getTime();
+      if (Number.isFinite(lastProactiveTime) && lastProactiveTime > lastUserTime) {
+        return;
       }
-    });
+    }
+
+    if (this.lastSilenceEvaluatedAt) {
+      const lastEvaluatedTime = new Date(this.lastSilenceEvaluatedAt).getTime();
+      if (
+        Number.isFinite(lastEvaluatedTime) &&
+        now - lastEvaluatedTime < proactiveConfig.cooldownMs
+      ) {
+        return;
+      }
+    }
+
+    this.lastSilenceEvaluatedAt = new Date(now).toISOString();
+    try {
+      await this.handleProactive({
+        trigger: {
+          type: "silence",
+          detail: `用户已沉默 ${Math.floor(silenceMs / 60000)} 分钟`
+        }
+      });
+    } catch (error) {
+      console.warn("[proactive] silence check failed:", error);
+      return;
+    }
     await this.emitStatus();
   }
 
@@ -909,12 +955,22 @@ export class CompanionRuntime {
       channel: "console",
       text: proactiveMessage,
       metadata: {
-        proactive: true
+        proactive: true,
+        source: "yobi"
       }
     });
 
+    this.consoleChannel.emitExternalAssistantMessage({
+      text: proactiveMessage,
+      source: "yobi"
+    });
+
+    const config = this.getConfig();
+    if (!config.proactive.localOnly) {
+      await this.pushProactiveToExternalChannel(proactiveMessage);
+    }
+
     try {
-      const config = this.getConfig();
       const audio = await this.voiceRouter.synthesize({
         text: proactiveMessage,
         edgeConfig: {
@@ -939,7 +995,85 @@ export class CompanionRuntime {
       type: "talking",
       value: "talking"
     });
+    await this.recordProactiveActivity();
+  }
+
+  private loadRuntimeContext(): void {
+    const context = this.runtimeContextStore.getContext();
+    this.lastUserAt = context.lastUserAt;
+    this.lastProactiveAt = context.lastProactiveAt;
+    this.lastInboundChannel = context.lastInboundChannel;
+    this.lastInboundChatId = context.lastInboundChatId;
+    this.lastSilenceEvaluatedAt = null;
+  }
+
+  private async recordUserActivity(input: {
+    channel: RuntimeInboundChannel;
+    chatId?: string;
+  }): Promise<void> {
+    this.lastUserAt = new Date().toISOString();
+    this.lastInboundChannel = input.channel;
+    this.lastInboundChatId = input.chatId?.trim() ? input.chatId.trim() : null;
+    this.lastSilenceEvaluatedAt = null;
+    await this.persistRuntimeContext();
+  }
+
+  private async recordProactiveActivity(): Promise<void> {
     this.lastProactiveAt = new Date().toISOString();
+    await this.persistRuntimeContext();
+  }
+
+  private async persistRuntimeContext(): Promise<void> {
+    try {
+      await this.runtimeContextStore.saveContext({
+        lastProactiveAt: this.lastProactiveAt,
+        lastUserAt: this.lastUserAt,
+        lastInboundChannel: this.lastInboundChannel,
+        lastInboundChatId: this.lastInboundChatId
+      });
+    } catch (error) {
+      console.warn("[runtime] runtime context save failed:", error);
+    }
+  }
+
+  private async pushProactiveToExternalChannel(text: string): Promise<void> {
+    if (this.lastInboundChannel === "telegram") {
+      const configuredChatId = this.getConfig().telegram.chatId.trim();
+      const targetChatId = this.lastInboundChatId ?? configuredChatId;
+      if (!targetChatId) {
+        return;
+      }
+
+      try {
+        await this.telegram.send({
+          kind: "text",
+          text,
+          chatId: targetChatId
+        });
+      } catch (error) {
+        console.warn("[proactive] telegram push failed:", error);
+      }
+      return;
+    }
+
+    if (this.lastInboundChannel !== "qq") {
+      return;
+    }
+
+    const targetChatId = this.lastInboundChatId?.trim();
+    if (!targetChatId) {
+      return;
+    }
+
+    try {
+      await this.qqChannel?.send({
+        kind: "text",
+        text,
+        chatId: targetChatId
+      });
+    } catch (error) {
+      console.warn("[proactive] qq push failed:", error);
+    }
   }
 
   private async collectStatus(): Promise<AppStatus> {

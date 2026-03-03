@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { ClawEvent, ClawHistoryItem, ClawOrigin } from "@shared/types";
+import type {
+  ClawEvent,
+  ClawHistoryItem,
+  ClawOrigin,
+  ClawTaskSessionItem,
+  ClawTaskStatus
+} from "@shared/types";
 import { isRecord, summarizeUnknown } from "@main/utils/guards";
-import type { ClawClient } from "./claw-client";
+import type { ClawClient, ClawListSessionsParams } from "./claw-client";
 import type { ClawEventFrame } from "./protocol";
 
 interface ClawChannelInput {
@@ -17,6 +23,42 @@ type Listener = (event: ClawEvent) => void;
 
 type AgentStream = "tool" | "assistant" | "lifecycle" | "unknown";
 
+type SessionTerminalState = "idle" | "error";
+
+interface SessionMonitorState {
+  sessionKey: string;
+  displayName: string;
+  updatedAtMs: number;
+  activeRunIds: Set<string>;
+  lastTerminal: SessionTerminalState;
+  lastError?: string;
+  lastTransitionAt: string;
+}
+
+interface NormalizedAgentPayload {
+  source: Record<string, unknown> | null;
+  body: unknown;
+  stream: AgentStream;
+  runId: string;
+  sessionKey: string;
+}
+
+const TASK_MONITOR_SESSION_PREFIX = "agent:main:";
+const TASK_MONITOR_REFRESH_MS = 30_000;
+const TASK_MONITOR_MAX_ITEMS = 20;
+const TASK_MONITOR_SESSION_LIMIT = 40;
+const TASK_MONITOR_RECENT_DAYS = 3;
+const TASK_MONITOR_ACTIVE_MINUTES = TASK_MONITOR_RECENT_DAYS * 24 * 60;
+const TASK_MONITOR_MAX_AGE_MS = TASK_MONITOR_ACTIVE_MINUTES * 60 * 1000;
+
+const DEFAULT_LIST_SESSION_PARAMS: ClawListSessionsParams = {
+  agentId: "main",
+  includeGlobal: false,
+  includeUnknown: false,
+  activeMinutes: TASK_MONITOR_ACTIVE_MINUTES,
+  limit: TASK_MONITOR_SESSION_LIMIT
+};
+
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -28,6 +70,140 @@ function maybeString(value: unknown): string | undefined {
 
 function trimOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+  }
+
+  return null;
+}
+
+function toEpochMs(value: unknown): number {
+  const numeric = readNumber(value);
+  if (numeric !== null && numeric > 0) {
+    return Math.floor(numeric);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Date.parse(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+}
+
+function toIsoTimestamp(input: number): string {
+  if (!Number.isFinite(input) || input <= 0) {
+    return new Date().toISOString();
+  }
+
+  try {
+    return new Date(input).toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
+function defaultMonitorDisplayName(sessionKey: string): string {
+  if (!sessionKey) {
+    return "main";
+  }
+
+  if (sessionKey.startsWith(TASK_MONITOR_SESSION_PREFIX)) {
+    return sessionKey.slice(TASK_MONITOR_SESSION_PREFIX.length) || "main";
+  }
+
+  return sessionKey;
+}
+
+function normalizeMonitorSessionKey(sessionKey: string, defaultSessionKey: string): string {
+  const normalized = sessionKey.trim();
+  if (!normalized) {
+    return `${TASK_MONITOR_SESSION_PREFIX}${defaultSessionKey}`;
+  }
+
+  if (normalized === "main" || normalized === defaultSessionKey) {
+    return `${TASK_MONITOR_SESSION_PREFIX}${defaultSessionKey}`;
+  }
+
+  return normalized;
+}
+
+function isMonitoredSessionKey(sessionKey: string): boolean {
+  return sessionKey.startsWith(TASK_MONITOR_SESSION_PREFIX);
+}
+
+interface SessionListSnapshotEntry {
+  sessionKey: string;
+  displayName: string;
+  updatedAtMs: number;
+}
+
+function normalizeAgentPayload(payload: unknown, defaultSessionKey: string): NormalizedAgentPayload {
+  const source = isRecord(payload) ? payload : null;
+  const bodyCandidate = source && isRecord(source.data) ? source.data : payload;
+  const streamFromSource = extractAgentStream(source ?? payload);
+  const stream = streamFromSource !== "unknown" ? streamFromSource : extractAgentStream(bodyCandidate);
+
+  const sourceSession = extractSessionKey(source ?? payload, defaultSessionKey);
+  const sessionKey = extractSessionKey(bodyCandidate, sourceSession);
+  const runId = extractRunId(source ?? payload) || extractRunId(bodyCandidate);
+
+  return {
+    source,
+    body: bodyCandidate,
+    stream,
+    runId,
+    sessionKey
+  };
+}
+
+function extractSessionListEntries(raw: unknown, defaultSessionKey: string): SessionListSnapshotEntry[] {
+  if (!isRecord(raw) || !Array.isArray(raw.sessions)) {
+    return [];
+  }
+
+  const entries: SessionListSnapshotEntry[] = [];
+  for (const item of raw.sessions) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const key = maybeString(item.key)?.trim();
+    if (!key) {
+      continue;
+    }
+
+    const monitorKey = normalizeMonitorSessionKey(key, defaultSessionKey);
+    if (!isMonitoredSessionKey(monitorKey)) {
+      continue;
+    }
+
+    const displayName =
+      maybeString(item.displayName)?.trim() ??
+      maybeString(item.derivedTitle)?.trim() ??
+      maybeString(item.label)?.trim() ??
+      defaultMonitorDisplayName(monitorKey);
+
+    entries.push({
+      sessionKey: monitorKey,
+      displayName,
+      updatedAtMs: toEpochMs(item.updatedAt)
+    });
+  }
+
+  return entries;
 }
 
 function compactSummary(value: unknown, maxLength = 400): string {
@@ -248,8 +424,12 @@ function extractLifecycleStatus(payload: unknown): {
   }
 
   const status =
-    maybeString(payload.state)?.trim() || maybeString(payload.status)?.trim() || "update";
-  const detail = maybeString(payload.detail) ?? maybeString(payload.message);
+    maybeString(payload.phase)?.trim() ||
+    maybeString(payload.state)?.trim() ||
+    maybeString(payload.status)?.trim() ||
+    "update";
+  const detail =
+    maybeString(payload.detail) ?? maybeString(payload.error) ?? maybeString(payload.message);
 
   return {
     status,
@@ -438,7 +618,11 @@ export class ClawChannel {
   private readonly runOrigins = new Map<string, ClawOrigin>();
   private readonly sessionRunIds = new Map<string, string>();
   private readonly chatDeltaCache = new Map<string, string>();
+  private readonly sessionMonitorMap = new Map<string, SessionMonitorState>();
+  private readonly runToSessionMap = new Map<string, string>();
   private readonly unsubscribeFns: Array<() => void> = [];
+  private sessionRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private sessionRefreshInFlight = false;
 
   constructor(
     private readonly client: ClawClient,
@@ -448,6 +632,14 @@ export class ClawChannel {
 
     this.unsubscribeFns.push(
       this.client.onConnection((state, message) => {
+        if (state === "connected") {
+          this.startSessionRefreshLoop();
+          void this.refreshTaskSessions();
+        } else {
+          this.stopSessionRefreshLoop();
+          this.clearRunningSessions();
+        }
+
         this.emit({
           type: "connection",
           state,
@@ -475,6 +667,7 @@ export class ClawChannel {
   }
 
   dispose(): void {
+    this.stopSessionRefreshLoop();
     for (const unsubscribe of this.unsubscribeFns) {
       unsubscribe();
     }
@@ -486,6 +679,14 @@ export class ClawChannel {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  getTaskMonitorEvent(): ClawEvent {
+    return {
+      type: "task-monitor",
+      sessions: this.buildTaskMonitorSessions(),
+      timestamp: new Date().toISOString()
     };
   }
 
@@ -517,6 +718,8 @@ export class ClawChannel {
       if (runId) {
         this.sessionRunIds.set(this.toOriginSessionKey(normalizedSession), runId);
         this.runOrigins.set(runId, "yobi-tool");
+        this.bindRunToSession(normalizedSession, runId);
+        this.markRunStarted(normalizedSession, runId);
       }
 
       const timestamp = new Date().toISOString();
@@ -563,6 +766,8 @@ export class ClawChannel {
       if (runId) {
         this.sessionRunIds.set(this.toOriginSessionKey(normalizedSession), runId);
         this.runOrigins.set(runId, "claw-tab");
+        this.bindRunToSession(normalizedSession, runId);
+        this.markRunStarted(normalizedSession, runId);
       }
       return response;
     } catch (error) {
@@ -686,27 +891,42 @@ export class ClawChannel {
   }
 
   private handleAgentEvent(payload: unknown): void {
-    const sessionKey = extractSessionKey(payload, this.defaultSessionKey);
-    this.rememberRunId(sessionKey, payload);
-    const stream = extractAgentStream(payload);
+    const normalized = normalizeAgentPayload(payload, this.defaultSessionKey);
+    const sessionKey = normalized.sessionKey;
+    const runId = normalized.runId;
+    const stream = normalized.stream;
+    const body = normalized.body;
+    const hadSessionMonitor = this.hasSessionMonitor(sessionKey);
+
+    this.rememberRunId(sessionKey, runId || payload);
+    if (runId) {
+      this.bindRunToSession(sessionKey, runId);
+    }
+
+    if (isMonitoredSessionKey(this.toMonitorSessionKey(sessionKey)) && !hadSessionMonitor) {
+      void this.refreshTaskSessions();
+    }
 
     if (stream === "assistant") {
       return;
     }
 
     if (stream === "tool") {
-      const toolName = extractToolName(payload);
-      const output = extractToolOutput(payload);
-      const input = extractToolInput(payload);
-      const rawState = isRecord(payload) ? readString(payload.state).toLowerCase() : "";
-      const error = isRecord(payload)
-        ? maybeString(payload.error) ?? maybeString(payload.message)
+      const toolName = extractToolName(body);
+      const output = extractToolOutput(body);
+      const input = extractToolInput(body);
+      const payloadRecord = isRecord(body) ? body : null;
+      const rawState = payloadRecord ? readString(payloadRecord.state).toLowerCase() : "";
+      const phaseValue = payloadRecord ? readString(payloadRecord.phase).toLowerCase() : "";
+      const error = payloadRecord
+        ? maybeString(payloadRecord.error) ?? maybeString(payloadRecord.message)
         : undefined;
+      const isToolError = payloadRecord?.isError === true;
 
       const phase: "start" | "result" | "error" =
-        rawState.includes("error") || !!error
+        phaseValue === "error" || rawState.includes("error") || !!error || isToolError
           ? "error"
-          : output !== undefined || rawState.includes("done")
+          : phaseValue === "result" || phaseValue === "end" || output !== undefined || rawState.includes("done")
             ? "result"
             : "start";
 
@@ -724,14 +944,37 @@ export class ClawChannel {
     }
 
     if (stream === "lifecycle") {
-      const lifecycle = extractLifecycleStatus(payload);
-      if (lifecycle.status.toLowerCase() === "update" && !lifecycle.detail) {
+      const lifecycle = extractLifecycleStatus(body);
+      const status = lifecycle.status.trim() || "update";
+      const normalizedStatus = status.toLowerCase();
+
+      if (runId) {
+        if (normalizedStatus === "start") {
+          this.markRunStarted(sessionKey, runId);
+        } else if (normalizedStatus === "error") {
+          this.markRunCompleted(sessionKey, runId, {
+            terminal: "error",
+            errorMessage: lifecycle.detail
+          });
+        } else if (
+          normalizedStatus === "end" ||
+          normalizedStatus === "done" ||
+          normalizedStatus === "complete" ||
+          normalizedStatus === "completed"
+        ) {
+          this.markRunCompleted(sessionKey, runId, {
+            terminal: "idle"
+          });
+        }
+      }
+
+      if (normalizedStatus === "update" && !lifecycle.detail) {
         return;
       }
       this.emit({
         type: "lifecycle",
         sessionKey,
-        status: lifecycle.status,
+        status,
         detail: lifecycle.detail,
         timestamp: new Date().toISOString()
       });
@@ -740,10 +983,23 @@ export class ClawChannel {
 
   private async handleChatEvent(payload: unknown): Promise<void> {
     const sessionKey = extractSessionKey(payload, this.defaultSessionKey);
+    const hadSessionMonitor = this.hasSessionMonitor(sessionKey);
     this.rememberRunId(sessionKey, payload);
     const state = extractChatState(payload);
+    const runId = this.resolveRunId(sessionKey, payload);
+    if (runId) {
+      this.bindRunToSession(sessionKey, runId);
+    }
+
+    if (isMonitoredSessionKey(this.toMonitorSessionKey(sessionKey)) && !hadSessionMonitor) {
+      void this.refreshTaskSessions();
+    }
 
     if (state === "delta") {
+      if (runId) {
+        this.markRunStarted(sessionKey, runId);
+      }
+
       const delta = this.resolveChatDelta(sessionKey, extractText(payload));
       if (!delta) {
         return;
@@ -759,12 +1015,16 @@ export class ClawChannel {
     }
 
     if (state === "final") {
+      this.markRunCompleted(sessionKey, runId, {
+        terminal: "idle"
+      });
+
       const text = extractText(payload).trim();
       if (!text) {
+        this.clearChatDelta(sessionKey);
         return;
       }
 
-      const runId = this.resolveRunId(sessionKey, payload);
       const origin = this.consumeOrigin(sessionKey, runId);
       const timestamp = new Date().toISOString();
 
@@ -788,10 +1048,14 @@ export class ClawChannel {
     }
 
     if (state === "error") {
-      const runId = this.resolveRunId(sessionKey, payload);
       const origin = this.consumeOrigin(sessionKey, runId);
       const message = extractChatErrorMessage(payload) || "Claw 任务失败";
       const timestamp = new Date().toISOString();
+
+      this.markRunCompleted(sessionKey, runId, {
+        terminal: "error",
+        errorMessage: message
+      });
 
       this.emit({
         type: "error",
@@ -808,26 +1072,340 @@ export class ClawChannel {
         });
       }
       this.clearChatDelta(sessionKey);
+      return;
+    }
+
+    if (state === "aborted") {
+      this.markRunCompleted(sessionKey, runId, {
+        terminal: "idle"
+      });
+      this.clearChatDelta(sessionKey);
+
+      this.emit({
+        type: "status",
+        sessionKey,
+        message: "任务已中止",
+        timestamp: new Date().toISOString()
+      });
     }
   }
 
   private rememberRunId(sessionKey: string, payload: unknown): void {
-    const runId = extractRunId(payload);
+    const runId = typeof payload === "string" ? payload.trim() : extractRunId(payload);
     if (!runId) {
       return;
     }
 
     this.sessionRunIds.set(this.toOriginSessionKey(sessionKey), runId);
+    this.bindRunToSession(sessionKey, runId);
   }
 
   private resolveRunId(sessionKey: string, payload: unknown): string {
-    const fromPayload = extractRunId(payload);
+    const fromPayload = typeof payload === "string" ? payload.trim() : extractRunId(payload);
     if (fromPayload) {
       this.sessionRunIds.set(this.toOriginSessionKey(sessionKey), fromPayload);
+      this.bindRunToSession(sessionKey, fromPayload);
       return fromPayload;
     }
 
     return this.sessionRunIds.get(this.toOriginSessionKey(sessionKey)) ?? "";
+  }
+
+  private toMonitorSessionKey(sessionKey: string): string {
+    return normalizeMonitorSessionKey(this.normalizeSessionKey(sessionKey), this.defaultSessionKey);
+  }
+
+  private hasSessionMonitor(sessionKey: string): boolean {
+    return this.sessionMonitorMap.has(this.toMonitorSessionKey(sessionKey));
+  }
+
+  private getOrCreateSessionMonitor(sessionKey: string): SessionMonitorState | null {
+    const monitorKey = this.toMonitorSessionKey(sessionKey);
+    if (!isMonitoredSessionKey(monitorKey)) {
+      return null;
+    }
+
+    const existing = this.sessionMonitorMap.get(monitorKey);
+    if (existing) {
+      return existing;
+    }
+
+    const created: SessionMonitorState = {
+      sessionKey: monitorKey,
+      displayName: defaultMonitorDisplayName(monitorKey),
+      updatedAtMs: Date.now(),
+      activeRunIds: new Set<string>(),
+      lastTerminal: "idle",
+      lastTransitionAt: new Date().toISOString()
+    };
+    this.sessionMonitorMap.set(monitorKey, created);
+    return created;
+  }
+
+  private resolveTaskStatus(state: SessionMonitorState): ClawTaskStatus {
+    if (state.activeRunIds.size > 0) {
+      return "running";
+    }
+
+    if (state.lastTerminal === "error") {
+      return "error";
+    }
+
+    return "idle";
+  }
+
+  private buildTaskMonitorSessions(): ClawTaskSessionItem[] {
+    const staleCutoff = Date.now() - TASK_MONITOR_MAX_AGE_MS;
+
+    return Array.from(this.sessionMonitorMap.values())
+      .filter((state) => state.activeRunIds.size > 0 || state.updatedAtMs >= staleCutoff)
+      .map((state) => {
+        const status = this.resolveTaskStatus(state);
+        return {
+          sessionKey: state.sessionKey,
+          displayName: state.displayName || defaultMonitorDisplayName(state.sessionKey),
+          status,
+          activeRunCount: state.activeRunIds.size,
+          updatedAt: toIsoTimestamp(state.updatedAtMs),
+          lastError: status === "error" ? state.lastError : undefined,
+          lastTransitionAt: state.lastTransitionAt
+        } satisfies ClawTaskSessionItem;
+      })
+      .sort((a, b) => {
+        const aPriority = a.status === "running" ? 0 : 1;
+        const bPriority = b.status === "running" ? 0 : 1;
+        if (aPriority !== bPriority) {
+          return aPriority - bPriority;
+        }
+
+        const aUpdatedAt = Date.parse(a.updatedAt);
+        const bUpdatedAt = Date.parse(b.updatedAt);
+        if (Number.isFinite(aUpdatedAt) && Number.isFinite(bUpdatedAt) && bUpdatedAt !== aUpdatedAt) {
+          return bUpdatedAt - aUpdatedAt;
+        }
+
+        return a.sessionKey.localeCompare(b.sessionKey);
+      })
+      .slice(0, TASK_MONITOR_MAX_ITEMS);
+  }
+
+  private emitTaskMonitorSnapshot(): void {
+    this.emit({
+      type: "task-monitor",
+      sessions: this.buildTaskMonitorSessions(),
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  private bindRunToSession(sessionKey: string, runId: string): void {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) {
+      return;
+    }
+
+    const state = this.getOrCreateSessionMonitor(sessionKey);
+    if (!state) {
+      return;
+    }
+
+    const previousSessionKey = this.runToSessionMap.get(normalizedRunId);
+    if (previousSessionKey && previousSessionKey !== state.sessionKey) {
+      const previous = this.sessionMonitorMap.get(previousSessionKey);
+      previous?.activeRunIds.delete(normalizedRunId);
+    }
+
+    this.runToSessionMap.set(normalizedRunId, state.sessionKey);
+  }
+
+  private markRunStarted(sessionKey: string, runId: string): void {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) {
+      return;
+    }
+
+    const state = this.getOrCreateSessionMonitor(sessionKey);
+    if (!state) {
+      return;
+    }
+
+    const previousCount = state.activeRunIds.size;
+    const previousStatus = this.resolveTaskStatus(state);
+
+    this.runToSessionMap.set(normalizedRunId, state.sessionKey);
+    state.activeRunIds.add(normalizedRunId);
+    state.updatedAtMs = Math.max(state.updatedAtMs, Date.now());
+
+    const nextStatus = this.resolveTaskStatus(state);
+    if (previousStatus !== nextStatus) {
+      state.lastTransitionAt = new Date().toISOString();
+    }
+
+    if (previousCount !== state.activeRunIds.size || previousStatus !== nextStatus) {
+      this.emitTaskMonitorSnapshot();
+    }
+  }
+
+  private markRunCompleted(
+    sessionKey: string,
+    runId: string,
+    input: {
+      terminal: SessionTerminalState;
+      errorMessage?: string;
+    }
+  ): void {
+    const normalizedRunId = runId.trim();
+    const sessionByRun = normalizedRunId ? this.runToSessionMap.get(normalizedRunId) : undefined;
+    const state =
+      (sessionByRun ? this.sessionMonitorMap.get(sessionByRun) : null) ??
+      this.getOrCreateSessionMonitor(sessionKey);
+    if (!state) {
+      return;
+    }
+
+    const previousCount = state.activeRunIds.size;
+    const previousStatus = this.resolveTaskStatus(state);
+
+    if (normalizedRunId) {
+      state.activeRunIds.delete(normalizedRunId);
+      this.runToSessionMap.delete(normalizedRunId);
+    }
+
+    if (state.activeRunIds.size === 0) {
+      state.lastTerminal = input.terminal;
+      if (input.terminal === "error") {
+        const errorMessage = input.errorMessage?.trim();
+        if (errorMessage) {
+          state.lastError = errorMessage;
+        }
+      } else {
+        state.lastError = undefined;
+      }
+    }
+
+    state.updatedAtMs = Math.max(state.updatedAtMs, Date.now());
+    const nextStatus = this.resolveTaskStatus(state);
+    if (previousStatus !== nextStatus) {
+      state.lastTransitionAt = new Date().toISOString();
+    }
+
+    if (
+      previousCount !== state.activeRunIds.size ||
+      previousStatus !== nextStatus ||
+      (input.terminal === "error" && state.activeRunIds.size === 0)
+    ) {
+      this.emitTaskMonitorSnapshot();
+    }
+  }
+
+  private clearRunningSessions(): void {
+    let changed = false;
+    for (const state of this.sessionMonitorMap.values()) {
+      if (state.activeRunIds.size === 0) {
+        continue;
+      }
+
+      const previousStatus = this.resolveTaskStatus(state);
+      state.activeRunIds.clear();
+      if (state.lastTerminal !== "error") {
+        state.lastTerminal = "idle";
+      }
+      state.updatedAtMs = Math.max(state.updatedAtMs, Date.now());
+      const nextStatus = this.resolveTaskStatus(state);
+      if (previousStatus !== nextStatus) {
+        state.lastTransitionAt = new Date().toISOString();
+      }
+      changed = true;
+    }
+
+    if (this.runToSessionMap.size > 0) {
+      this.runToSessionMap.clear();
+      changed = true;
+    }
+
+    if (changed) {
+      this.emitTaskMonitorSnapshot();
+    }
+  }
+
+  private startSessionRefreshLoop(): void {
+    if (this.sessionRefreshTimer) {
+      return;
+    }
+
+    this.sessionRefreshTimer = setInterval(() => {
+      void this.refreshTaskSessions();
+    }, TASK_MONITOR_REFRESH_MS);
+  }
+
+  private stopSessionRefreshLoop(): void {
+    if (!this.sessionRefreshTimer) {
+      return;
+    }
+
+    clearInterval(this.sessionRefreshTimer);
+    this.sessionRefreshTimer = null;
+  }
+
+  private async refreshTaskSessions(): Promise<void> {
+    if (this.sessionRefreshInFlight) {
+      return;
+    }
+
+    this.sessionRefreshInFlight = true;
+    try {
+      const result = await this.client.listSessions(DEFAULT_LIST_SESSION_PARAMS);
+      this.applySessionSnapshots(extractSessionListEntries(result, this.defaultSessionKey));
+    } catch {
+      // ignore gateway list errors
+    } finally {
+      this.sessionRefreshInFlight = false;
+    }
+  }
+
+  private applySessionSnapshots(entries: SessionListSnapshotEntry[]): void {
+    const keepKeys = new Set<string>();
+    let changed = false;
+
+    for (const entry of entries) {
+      keepKeys.add(entry.sessionKey);
+
+      const existing = this.sessionMonitorMap.get(entry.sessionKey);
+      if (!existing) {
+        this.sessionMonitorMap.set(entry.sessionKey, {
+          sessionKey: entry.sessionKey,
+          displayName: entry.displayName || defaultMonitorDisplayName(entry.sessionKey),
+          updatedAtMs: entry.updatedAtMs,
+          activeRunIds: new Set<string>(),
+          lastTerminal: "idle",
+          lastTransitionAt: new Date().toISOString()
+        });
+        changed = true;
+        continue;
+      }
+
+      if (entry.displayName && existing.displayName !== entry.displayName) {
+        existing.displayName = entry.displayName;
+        changed = true;
+      }
+
+      if (entry.updatedAtMs > existing.updatedAtMs) {
+        existing.updatedAtMs = entry.updatedAtMs;
+        changed = true;
+      }
+    }
+
+    for (const [sessionKey, state] of this.sessionMonitorMap.entries()) {
+      if (keepKeys.has(sessionKey) || state.activeRunIds.size > 0) {
+        continue;
+      }
+
+      this.sessionMonitorMap.delete(sessionKey);
+      changed = true;
+    }
+
+    if (changed) {
+      this.emitTaskMonitorSnapshot();
+    }
   }
 
   private toOriginSessionKey(sessionKey: string): string {

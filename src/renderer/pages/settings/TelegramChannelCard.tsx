@@ -78,10 +78,9 @@ export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardPr
         </div>
 
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-          <Label>主动消息不再推送到 Telegram</Label>
+          <Label>主动消息仅本地展示</Label>
           <Switch
             checked={config.proactive.localOnly}
-            disabled={!telegramEnabled}
             onChange={(checked) =>
               setConfig({
                 ...config,
