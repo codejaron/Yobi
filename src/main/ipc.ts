@@ -48,6 +48,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("memory:save", (_, input: { markdown: string }) => runtime.saveWorkingMemory(input));
 
   ipcMain.handle("status:get", () => runtime.getStatus());
+  ipcMain.handle("browse:bili:qr:start", () => runtime.startBilibiliQrAuth());
+  ipcMain.handle("browse:bili:qr:poll", (_, payload: { qrcodeKey?: string }) =>
+    runtime.pollBilibiliQrAuth({
+      qrcodeKey: payload?.qrcodeKey ?? ""
+    })
+  );
+  ipcMain.handle("browse:bili:cookie:save", (_, payload: { cookie?: string }) =>
+    runtime.saveBilibiliCookie({
+      cookie: payload?.cookie ?? ""
+    })
+  );
   ipcMain.handle("background:recall:trigger", () => runtime.triggerRecallTask());
   ipcMain.handle("background:wander:trigger", () => runtime.triggerWanderTask());
   ipcMain.handle("topic-pool:item:delete", (_, payload: { topicId?: string }) =>

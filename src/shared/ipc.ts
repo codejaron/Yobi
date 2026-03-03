@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   AppStatus,
+  BrowseAuthState,
   CharacterProfile,
   ClawEvent,
   ClawHistoryItem,
@@ -30,6 +31,23 @@ export interface CompanionApi {
   saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument>;
 
   getStatus(): Promise<AppStatus>;
+  startBilibiliQrAuth(): Promise<{
+    authState: BrowseAuthState;
+    qrcodeKey: string;
+    scanUrl: string;
+    expiresAt: string;
+  }>;
+  pollBilibiliQrAuth(input: { qrcodeKey: string }): Promise<{
+    authState: BrowseAuthState;
+    status: "pending" | "scanned" | "confirmed" | "expired" | "error";
+    detail: string;
+    cookieSaved: boolean;
+  }>;
+  saveBilibiliCookie(input: { cookie: string }): Promise<{
+    saved: boolean;
+    message: string;
+    authState: BrowseAuthState;
+  }>;
   triggerRecallTask(): Promise<{ accepted: boolean; message: string }>;
   triggerWanderTask(): Promise<{ accepted: boolean; message: string }>;
   deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }>;

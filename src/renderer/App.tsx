@@ -204,7 +204,7 @@ export default function App() {
       return <McpPage config={config} setConfig={setConfig} />;
     }
 
-    return <SettingsPage config={config} setConfig={setConfig} />;
+    return <SettingsPage config={config} status={status} setConfig={setConfig} />;
   }, [activePage, character, config, refreshStatus, status, workingMemory, refreshWorkingMemory]);
 
   return (

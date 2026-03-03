@@ -1,28 +1,123 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import type { AppConfig } from "@shared/types";
+import type {
+  AppConfig,
+  BrowseStatus,
+  BrowseTopicMaterial
+} from "@shared/types";
 import type { CharacterStore } from "@main/core/character";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
 import { isWithinQuietHours } from "./proactive-time-window";
+import { buildCandidatePool, type ProactiveCandidateTopic } from "./proactive-candidates";
 
 export type ProactiveTrigger = {
-  type: "silence";
+  type: "heartbeat";
   detail: string;
+  silenceMs: number;
+};
+
+export type ProactiveDecisionKind = "eventShare" | "digestShare" | "reversePrompt" | "silent";
+
+export interface ProactiveDecision {
+  kind: ProactiveDecisionKind;
+  speak: boolean;
+  reason: string;
+  message?: string;
+  usedTopicId?: string;
+}
+
+type ProactiveTopicCandidate = ProactiveCandidateTopic & {
+  material?: BrowseTopicMaterial;
 };
 
 const proactiveSchema = z.object({
   shouldSpeak: z.boolean(),
-  reason: z.string().min(1),
-  message: z.string().optional(),
-  usedTopicIndex: z.number().int().min(1).max(3).optional()
+  usedTopicId: z.string().min(1).max(80).optional(),
+  message: z.string().min(1).max(280).optional(),
+  reason: z.string().min(1).max(160).default("model")
 });
+
+function parseTimestamp(value: string | null): number {
+  if (!value) {
+    return 0;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function nowMs(): number {
+  return Date.now();
+}
+
+function compactText(value: string, max = 120): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(1, max - 1)).trim()}...`;
+}
+
+function normalizeMessage(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function toDecisionKindFromSource(source: string): ProactiveDecisionKind {
+  if (source === "browse:event") {
+    return "eventShare";
+  }
+  if (source === "browse:reverse") {
+    return "reversePrompt";
+  }
+  return "digestShare";
+}
+
+function summarizeMaterial(material: BrowseTopicMaterial): Record<string, unknown> {
+  return {
+    title: compactText(material.title, 120),
+    up: compactText(material.up, 40),
+    tags: material.tags.slice(0, 6),
+    plays: material.plays,
+    duration: material.duration,
+    publishedAt: material.publishedAt,
+    desc: material.desc ? compactText(material.desc, 200) : undefined,
+    topComments: material.topComments.slice(0, 5).map((comment) => ({
+      text: compactText(comment.text, 80),
+      likes: comment.likes
+    })),
+    url: material.url
+  };
+}
+
+function summarizeTopics(topics: ProactiveTopicCandidate[]): Array<Record<string, unknown>> {
+  return topics.map((topic) => ({
+    id: topic.id,
+    source: topic.source,
+    text: compactText(topic.text, 120),
+    material: topic.material ? summarizeMaterial(topic.material) : undefined
+  }));
+}
+
+function mapConversationToPrompt(
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>
+): string {
+  const dialogue = messages
+    .filter((message) => message.role === "assistant" || message.role === "user")
+    .slice(-16)
+    .map((message) => `${message.role === "user" ? "用户" : "你"}: ${compactText(message.content, 280)}`);
+
+  if (dialogue.length === 0) {
+    return "(暂无历史对话)";
+  }
+
+  return dialogue.join("\n");
+}
 
 export class ProactiveService {
   constructor(
-    private readonly modelFactory: ModelFactory,
     private readonly memory: YobiMemory,
+    private readonly modelFactory: ModelFactory,
     private readonly characterStore: CharacterStore,
     private readonly getConfig: () => AppConfig
   ) {}
@@ -32,99 +127,172 @@ export class ProactiveService {
     resourceId: string;
     threadId: string;
     lastProactiveAt: string | null;
-  }): Promise<{ speak: boolean; message?: string; reason: string }> {
+    lastUserAt: string | null;
+    browseStatus: BrowseStatus;
+  }): Promise<ProactiveDecision> {
     const config = this.getConfig();
     if (!config.proactive.enabled) {
       return {
+        kind: "silent",
         speak: false,
         reason: "disabled"
       };
     }
 
-    if (input.lastProactiveAt) {
-      const elapsed = Date.now() - new Date(input.lastProactiveAt).getTime();
-      if (elapsed < config.proactive.cooldownMs) {
+    if (isWithinQuietHours(new Date(), config.proactive.quietHours)) {
+      return {
+        kind: "silent",
+        speak: false,
+        reason: "quiet-hours"
+      };
+    }
+
+    const lastUserMs = parseTimestamp(input.lastUserAt);
+    const lastProactiveMs = parseTimestamp(input.lastProactiveAt);
+    const lastInteractionMs = Math.max(lastUserMs, lastProactiveMs);
+    const elapsedSinceInteraction =
+      lastInteractionMs > 0 ? nowMs() - lastInteractionMs : Number.MAX_SAFE_INTEGER;
+
+    const allowEventShare =
+      input.browseStatus.todayEventShares < config.browse.eventDailyCap &&
+      elapsedSinceInteraction >= config.browse.eventMinGapMs;
+
+    const activeTopicsRaw = await this.memory.listActive(20);
+    const activeTopics: ProactiveTopicCandidate[] = activeTopicsRaw
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const pool = buildCandidatePool({
+      topics: activeTopics,
+      allowEventShare,
+      eventFreshWindowMs: config.browse.eventFreshWindowMs
+    });
+
+    if (input.trigger.silenceMs < config.proactive.silenceThresholdMs && pool.eventCandidates.length === 0) {
+      return {
+        kind: "silent",
+        speak: false,
+        reason: "silence-not-reached"
+      };
+    }
+
+    if (pool.eventCandidates.length === 0 && lastProactiveMs > 0) {
+      const elapsedSinceProactive = nowMs() - lastProactiveMs;
+      if (elapsedSinceProactive < config.proactive.cooldownMs) {
         return {
+          kind: "silent",
           speak: false,
           reason: "cooldown"
         };
       }
     }
 
-    if (isWithinQuietHours(new Date(), config.proactive.quietHours)) {
+    const candidates = pool.candidates.slice(0, 10);
+    if (candidates.length === 0) {
       return {
+        kind: "silent",
         speak: false,
-        reason: "quiet-hours"
+        reason: allowEventShare ? "no-topic" : "event-blocked"
       };
     }
 
-    const model = this.modelFactory.getChatModel();
-    const character = await this.characterStore.getCharacter(config.characterId);
-    const history = await this.memory.listHistory({
-      resourceId: input.resourceId,
-      threadId: input.threadId,
-      limit: 30,
-      offset: 0
-    });
-    const pendingTopics = await this.memory.listActive(3);
-    const topicHints =
-      pendingTopics.length > 0
-        ? pendingTopics.map((topic, index) => `${index + 1}. [${topic.source}] ${topic.text}`).join("\n")
-        : "（暂无积攒的话题）";
-    const workingMemory = await this.memory.getWorkingMemory({
+    const conversation = await this.memory.mapRecentToModelMessages({
       resourceId: input.resourceId,
       threadId: input.threadId
     });
 
-    const decision = await generateObject({
-      model,
-      providerOptions: resolveOpenAIStoreOption(config),
-      schema: proactiveSchema,
-      system: [
-        "你是 Yobi。你现在考虑要不要主动找用户说句话。",
-        "决策依据：",
-        "- 「待跟进」里有没有到了该问的时候了？比如用户之前说“下周面试”，现在已经过了那个时间点。这种情况应该主动问。",
-        "- 你作为 Yobi 自己有没有什么想说的？比如搜到了一个用户可能感兴趣的东西，或者你就是单纯想吐槽点什么。",
-        "- 用户是不是很久没说话了？如果是，不要发“你在吗”这种空洞的话。要么有具体内容可聊，要么就别发。",
-        "- 如果你决定发，风格要像朋友随手发的消息——短、自然、不期待回复也行。可以是关心、可以是分享、可以是吐槽。不要像客服通知。",
-        "不要发的情况：",
-        "- 没什么具体内容可说，纯粹为了“保持联系”。",
-        "- 上一次主动发消息用户没回复——不要追着发第二条。",
-        "- 深夜（这个系统已经帮你过滤了，不用管）。"
-      ].join("\n"),
-      prompt: [
-        character.systemPrompt,
-        `触发原因: ${input.trigger.type}: ${input.trigger.detail}`,
-        `当前时间: ${new Date().toLocaleString("zh-CN")}`,
-        `工作记忆:\n${workingMemory.markdown}`,
-        `最近对话:\n${history.map((item) => `[${item.timestamp}] ${item.role}: ${item.text}`).join("\n") || "(空)"}`,
-        `候选话题池:\n${topicHints}`,
-        "如果你用了候选话题，请返回 usedTopicIndex（1-based）。",
-        "返回 shouldSpeak/reason/message/usedTopicIndex。"
-      ].join("\n\n")
+    const history = await this.memory.listHistory({
+      resourceId: input.resourceId,
+      threadId: input.threadId,
+      limit: 200,
+      offset: 0
     });
+    const proactiveCount = history.filter(
+      (message) => message.role === "assistant" && message.meta?.proactive
+    ).length;
+    const reverseHintEvery = Math.max(2, config.browse.reversePromptEvery);
+    const shouldPreferQuestion = proactiveCount > 0 && proactiveCount % reverseHintEvery === 0;
 
-    const parsed = proactiveSchema.parse(decision.object ?? {
-      shouldSpeak: false,
-      reason: "empty"
-    });
+    const character = await this.characterStore.getCharacter(config.characterId);
+    const model = this.modelFactory.getChatModel();
 
-    if (!parsed.shouldSpeak || !parsed.message?.trim()) {
+    try {
+      const result = await generateObject({
+        model,
+        providerOptions: resolveOpenAIStoreOption(config),
+        schema: proactiveSchema,
+        system: [
+          character.systemPrompt,
+          "你正在执行主动聊天决策。目标是从候选话题里选最自然的一条，并直接说人话。",
+          "必须避免播报腔、条目腔、客服腔，不要写成推荐卡片。",
+          "message 只写 1-2 句，像熟人顺手分享。",
+          "如果话题包含视频链接，要自然带上链接，不要生硬贴 URL。",
+          "若当前时机不适合主动开口，返回 shouldSpeak=false。",
+          "只能使用候选池里存在的 id 作为 usedTopicId，不得编造。"
+        ].join("\n"),
+        prompt: [
+          `触发信息:\n${JSON.stringify(
+            {
+              trigger: input.trigger.detail,
+              silenceMs: input.trigger.silenceMs,
+              allowEventShare,
+              shouldPreferQuestion
+            },
+            null,
+            2
+          )}`,
+          `最近 8 轮对话:\n${mapConversationToPrompt(conversation)}`,
+          `候选话题池 (最多 10 条):\n${JSON.stringify(summarizeTopics(candidates), null, 2)}`,
+          "请返回 shouldSpeak/usedTopicId/message/reason。"
+        ].join("\n\n"),
+        maxOutputTokens: 320
+      });
+
+      const parsed = proactiveSchema.parse(result.object ?? {
+        shouldSpeak: false,
+        reason: "empty"
+      });
+
+      if (!parsed.shouldSpeak) {
+        return {
+          kind: "silent",
+          speak: false,
+          reason: parsed.reason || "model-silent"
+        };
+      }
+
+      const usedTopicId = parsed.usedTopicId?.trim();
+      const message = parsed.message ? normalizeMessage(parsed.message) : "";
+      if (!usedTopicId || !message) {
+        return {
+          kind: "silent",
+          speak: false,
+          reason: "invalid-llm-output"
+        };
+      }
+
+      const picked = candidates.find((topic) => topic.id === usedTopicId);
+      if (!picked) {
+        return {
+          kind: "silent",
+          speak: false,
+          reason: "invalid-topic-id"
+        };
+      }
+
       return {
+        kind: toDecisionKindFromSource(picked.source),
+        speak: true,
+        reason: parsed.reason || "model-picked",
+        message,
+        usedTopicId: picked.id
+      };
+    } catch {
+      return {
+        kind: "silent",
         speak: false,
-        reason: parsed.reason
+        reason: "llm-error"
       };
     }
-
-    const usedTopic = parsed.usedTopicIndex ? pendingTopics[parsed.usedTopicIndex - 1] : undefined;
-    if (usedTopic) {
-      await this.memory.markUsed(usedTopic.id);
-    }
-
-    return {
-      speak: true,
-      reason: parsed.reason,
-      message: parsed.message.trim()
-    };
   }
 }

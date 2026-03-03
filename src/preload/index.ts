@@ -44,6 +44,29 @@ const api: CompanionApi = {
   getStatus(): Promise<AppStatus> {
     return ipcRenderer.invoke("status:get");
   },
+  startBilibiliQrAuth(): Promise<{
+    authState: "missing" | "pending" | "active" | "expired" | "error";
+    qrcodeKey: string;
+    scanUrl: string;
+    expiresAt: string;
+  }> {
+    return ipcRenderer.invoke("browse:bili:qr:start");
+  },
+  pollBilibiliQrAuth(input: { qrcodeKey: string }): Promise<{
+    authState: "missing" | "pending" | "active" | "expired" | "error";
+    status: "pending" | "scanned" | "confirmed" | "expired" | "error";
+    detail: string;
+    cookieSaved: boolean;
+  }> {
+    return ipcRenderer.invoke("browse:bili:qr:poll", input);
+  },
+  saveBilibiliCookie(input: { cookie: string }): Promise<{
+    saved: boolean;
+    message: string;
+    authState: "missing" | "pending" | "active" | "expired" | "error";
+  }> {
+    return ipcRenderer.invoke("browse:bili:cookie:save", input);
+  },
   triggerRecallTask(): Promise<{ accepted: boolean; message: string }> {
     return ipcRenderer.invoke("background:recall:trigger");
   },

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { AppConfig } from "@shared/types";
+import type { AppConfig, AppStatus } from "@shared/types";
 import { AlibabaVoiceCard } from "@renderer/pages/settings/AlibabaVoiceCard";
+import { BilibiliBrowseCard } from "@renderer/pages/settings/BilibiliBrowseCard";
 import { EdgeTtsCard } from "@renderer/pages/settings/EdgeTtsCard";
 import {
   DEFAULT_PTT_HOTKEY,
@@ -18,9 +19,11 @@ import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCar
 
 export function SettingsPage({
   config,
+  status,
   setConfig
 }: {
   config: AppConfig;
+  status: AppStatus | null;
   setConfig: (next: AppConfig) => void;
 }) {
   const observationalProviderOptions = config.providers.map((provider) => ({
@@ -190,6 +193,8 @@ export function SettingsPage({
       <QQChannelCard config={config} setConfig={setConfig} />
 
       <MessagingCard config={config} setConfig={setConfig} />
+
+      <BilibiliBrowseCard config={config} status={status} setConfig={setConfig} />
 
       <PetRuntimeCard
         config={config}

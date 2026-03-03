@@ -70,6 +70,8 @@ const proactiveQuietHoursSchema = z
     message: "quiet hours start/end cannot be the same"
   });
 
+const browseAuthStateSchema = z.enum(["missing", "pending", "active", "expired", "error"]);
+
 export const appConfigSchema = z
   .object({
     characterId: z.string().default("default"),
@@ -156,6 +158,20 @@ export const appConfigSchema = z
         })
       })
       .strict(),
+    browse: z
+      .object({
+        enabled: z.boolean().default(false),
+        bilibiliCookie: z.string().default(""),
+        collectIntervalMs: z.number().int().min(60_000).default(30 * 60 * 1000),
+        digestIntervalMs: z.number().int().min(60_000).default(2 * 60 * 60 * 1000),
+        eventCheckIntervalMs: z.number().int().min(60_000).default(10 * 60 * 1000),
+        eventFreshWindowMs: z.number().int().min(60_000).default(2 * 60 * 60 * 1000),
+        eventMinGapMs: z.number().int().min(60_000).default(15 * 60 * 1000),
+        eventDailyCap: z.number().int().min(1).max(20).default(2),
+        tokenBudgetDaily: z.number().int().min(100).default(15_000),
+        reversePromptEvery: z.number().int().min(2).max(10).default(4)
+      })
+      .strict(),
     memory: z
       .object({
         recentMessages: z.number().int().min(10).max(200).default(40),
@@ -209,6 +225,7 @@ export type ProviderConfig = z.infer<typeof providerSchema>;
 export type ModelRoute = z.infer<typeof modelRouteSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;
+export type BrowseAuthState = z.infer<typeof browseAuthStateSchema>;
 
 export type ChatRole = "system" | "user" | "assistant";
 
@@ -412,6 +429,24 @@ export interface SystemPermissionStatus {
   screenCapture: PermissionState;
 }
 
+export interface BrowseTopComment {
+  text: string;
+  likes: number;
+}
+
+export interface BrowseTopicMaterial {
+  bvid: string;
+  title: string;
+  up: string;
+  tags: string[];
+  plays?: number;
+  duration?: string;
+  publishedAt?: string;
+  desc?: string;
+  topComments: BrowseTopComment[];
+  url: string;
+}
+
 export interface TopicPoolItem {
   id: string;
   text: string;
@@ -419,6 +454,17 @@ export interface TopicPoolItem {
   createdAt: string;
   expiresAt: string | null;
   used: boolean;
+  material?: BrowseTopicMaterial;
+}
+
+export interface BrowseStatus {
+  authState: BrowseAuthState;
+  lastNavCheckAt: string | null;
+  lastCollectAt: string | null;
+  lastDigestAt: string | null;
+  todayTokenUsed: number;
+  todayEventShares: number;
+  pausedReason: string | null;
 }
 
 export interface AppStatus {
@@ -433,7 +479,17 @@ export interface AppStatus {
   petOnline: boolean;
   openclawOnline: boolean;
   openclawStatus: string;
+  browseStatus: BrowseStatus;
   systemPermissions: SystemPermissionStatus;
+}
+
+export interface InterestProfile {
+  games: string[];
+  creators: string[];
+  domains: string[];
+  dislikes: string[];
+  keywords: string[];
+  updatedAt: string;
 }
 
 export interface ReminderItem {
@@ -564,6 +620,18 @@ export const DEFAULT_CONFIG: AppConfig = {
       startMinuteOfDay: 60,
       endMinuteOfDay: 420
     }
+  },
+  browse: {
+    enabled: false,
+    bilibiliCookie: "",
+    collectIntervalMs: 30 * 60 * 1000,
+    digestIntervalMs: 2 * 60 * 60 * 1000,
+    eventCheckIntervalMs: 10 * 60 * 1000,
+    eventFreshWindowMs: 2 * 60 * 60 * 1000,
+    eventMinGapMs: 15 * 60 * 1000,
+    eventDailyCap: 2,
+    tokenBudgetDaily: 15_000,
+    reversePromptEvery: 4
   },
   memory: {
     recentMessages: 40,

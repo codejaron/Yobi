@@ -7,8 +7,10 @@ import type { MastraDBMessage } from "@mastra/core/agent";
 import type { MemoryConfig } from "@mastra/core/memory";
 import type {
   AppConfig,
+  BrowseTopicMaterial,
   CharacterProfile,
   HistoryMessage,
+  InterestProfile,
   TopicPoolItem,
   WorkingMemoryDocument
 } from "@shared/types";
@@ -39,6 +41,7 @@ interface PendingTopic {
   createdAt: string;
   expiresAt: string | null;
   used: boolean;
+  material?: BrowseTopicMaterial;
 }
 
 interface TextPart {
@@ -87,6 +90,153 @@ function parseSqlCount(value: unknown): number {
   }
 
   return 0;
+}
+
+const INTEREST_PROFILE_ID = "primary";
+const EMPTY_INTEREST_PROFILE: InterestProfile = {
+  games: [],
+  creators: [],
+  domains: [],
+  dislikes: [],
+  keywords: [],
+  updatedAt: new Date(0).toISOString()
+};
+
+function normalizeInterestList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") {
+      continue;
+    }
+
+    const text = item.trim();
+    if (!text) {
+      continue;
+    }
+    unique.add(text.slice(0, 80));
+    if (unique.size >= 64) {
+      break;
+    }
+  }
+
+  return [...unique];
+}
+
+function normalizeInterestProfile(raw: unknown): InterestProfile {
+  if (!raw || typeof raw !== "object") {
+    return {
+      ...EMPTY_INTEREST_PROFILE
+    };
+  }
+
+  const value = raw as Record<string, unknown>;
+  const updatedAt =
+    typeof value.updatedAt === "string" && Number.isFinite(new Date(value.updatedAt).getTime())
+      ? new Date(value.updatedAt).toISOString()
+      : new Date().toISOString();
+
+  return {
+    games: normalizeInterestList(value.games),
+    creators: normalizeInterestList(value.creators),
+    domains: normalizeInterestList(value.domains),
+    dislikes: normalizeInterestList(value.dislikes),
+    keywords: normalizeInterestList(value.keywords),
+    updatedAt
+  };
+}
+
+function normalizeTopComments(value: unknown): BrowseTopicMaterial["topComments"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const deduped = new Map<string, number>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const row = item as Record<string, unknown>;
+    const text = typeof row.text === "string" ? normalizeTopicText(row.text) : "";
+    if (!text || text.length < 2) {
+      continue;
+    }
+
+    const likesRaw = row.likes;
+    const likes =
+      typeof likesRaw === "number" && Number.isFinite(likesRaw)
+        ? Math.max(0, Math.floor(likesRaw))
+        : typeof likesRaw === "string"
+          ? Math.max(0, Math.floor(Number(likesRaw) || 0))
+          : 0;
+
+    const previous = deduped.get(text) ?? 0;
+    deduped.set(text, Math.max(previous, likes));
+
+    if (deduped.size >= 20) {
+      break;
+    }
+  }
+
+  return [...deduped.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([text, likes]) => ({
+      text,
+      likes
+    }));
+}
+
+function normalizeBrowseTopicMaterial(raw: unknown): BrowseTopicMaterial | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const value = raw as Record<string, unknown>;
+  const bvid = typeof value.bvid === "string" ? value.bvid.trim() : "";
+  const title = typeof value.title === "string" ? normalizeTopicText(value.title) : "";
+  const up = typeof value.up === "string" ? normalizeTopicText(value.up) : "";
+  const url = typeof value.url === "string" ? value.url.trim() : "";
+  if (!bvid || !title || !up || !url) {
+    return undefined;
+  }
+
+  const tags = Array.isArray(value.tags)
+    ? value.tags
+        .map((item) => (typeof item === "string" ? normalizeTopicText(item) : ""))
+        .filter(Boolean)
+        .slice(0, 12)
+    : [];
+
+  const topComments = normalizeTopComments(value.topComments);
+  const playsRaw = value.plays;
+  const plays =
+    typeof playsRaw === "number" && Number.isFinite(playsRaw)
+      ? Math.max(0, Math.floor(playsRaw))
+      : typeof playsRaw === "string"
+        ? Math.max(0, Math.floor(Number(playsRaw) || 0))
+        : undefined;
+  const duration = typeof value.duration === "string" ? value.duration.trim() : undefined;
+  const publishedAtRaw = typeof value.publishedAt === "string" ? value.publishedAt.trim() : "";
+  const publishedAt = publishedAtRaw && Number.isFinite(new Date(publishedAtRaw).getTime()) ? publishedAtRaw : undefined;
+  const desc = typeof value.desc === "string" ? value.desc.trim() : undefined;
+
+  return {
+    bvid,
+    title,
+    up,
+    tags,
+    plays,
+    duration: duration || undefined,
+    publishedAt,
+    desc: desc || undefined,
+    topComments,
+    url
+  };
 }
 
 function extractTextFromMessage(message: MastraDBMessage): string {
@@ -279,6 +429,7 @@ export class YobiMemory {
     text: string;
     source: string;
     expiresAt?: string | null;
+    material?: BrowseTopicMaterial;
   }): Promise<boolean> {
     const client = await this.ensureTopicClient();
     const text = normalizeTopicText(input.text);
@@ -315,10 +466,19 @@ export class YobiMemory {
     }
 
     const expiresAt = input.expiresAt ? input.expiresAt : null;
+    const material = normalizeBrowseTopicMaterial(input.material);
     await client.execute({
-      sql: `INSERT INTO pending_topics (id, text, normalized_text, source, created_at, expires_at, used)
-            VALUES (?, ?, ?, ?, ?, ?, 0)`,
-      args: [randomUUID(), text, normalizedText, input.source, now, expiresAt]
+      sql: `INSERT INTO pending_topics (id, text, normalized_text, source, created_at, expires_at, used, material_json)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+      args: [
+        randomUUID(),
+        text,
+        normalizedText,
+        input.source,
+        now,
+        expiresAt,
+        material ? JSON.stringify(material) : null
+      ]
     });
     return true;
   }
@@ -330,7 +490,7 @@ export class YobiMemory {
     const now = new Date().toISOString();
     const safeLimit = Math.max(1, Math.min(20, limit));
     const result = await client.execute({
-      sql: `SELECT id, text, source, created_at, expires_at
+      sql: `SELECT id, text, source, created_at, expires_at, material_json
             FROM pending_topics
             WHERE used = 0
               AND (expires_at IS NULL OR expires_at > ?)
@@ -340,18 +500,27 @@ export class YobiMemory {
     });
 
     return result.rows
-      .map((row) => {
+      .map((row): PendingTopic | null => {
         const id = typeof row.id === "string" ? row.id : "";
         const text = typeof row.text === "string" ? row.text : "";
         const source = typeof row.source === "string" ? row.source : "";
         const createdAt = typeof row.created_at === "string" ? row.created_at : "";
         const rawExpiresAt = row.expires_at;
         const expiresAt = typeof rawExpiresAt === "string" && rawExpiresAt ? rawExpiresAt : null;
+        const materialRaw = typeof row.material_json === "string" ? row.material_json : "";
+        let material: BrowseTopicMaterial | undefined;
+        if (materialRaw) {
+          try {
+            material = normalizeBrowseTopicMaterial(JSON.parse(materialRaw));
+          } catch {
+            material = undefined;
+          }
+        }
         if (!id || !text || !source || !createdAt) {
           return null;
         }
 
-        return {
+        const topic: PendingTopic = {
           id,
           text,
           source,
@@ -359,6 +528,10 @@ export class YobiMemory {
           expiresAt,
           used: false
         };
+        if (material) {
+          topic.material = material;
+        }
+        return topic;
       })
       .filter((item): item is PendingTopic => item !== null);
   }
@@ -369,7 +542,7 @@ export class YobiMemory {
     const now = new Date().toISOString();
     const safeLimit = Math.max(1, Math.min(100, limit));
     const result = await client.execute({
-      sql: `SELECT id, text, source, created_at, expires_at, used
+      sql: `SELECT id, text, source, created_at, expires_at, used, material_json
             FROM pending_topics
             WHERE used = 1
                OR expires_at IS NULL
@@ -380,7 +553,7 @@ export class YobiMemory {
     });
 
     return result.rows
-      .map((row) => {
+      .map((row): TopicPoolItem | null => {
         const id = typeof row.id === "string" ? row.id : "";
         const text = typeof row.text === "string" ? row.text : "";
         const source = typeof row.source === "string" ? row.source : "";
@@ -389,11 +562,20 @@ export class YobiMemory {
         const expiresAt = typeof rawExpiresAt === "string" && rawExpiresAt ? rawExpiresAt : null;
         const rawUsed = row.used;
         const used = rawUsed === 1 || rawUsed === "1";
+        const materialRaw = typeof row.material_json === "string" ? row.material_json : "";
+        let material: BrowseTopicMaterial | undefined;
+        if (materialRaw) {
+          try {
+            material = normalizeBrowseTopicMaterial(JSON.parse(materialRaw));
+          } catch {
+            material = undefined;
+          }
+        }
         if (!id || !text || !source || !createdAt) {
           return null;
         }
 
-        return {
+        const topic: TopicPoolItem = {
           id,
           text,
           source,
@@ -401,6 +583,10 @@ export class YobiMemory {
           expiresAt,
           used
         };
+        if (material) {
+          topic.material = material;
+        }
+        return topic;
       })
       .filter((item): item is TopicPoolItem => item !== null);
   }
@@ -489,6 +675,69 @@ export class YobiMemory {
                OR (used = 1 AND COALESCE(used_at, created_at) <= ?)`,
       args: [now, usedRetentionCutoff]
     });
+  }
+
+  async getInterestProfile(): Promise<InterestProfile> {
+    const client = await this.ensureTopicClient();
+    const result = await client.execute({
+      sql: `SELECT payload_json, updated_at
+            FROM interest_profile
+            WHERE id = ?
+            LIMIT 1`,
+      args: [INTEREST_PROFILE_ID]
+    });
+
+    if (result.rows.length === 0) {
+      return {
+        ...EMPTY_INTEREST_PROFILE
+      };
+    }
+
+    const row = result.rows[0];
+    const payloadRaw = typeof row.payload_json === "string" ? row.payload_json : "";
+    const updatedAtRaw = typeof row.updated_at === "string" ? row.updated_at : undefined;
+
+    try {
+      const parsed = normalizeInterestProfile(payloadRaw ? JSON.parse(payloadRaw) : null);
+      return {
+        ...parsed,
+        updatedAt:
+          updatedAtRaw && Number.isFinite(new Date(updatedAtRaw).getTime())
+            ? new Date(updatedAtRaw).toISOString()
+            : parsed.updatedAt
+      };
+    } catch {
+      return {
+        ...EMPTY_INTEREST_PROFILE
+      };
+    }
+  }
+
+  async saveInterestProfile(input: InterestProfile): Promise<InterestProfile> {
+    const client = await this.ensureTopicClient();
+    const normalized = normalizeInterestProfile(input);
+    const updatedAt = new Date().toISOString();
+    const payload = {
+      games: normalized.games,
+      creators: normalized.creators,
+      domains: normalized.domains,
+      dislikes: normalized.dislikes,
+      keywords: normalized.keywords,
+      updatedAt
+    };
+
+    await client.execute({
+      sql: `INSERT INTO interest_profile (id, payload_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              payload_json = excluded.payload_json,
+              updated_at = excluded.updated_at`,
+      args: [INTEREST_PROFILE_ID, JSON.stringify(payload), updatedAt]
+    });
+
+    return {
+      ...payload
+    };
   }
 
   async listHistory(input: ListHistoryInput): Promise<HistoryMessage[]> {
@@ -681,18 +930,28 @@ export class YobiMemory {
         created_at TEXT NOT NULL,
         expires_at TEXT,
         used INTEGER NOT NULL DEFAULT 0,
-        used_at TEXT
+        used_at TEXT,
+        material_json TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_pending_topics_active
         ON pending_topics (used, expires_at, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_pending_topics_normalized
         ON pending_topics (normalized_text, used, expires_at);
+      CREATE TABLE IF NOT EXISTS interest_profile (
+        id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
 
     const tableInfo = await this.topicClient.execute("PRAGMA table_info(pending_topics)");
     const hasUsedAt = tableInfo.rows.some((row) => row.name === "used_at");
     if (!hasUsedAt) {
       await this.topicClient.execute("ALTER TABLE pending_topics ADD COLUMN used_at TEXT");
+    }
+    const hasMaterialJson = tableInfo.rows.some((row) => row.name === "material_json");
+    if (!hasMaterialJson) {
+      await this.topicClient.execute("ALTER TABLE pending_topics ADD COLUMN material_json TEXT");
     }
 
     this.topicTableReady = true;

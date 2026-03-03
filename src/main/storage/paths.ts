@@ -57,11 +57,37 @@ export class CompanionPaths {
     return path.join(this.openclawStateDir, "yobi-sync-state.json");
   }
 
+  get browseDir(): string {
+    return path.join(this.baseDir, "browse");
+  }
+
+  get bilibiliBrowseDir(): string {
+    return path.join(this.browseDir, "bilibili");
+  }
+
+  get bilibiliFeedPath(): string {
+    return path.join(this.bilibiliBrowseDir, "feed.json");
+  }
+
+  get bilibiliHotlistPath(): string {
+    return path.join(this.bilibiliBrowseDir, "hotlist.json");
+  }
+
+  get bilibiliWatchedPath(): string {
+    return path.join(this.bilibiliBrowseDir, "watched.json");
+  }
+
+  get bilibiliBrowseStatePath(): string {
+    return path.join(this.bilibiliBrowseDir, "state.json");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.charactersDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
     mkdirSync(this.openclawStateDir, { recursive: true });
+    mkdirSync(this.browseDir, { recursive: true });
+    mkdirSync(this.bilibiliBrowseDir, { recursive: true });
   }
 }

@@ -25,7 +25,19 @@ function formatTopicSource(value: string): string {
   }
 
   if (value === "wander") {
-    return "闲逛";
+    return "浏览";
+  }
+
+  if (value === "browse:event") {
+    return "B站事件";
+  }
+
+  if (value === "browse:digest") {
+    return "B站摘要";
+  }
+
+  if (value === "browse:reverse") {
+    return "反向提问";
   }
 
   return value || "未知来源";
@@ -111,7 +123,7 @@ export function TopicPoolPage({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">手动触发</CardTitle>
-          <CardDescription>可立即执行回想/闲逛，不受 3h/6h 定时等待影响。</CardDescription>
+          <CardDescription>可立即执行回想/浏览，不受定时等待影响。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -177,7 +189,7 @@ export function TopicPoolPage({
               }}
               disabled={triggering !== null}
             >
-              {triggering === "wander" ? "闲逛触发中..." : "立即触发闲逛"}
+              {triggering === "wander" ? "浏览触发中..." : "立即触发浏览"}
             </Button>
           </div>
           {taskNotice ? (

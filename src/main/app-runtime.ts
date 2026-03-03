@@ -24,6 +24,7 @@ import { YobiMemory } from "@main/memory/setup";
 import { ConversationEngine } from "@main/core/conversation";
 import { ProactiveService } from "@main/services/proactive";
 import { BackgroundTaskService } from "@main/services/background-tasks";
+import { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
 import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage } from "@main/channels/types";
 import { ChannelRouter } from "@main/channels/router";
@@ -91,15 +92,32 @@ export class CompanionRuntime {
   );
 
   private readonly proactive = new ProactiveService(
-    this.modelFactory,
     this.memory,
+    this.modelFactory,
     this.characterStore,
     () => this.configStore.getConfig()
+  );
+  private readonly bilibiliBrowse = new BilibiliBrowseService(
+    this.paths,
+    this.modelFactory,
+    this.memory,
+    () => this.configStore.getConfig(),
+    async (cookie) => {
+      const current = this.configStore.getConfig();
+      await this.configStore.saveConfig({
+        ...current,
+        browse: {
+          ...current.browse,
+          bilibiliCookie: cookie
+        }
+      });
+      await this.emitStatus();
+    }
   );
   private readonly backgroundTasks = new BackgroundTaskService(
     this.modelFactory,
     this.memory,
-    this.mcpManager,
+    this.bilibiliBrowse,
     () => this.configStore.getConfig(),
     {
       resourceId: PRIMARY_RESOURCE_ID,
@@ -347,6 +365,29 @@ export class CompanionRuntime {
 
   async getStatus(): Promise<AppStatus> {
     return this.collectStatus();
+  }
+
+  async startBilibiliQrAuth() {
+    const result = await this.bilibiliBrowse.startQrAuth();
+    await this.emitStatus();
+    return result;
+  }
+
+  async pollBilibiliQrAuth(input: { qrcodeKey: string }) {
+    const result = await this.bilibiliBrowse.pollQrAuth(input);
+    await this.emitStatus();
+    return {
+      authState: result.authState,
+      status: result.status,
+      detail: result.detail,
+      cookieSaved: result.cookieSaved
+    };
+  }
+
+  async saveBilibiliCookie(input: { cookie: string }) {
+    const result = await this.bilibiliBrowse.saveCookie(input);
+    await this.emitStatus();
+    return result;
   }
 
   async triggerRecallTask(): Promise<{ accepted: boolean; message: string }> {
@@ -863,48 +904,29 @@ export class CompanionRuntime {
       return;
     }
 
-    if (!this.lastUserAt) {
-      this.lastSilenceEvaluatedAt = null;
-      return;
-    }
-
     const now = Date.now();
-    const lastUserTime = new Date(this.lastUserAt).getTime();
-    if (!Number.isFinite(lastUserTime)) {
-      this.lastSilenceEvaluatedAt = null;
-      return;
-    }
-
-    const silenceMs = now - lastUserTime;
-
-    if (silenceMs < proactiveConfig.silenceThresholdMs) {
-      this.lastSilenceEvaluatedAt = null;
-      return;
-    }
-
-    if (this.lastProactiveAt) {
-      const lastProactiveTime = new Date(this.lastProactiveAt).getTime();
-      if (Number.isFinite(lastProactiveTime) && lastProactiveTime > lastUserTime) {
-        return;
-      }
-    }
-
+    const heartbeatInterval = Math.max(
+      60_000,
+      this.getConfig().browse.enabled ? this.getConfig().browse.eventCheckIntervalMs : 60_000
+    );
     if (this.lastSilenceEvaluatedAt) {
       const lastEvaluatedTime = new Date(this.lastSilenceEvaluatedAt).getTime();
-      if (
-        Number.isFinite(lastEvaluatedTime) &&
-        now - lastEvaluatedTime < proactiveConfig.cooldownMs
-      ) {
+      if (Number.isFinite(lastEvaluatedTime) && now - lastEvaluatedTime < heartbeatInterval) {
         return;
       }
     }
+
+    const lastUserTime = this.lastUserAt ? new Date(this.lastUserAt).getTime() : 0;
+    const silenceMs =
+      Number.isFinite(lastUserTime) && lastUserTime > 0 ? Math.max(0, now - lastUserTime) : now;
 
     this.lastSilenceEvaluatedAt = new Date(now).toISOString();
     try {
       await this.handleProactive({
         trigger: {
-          type: "silence",
-          detail: `用户已沉默 ${Math.floor(silenceMs / 60000)} 分钟`
+          type: "heartbeat",
+          detail: `心跳检查（沉默 ${Math.floor(silenceMs / 60000)} 分钟）`,
+          silenceMs
         }
       });
     } catch (error) {
@@ -915,18 +937,21 @@ export class CompanionRuntime {
   }
 
   private async handleProactive(input: {
-    trigger: { type: "silence"; detail: string };
+    trigger: { type: "heartbeat"; detail: string; silenceMs: number };
   }): Promise<void> {
     if (!this.getConfig().proactive.enabled) {
       return;
     }
 
+    const browseStatus = await this.bilibiliBrowse.getStatus();
     const decision = await this.withTimeout(
       this.proactive.evaluate({
         trigger: input.trigger,
         resourceId: PRIMARY_RESOURCE_ID,
         threadId: PRIMARY_THREAD_ID,
-        lastProactiveAt: this.lastProactiveAt
+        lastProactiveAt: this.lastProactiveAt,
+        lastUserAt: this.lastUserAt,
+        browseStatus
       }),
       CompanionRuntime.PROACTIVE_DECISION_TIMEOUT_MS,
       "主动消息决策超时"
@@ -940,6 +965,13 @@ export class CompanionRuntime {
     const proactiveMessage = parsedMessage.cleanedText.trim() || decision.message.trim();
     if (!proactiveMessage) {
       return;
+    }
+
+    if (decision.kind === "eventShare") {
+      const accepted = await this.bilibiliBrowse.tryConsumeEventShareQuota();
+      if (!accepted) {
+        return;
+      }
     }
 
     if (parsedMessage.emotion) {
@@ -956,9 +988,13 @@ export class CompanionRuntime {
       text: proactiveMessage,
       metadata: {
         proactive: true,
-        source: "yobi"
+        source: "yobi",
+        proactiveKind: decision.kind
       }
     });
+    if (decision.usedTopicId) {
+      await this.memory.markUsed(decision.usedTopicId);
+    }
 
     this.consoleChannel.emitExternalAssistantMessage({
       text: proactiveMessage,
@@ -1079,6 +1115,7 @@ export class CompanionRuntime {
   private async collectStatus(): Promise<AppStatus> {
     this.systemPermissionsService.refreshSystemPermissions();
     const openclawStatus = this.openclawRuntime.getStatus();
+    const browseStatus = await this.bilibiliBrowse.getStatus();
     return {
       bootedAt: this.bootedAt,
       telegramConnected: this.telegram.isConnected(),
@@ -1094,6 +1131,7 @@ export class CompanionRuntime {
       petOnline: this.petService.isPetOnline(),
       openclawOnline: openclawStatus.online,
       openclawStatus: openclawStatus.message,
+      browseStatus,
       systemPermissions: this.systemPermissionsService.getSnapshot()
     };
   }
@@ -1148,7 +1186,10 @@ export class CompanionRuntime {
       });
     }
 
-    if (JSON.stringify(previousConfig.proactive) !== JSON.stringify(nextConfig.proactive)) {
+    if (
+      JSON.stringify(previousConfig.proactive) !== JSON.stringify(nextConfig.proactive) ||
+      JSON.stringify(previousConfig.browse) !== JSON.stringify(nextConfig.browse)
+    ) {
       await this.runConfigSideEffect("重置后台话题任务", 4_000, async () => {
         this.backgroundTasks.start();
       });
