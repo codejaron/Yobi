@@ -1,6 +1,14 @@
-import { Bot, Clock3, ShieldCheck, Sparkles, PawPrint, MessageCircle } from "lucide-react";
+import {
+  BarChart3,
+  Bot,
+  Clock3,
+  ShieldCheck,
+  Sparkles,
+  PawPrint,
+  MessageCircle
+} from "lucide-react";
 import type { AppStatus, PermissionState } from "@shared/types";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import {
   Card,
@@ -11,6 +19,10 @@ import {
 } from "@renderer/components/ui/card";
 import { Button } from "@renderer/components/ui/button";
 import type { PageProps } from "@renderer/types";
+import {
+  aggregateTokenStats,
+  type TokenPeriod
+} from "@renderer/pages/dashboard/token-aggregate";
 
 function formatDateTime(value: string | null): string {
   if (!value) {
@@ -80,6 +92,33 @@ function formatOpenClawStatus(value: string | undefined): string {
   return value;
 }
 
+function formatTokenCount(value: number): string {
+  return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
+}
+
+const TOKEN_PERIOD_ITEMS: Array<{
+  value: TokenPeriod;
+  label: string;
+}> = [
+  {
+    value: "today",
+    label: "今日"
+  },
+  {
+    value: "7d",
+    label: "7 天"
+  },
+  {
+    value: "30d",
+    label: "30 天"
+  }
+];
+
+const TOKEN_SOURCE_COLORS = {
+  chat: "#2B7088",
+  background: "#D4854F"
+} as const;
+
 const SYSTEM_PERMISSION_ITEMS: Array<{
   key: keyof AppStatus["systemPermissions"];
   label: string;
@@ -111,6 +150,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [tokenPeriod, setTokenPeriod] = useState<TokenPeriod>("today");
 
   useEffect(() => {
     if (!resetPermissionsNotice) {
@@ -139,6 +179,15 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
       clearTimeout(timer);
     };
   }, [permissionActionNotice]);
+
+  const tokenAggregate = useMemo(
+    () =>
+      aggregateTokenStats(status?.tokenStats, {
+        period: tokenPeriod,
+        narrowViewport: false
+      }),
+    [status?.tokenStats, tokenPeriod]
+  );
 
   const openPermissionSettings = (permission: keyof AppStatus["systemPermissions"]): void => {
     if (openingPermission) {
@@ -245,6 +294,59 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
       .finally(() => void refreshStatus());
   };
 
+  const donutData = useMemo(() => {
+    const rows = [
+      {
+        key: "chat" as const,
+        label: tokenAggregate.sourceTotals.chat.label,
+        tokens: tokenAggregate.sourceTotals.chat.tokens,
+        estimatedTokens: tokenAggregate.sourceTotals.chat.estimatedTokens,
+        color: TOKEN_SOURCE_COLORS.chat
+      },
+      {
+        key: "background" as const,
+        label: tokenAggregate.sourceTotals.background.label,
+        tokens: tokenAggregate.sourceTotals.background.tokens,
+        estimatedTokens: tokenAggregate.sourceTotals.background.estimatedTokens,
+        color: TOKEN_SOURCE_COLORS.background
+      }
+    ];
+
+    const total = rows.reduce((sum, row) => sum + row.tokens, 0);
+    const radius = 46;
+    const circumference = 2 * Math.PI * radius;
+    let offsetLength = 0;
+
+    const segments = rows.map((row) => {
+      const ratio = total > 0 ? row.tokens / total : 0;
+      const length = circumference * ratio;
+      const segment = {
+        ...row,
+        ratio,
+        percent: ratio * 100,
+        length,
+        offsetLength
+      };
+      offsetLength += length;
+      return segment;
+    });
+
+    return {
+      total,
+      circumference,
+      segments
+    };
+  }, [
+    tokenAggregate.sourceTotals.background.estimatedTokens,
+    tokenAggregate.sourceTotals.background.label,
+    tokenAggregate.sourceTotals.background.tokens,
+    tokenAggregate.sourceTotals.chat.estimatedTokens,
+    tokenAggregate.sourceTotals.chat.label,
+    tokenAggregate.sourceTotals.chat.tokens
+  ]);
+  const currentPeriodLabel =
+    tokenPeriod === "today" ? "今日" : tokenPeriod === "7d" ? "近 7 天" : "近 30 天";
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -308,6 +410,145 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardDescription>Token 统计</CardDescription>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <BarChart3 className="h-4 w-4" />
+                使用概览
+              </CardTitle>
+            </div>
+            <div className="inline-flex rounded-full border border-border/70 bg-white/75 p-1">
+              {TOKEN_PERIOD_ITEMS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setTokenPeriod(item.value)}
+                  className={`rounded-full px-3 py-1 text-xs transition ${
+                    tokenPeriod === item.value
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-border/70 bg-white/75 px-4 py-3">
+              <p className="text-xs text-muted-foreground">{currentPeriodLabel}总消耗</p>
+              <p className="text-3xl font-semibold tracking-tight">{formatTokenCount(tokenAggregate.totalTokens)}</p>
+              <p className="text-xs text-muted-foreground">单位：Tokens</p>
+            </div>
+            <div className="rounded-xl border border-border/70 bg-white/75 px-4 py-3 text-xs text-muted-foreground">
+              <p>统计口径：优先 provider usage，缺失时回退估算。</p>
+              <p>最后更新：{formatDateTime(tokenAggregate.lastUpdatedAt)}</p>
+              {tokenAggregate.hasEstimated ? (
+                <p className="text-amber-700">
+                  本周期含估算值 {formatTokenCount(tokenAggregate.estimatedTokens)}
+                </p>
+              ) : (
+                <p className="text-emerald-700">本周期全部为 provider 实际 usage。</p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+            <div className="rounded-xl border border-border/70 bg-white/75 p-4">
+              <div className="relative mx-auto h-56 w-56">
+                <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90">
+                  <circle cx="64" cy="64" r="46" fill="none" stroke="rgba(122, 103, 87, 0.18)" strokeWidth="14" />
+                  {donutData.segments.map((segment) =>
+                    segment.tokens > 0 ? (
+                      <circle
+                        key={segment.key}
+                        cx="64"
+                        cy="64"
+                        r="46"
+                        fill="none"
+                        stroke={segment.color}
+                        strokeWidth="14"
+                        strokeLinecap="round"
+                        strokeDasharray={`${segment.length} ${Math.max(
+                          0,
+                          donutData.circumference - segment.length
+                        )}`}
+                        strokeDashoffset={-segment.offsetLength}
+                      />
+                    ) : null
+                  )}
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                  <p className="text-xs text-muted-foreground">{currentPeriodLabel}</p>
+                  <p className="text-2xl font-semibold">{formatTokenCount(donutData.total)}</p>
+                  <p className="text-xs text-muted-foreground">功能分布</p>
+                </div>
+              </div>
+              <p className="mt-2 text-center text-xs text-muted-foreground">
+                来源占比
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {donutData.segments.map((segment) => (
+                <div key={segment.key} className="rounded-xl border border-border/70 bg-white/75 p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="inline-flex items-center gap-2 font-medium">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: segment.color }}
+                        aria-hidden
+                      />
+                      {segment.label}
+                    </span>
+                    <span className="text-base font-semibold">{formatTokenCount(segment.tokens)}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary/35">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, segment.percent))}%`,
+                        backgroundColor: segment.color
+                      }}
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>{segment.percent.toFixed(segment.percent >= 10 ? 0 : 1)}%</span>
+                    {segment.estimatedTokens > 0 ? (
+                      <span>含估算 {formatTokenCount(segment.estimatedTokens)}</span>
+                    ) : (
+                      <span>全部实际 usage</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              <div className="rounded-xl border border-border/70 bg-secondary/15 p-3">
+                <p className="mb-2 text-xs text-muted-foreground">后台任务细分</p>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {tokenAggregate.backgroundDetails.map((item) => (
+                    <div key={item.label} className="rounded-lg border border-border/60 bg-white/70 px-3 py-2">
+                      <p className="text-[11px] text-muted-foreground">{item.label}</p>
+                      <p className="text-sm font-medium">{formatTokenCount(item.tokens)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl border border-dashed border-border/70 bg-white/55 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Claw</span>
+                <span className="text-muted-foreground">{tokenAggregate.sourceTotals.claw.label}</span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

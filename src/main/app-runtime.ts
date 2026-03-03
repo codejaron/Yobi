@@ -48,6 +48,9 @@ import { createClawToolDefinition } from "@main/claw/tool";
 import { createBuiltinTools } from "@main/tools/builtin";
 import { ApprovalGuard } from "@main/tools/guard/approval";
 import { DefaultToolRegistry } from "@main/tools/registry";
+import { TokenStatsStore } from "@main/services/token/token-stats-store";
+import { TokenStatsService } from "@main/services/token/token-stats-service";
+import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 
 interface HistoryQuery {
   query?: string;
@@ -64,6 +67,8 @@ export class CompanionRuntime {
 
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
+  private readonly tokenStatsStore = new TokenStatsStore(this.paths);
+  private readonly tokenStatsService = new TokenStatsService(this.tokenStatsStore);
   private readonly configStore = new ConfigStore(this.paths);
   private readonly reminderStore = new ReminderStore(this.paths);
   private readonly runtimeContextStore = new RuntimeContextStore(this.paths);
@@ -207,6 +212,7 @@ export class CompanionRuntime {
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
+    setTokenRecorder((event) => this.tokenStatsService.record(event));
     await this.configStore.init();
     await this.reminderStore.init();
     await this.runtimeContextStore.init();
@@ -249,6 +255,8 @@ export class CompanionRuntime {
   }
 
   async stop(): Promise<void> {
+    setTokenRecorder(null);
+
     if (this.silenceTimer) {
       clearInterval(this.silenceTimer);
       this.silenceTimer = null;
@@ -1116,6 +1124,7 @@ export class CompanionRuntime {
     this.systemPermissionsService.refreshSystemPermissions();
     const openclawStatus = this.openclawRuntime.getStatus();
     const browseStatus = await this.bilibiliBrowse.getStatus();
+    const tokenStats = await this.tokenStatsService.getStatus();
     return {
       bootedAt: this.bootedAt,
       telegramConnected: this.telegram.isConnected(),
@@ -1132,6 +1141,7 @@ export class CompanionRuntime {
       openclawOnline: openclawStatus.online,
       openclawStatus: openclawStatus.message,
       browseStatus,
+      tokenStats,
       systemPermissions: this.systemPermissionsService.getSnapshot()
     };
   }

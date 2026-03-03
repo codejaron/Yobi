@@ -467,6 +467,51 @@ export interface BrowseStatus {
   pausedReason: string | null;
 }
 
+export const TOKEN_USAGE_SOURCES = [
+  "chat:console",
+  "chat:telegram",
+  "chat:qq",
+  "browse:bilibili-interest",
+  "background:recall",
+  "background:proactive",
+  "background:working-memory"
+] as const;
+
+export type TokenUsageSource = (typeof TOKEN_USAGE_SOURCES)[number];
+
+export interface TokenSourceCounters {
+  tokens: number;
+  estimatedTokens: number;
+}
+
+export interface TokenBucketSummary {
+  dayKey: string;
+  timeZone: string;
+  tzOffsetMinutes: number;
+  totalTokens: number;
+  estimatedTokens: number;
+  bySource: Partial<Record<TokenUsageSource, TokenSourceCounters>>;
+  updatedAt: string;
+}
+
+export interface TokenStatsStatus {
+  retentionDays: number;
+  lastUpdatedAt: string | null;
+  days: TokenBucketSummary[];
+  integrations: {
+    claw: "pending" | "ready";
+  };
+}
+
+export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
+  retentionDays: 90,
+  lastUpdatedAt: null,
+  days: [],
+  integrations: {
+    claw: "pending"
+  }
+};
+
 export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
@@ -480,6 +525,7 @@ export interface AppStatus {
   openclawOnline: boolean;
   openclawStatus: string;
   browseStatus: BrowseStatus;
+  tokenStats: TokenStatsStatus;
   systemPermissions: SystemPermissionStatus;
 }
 

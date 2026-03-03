@@ -9,6 +9,7 @@ import type { CharacterStore } from "@main/core/character";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
+import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { isWithinQuietHours } from "./proactive-time-window";
 import { buildCandidatePool, type ProactiveCandidateTopic } from "./proactive-candidates";
 
@@ -215,37 +216,47 @@ export class ProactiveService {
 
     const character = await this.characterStore.getCharacter(config.characterId);
     const model = this.modelFactory.getChatModel();
+    const systemPrompt = [
+      character.systemPrompt,
+      "你正在执行主动聊天决策。目标是从候选话题里选最自然的一条，并直接说人话。",
+      "必须避免播报腔、条目腔、客服腔，不要写成推荐卡片。",
+      "message 只写 1-2 句，像熟人顺手分享。",
+      "如果话题包含视频链接，要自然带上链接，不要生硬贴 URL。",
+      "若当前时机不适合主动开口，返回 shouldSpeak=false。",
+      "只能使用候选池里存在的 id 作为 usedTopicId，不得编造。"
+    ].join("\n");
+    const userPrompt = [
+      `触发信息:\n${JSON.stringify(
+        {
+          trigger: input.trigger.detail,
+          silenceMs: input.trigger.silenceMs,
+          allowEventShare,
+          shouldPreferQuestion
+        },
+        null,
+        2
+      )}`,
+      `最近 8 轮对话:\n${mapConversationToPrompt(conversation)}`,
+      `候选话题池 (最多 10 条):\n${JSON.stringify(summarizeTopics(candidates), null, 2)}`,
+      "请返回 shouldSpeak/usedTopicId/message/reason。"
+    ].join("\n\n");
 
     try {
       const result = await generateObject({
         model,
         providerOptions: resolveOpenAIStoreOption(config),
         schema: proactiveSchema,
-        system: [
-          character.systemPrompt,
-          "你正在执行主动聊天决策。目标是从候选话题里选最自然的一条，并直接说人话。",
-          "必须避免播报腔、条目腔、客服腔，不要写成推荐卡片。",
-          "message 只写 1-2 句，像熟人顺手分享。",
-          "如果话题包含视频链接，要自然带上链接，不要生硬贴 URL。",
-          "若当前时机不适合主动开口，返回 shouldSpeak=false。",
-          "只能使用候选池里存在的 id 作为 usedTopicId，不得编造。"
-        ].join("\n"),
-        prompt: [
-          `触发信息:\n${JSON.stringify(
-            {
-              trigger: input.trigger.detail,
-              silenceMs: input.trigger.silenceMs,
-              allowEventShare,
-              shouldPreferQuestion
-            },
-            null,
-            2
-          )}`,
-          `最近 8 轮对话:\n${mapConversationToPrompt(conversation)}`,
-          `候选话题池 (最多 10 条):\n${JSON.stringify(summarizeTopics(candidates), null, 2)}`,
-          "请返回 shouldSpeak/usedTopicId/message/reason。"
-        ].join("\n\n"),
+        system: systemPrompt,
+        prompt: userPrompt,
         maxOutputTokens: 320
+      });
+
+      reportTokenUsage({
+        source: "background:proactive",
+        usage: result.usage,
+        systemText: systemPrompt,
+        inputText: userPrompt,
+        outputText: JSON.stringify(result.object ?? {})
       });
 
       const parsed = proactiveSchema.parse(result.object ?? {

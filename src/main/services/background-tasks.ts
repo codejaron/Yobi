@@ -6,6 +6,7 @@ import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
 import type { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
+import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 
 const RECALL_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const TASK_CHECK_INTERVAL_MS = 60 * 1000;
@@ -330,23 +331,34 @@ export class BackgroundTaskService {
     });
     const topicPool = await this.memory.listTopicPool(200);
 
+    const systemPrompt = [
+      "你负责在后台整理主动聊天候选话题。",
+      "只返回 topics 数组，最多 2 条，每条都包含 text，可选 expiresInHours。",
+      "在产出前必须回顾已有话题池，避免和任何已有话题重复（含语义重复）。",
+      "优先输出可延续、可追问的轻量话题，不要输出敏感或诊断类内容。",
+      "如果没有值得主动提起的内容，返回空数组。"
+    ].join("\n");
+    const userPrompt = [
+      `工作记忆:\n${workingMemory.markdown}`,
+      `最近历史:\n${formatHistory(history)}`,
+      `已有话题池（含已使用）:\n${formatTopicPool(topicPool)}`,
+      "请给出 0-2 个一句话话题。"
+    ].join("\n\n");
+
     const result = await generateObject({
       model,
       providerOptions: resolveOpenAIStoreOption(config),
       schema: recallSchema,
-      system: [
-        "你负责在后台整理主动聊天候选话题。",
-        "只返回 topics 数组，最多 2 条，每条都包含 text，可选 expiresInHours。",
-        "在产出前必须回顾已有话题池，避免和任何已有话题重复（含语义重复）。",
-        "优先输出可延续、可追问的轻量话题，不要输出敏感或诊断类内容。",
-        "如果没有值得主动提起的内容，返回空数组。"
-      ].join("\n"),
-      prompt: [
-        `工作记忆:\n${workingMemory.markdown}`,
-        `最近历史:\n${formatHistory(history)}`,
-        `已有话题池（含已使用）:\n${formatTopicPool(topicPool)}`,
-        "请给出 0-2 个一句话话题。"
-      ].join("\n\n")
+      system: systemPrompt,
+      prompt: userPrompt
+    });
+
+    reportTokenUsage({
+      source: "background:recall",
+      usage: result.usage,
+      systemText: systemPrompt,
+      inputText: userPrompt,
+      outputText: JSON.stringify(result.object ?? {})
     });
 
     const topics = recallSchema.parse(result.object ?? { topics: [] }).topics;

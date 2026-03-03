@@ -81,6 +81,14 @@ export class CompanionPaths {
     return path.join(this.bilibiliBrowseDir, "state.json");
   }
 
+  get tokenStatsDir(): string {
+    return path.join(this.baseDir, "token-stats");
+  }
+
+  get tokenStatsStatePath(): string {
+    return path.join(this.tokenStatsDir, "state.json");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.charactersDir, { recursive: true });
@@ -89,5 +97,6 @@ export class CompanionPaths {
     mkdirSync(this.openclawStateDir, { recursive: true });
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });
+    mkdirSync(this.tokenStatsDir, { recursive: true });
   }
 }

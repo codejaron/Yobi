@@ -11,6 +11,7 @@
     "src/shared/**/*.ts",
     "src/main/**/*.d.ts",
     "src/main/**/*.ts",
+    "src/renderer/pages/dashboard/token-aggregate.ts",
     "src/preload/**/*.d.ts",
     "src/preload/**/*.ts"
   ]

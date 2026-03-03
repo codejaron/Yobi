@@ -5,6 +5,11 @@ import { CompanionPaths } from "@main/storage/paths";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { YobiMemory } from "@main/memory/setup";
+import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
+import {
+  estimateTokensFromText,
+  parseUsageTokens
+} from "@main/services/token/token-usage-utils";
 import { BrowseStore } from "./browse-store";
 import {
   BilibiliAuthService,
@@ -42,27 +47,6 @@ export interface BrowseHeartbeatOutcome {
     | "paused"
     | "auth-error";
   detail?: string;
-}
-
-function parseTokenUsage(value: unknown): number {
-  if (!value || typeof value !== "object") {
-    return 0;
-  }
-
-  const usage = value as Record<string, unknown>;
-  const total = usage.totalTokens;
-  if (typeof total === "number" && Number.isFinite(total)) {
-    return Math.max(0, Math.floor(total));
-  }
-
-  const inputTokens = typeof usage.inputTokens === "number" ? usage.inputTokens : 0;
-  const outputTokens = typeof usage.outputTokens === "number" ? usage.outputTokens : 0;
-  return Math.max(0, Math.floor(inputTokens + outputTokens));
-}
-
-function estimateTokens(...texts: string[]): number {
-  const length = texts.reduce((sum, text) => sum + text.length, 0);
-  return Math.max(1, Math.ceil(length / 4));
 }
 
 function uniq(items: string[]): string[] {
@@ -437,8 +421,16 @@ export class BilibiliBrowseService {
       updatedAt: new Date().toISOString()
     });
 
-    const usage = parseTokenUsage((result as { usage?: unknown }).usage);
-    const tokenUsed = usage > 0 ? usage : estimateTokens(transcript, JSON.stringify(parsed));
+    const usage = parseUsageTokens((result as { usage?: unknown }).usage ?? result.usage);
+    const tokenUsed =
+      usage.tokens > 0 ? usage.tokens : estimateTokensFromText(transcript, JSON.stringify(parsed));
+
+    reportTokenUsage({
+      source: "browse:bilibili-interest",
+      usage: result.usage,
+      inputText: transcript,
+      outputText: JSON.stringify(parsed)
+    });
 
     const persisted = await this.memory.saveInterestProfile(merged);
     return {
