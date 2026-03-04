@@ -2,7 +2,6 @@ import type {
   AppConfig,
   AppStatus,
   BrowseAuthState,
-  CharacterProfile,
   ClawEvent,
   ClawHistoryItem,
   CommandApprovalDecision,
@@ -22,9 +21,6 @@ export interface CursorHistoryPage {
 export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
-
-  getCharacter(characterId: string): Promise<CharacterProfile>;
-  saveCharacter(profile: CharacterProfile): Promise<void>;
 
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]>;
   clearHistory(): Promise<void>;

@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppConfig,
   AppStatus,
-  CharacterProfile,
   ClawEvent,
   ClawHistoryItem,
   CommandApprovalDecision,
@@ -19,13 +18,6 @@ const api: CompanionApi = {
   },
   saveConfig(config: AppConfig): Promise<AppConfig> {
     return ipcRenderer.invoke("config:save", config);
-  },
-
-  getCharacter(characterId: string): Promise<CharacterProfile> {
-    return ipcRenderer.invoke("character:get", characterId);
-  },
-  saveCharacter(profile: CharacterProfile): Promise<void> {
-    return ipcRenderer.invoke("character:save", profile);
   },
 
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]> {

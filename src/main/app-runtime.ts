@@ -3,7 +3,6 @@ import { BrowserWindow, shell } from "electron";
 import type {
   AppConfig,
   AppStatus,
-  CharacterProfile,
   ClawEvent,
   ClawHistoryItem,
   CommandApprovalDecision,
@@ -21,7 +20,6 @@ import {
   RuntimeContextStore,
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
-import { CharacterStore } from "@main/core/character";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
 import { ModelFactory } from "@main/core/model-factory";
 import { YobiMemory } from "@main/memory/setup";
@@ -76,7 +74,6 @@ export class CompanionRuntime {
   private readonly configStore = new ConfigStore(this.paths);
   private readonly reminderStore = new ReminderStore(this.paths);
   private readonly runtimeContextStore = new RuntimeContextStore(this.paths);
-  private readonly characterStore = new CharacterStore(this.paths);
 
   private readonly memory = new YobiMemory(
     this.paths,
@@ -96,7 +93,6 @@ export class CompanionRuntime {
     this.memory,
     this.modelFactory,
     this.toolRegistry,
-    this.characterStore,
     this.stateStore,
     this.paths,
     () => this.configStore.getConfig()
@@ -217,7 +213,6 @@ export class CompanionRuntime {
     await ensureKernelBootstrap(this.paths);
     await this.reminderStore.init();
     await this.runtimeContextStore.init();
-    await this.characterStore.init();
     await this.stateStore.init();
     await this.memory.init();
     await this.kernel.init();
@@ -327,14 +322,6 @@ export class CompanionRuntime {
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
     return saved;
-  }
-
-  async getCharacter(characterId: string): Promise<CharacterProfile> {
-    return this.characterStore.getCharacter(characterId);
-  }
-
-  async saveCharacter(profile: CharacterProfile): Promise<void> {
-    await this.characterStore.saveCharacter(profile);
   }
 
   async getHistory(options: HistoryQuery): Promise<HistoryMessage[]> {

@@ -8,7 +8,6 @@ export type PageId =
   | "topics"
   | "console"
   | "providers"
-  | "character"
   | "memory"
   | "mcp"
   | "settings";

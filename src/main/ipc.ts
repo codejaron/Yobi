@@ -2,7 +2,6 @@ import { BrowserWindow, dialog, ipcMain, shell, WebContents } from "electron";
 import type { OpenDialogOptions } from "electron";
 import type {
   AppConfig,
-  CharacterProfile,
   ClawEvent,
   CommandApprovalDecision
 } from "@shared/types";
@@ -35,9 +34,6 @@ function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSu
 export function registerIpcHandlers(): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
   ipcMain.handle("config:save", (_, config: AppConfig) => runtime.saveConfig(config));
-
-  ipcMain.handle("character:get", (_, characterId: string) => runtime.getCharacter(characterId));
-  ipcMain.handle("character:save", (_, profile: CharacterProfile) => runtime.saveCharacter(profile));
 
   ipcMain.handle("history:list", (_, query: { query?: string; limit?: number; offset?: number }) =>
     runtime.getHistory(query)

@@ -13,14 +13,6 @@ export class CompanionPaths {
     return path.join(this.baseDir, "config.json");
   }
 
-  get charactersDir(): string {
-    return path.join(this.baseDir, "characters");
-  }
-
-  get defaultCharacterPath(): string {
-    return path.join(this.charactersDir, "default.json");
-  }
-
   get remindersPath(): string {
     return path.join(this.baseDir, "reminders.json");
   }
@@ -163,7 +155,6 @@ export class CompanionPaths {
 
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
-    mkdirSync(this.charactersDir, { recursive: true });
     mkdirSync(this.memoryDir, { recursive: true });
     mkdirSync(this.episodesDir, { recursive: true });
     mkdirSync(this.sessionsDir, { recursive: true });

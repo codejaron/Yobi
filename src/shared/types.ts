@@ -150,7 +150,6 @@ const kernelSchema = z
 
 export const appConfigSchema = z
   .object({
-    characterId: z.string().default("default"),
     telegram: z
       .object({
         enabled: z.boolean().default(false),
@@ -504,12 +503,6 @@ export interface HistoryMessage {
     proactive?: boolean;
     source?: "claw" | "yobi";
   };
-}
-
-export interface CharacterProfile {
-  id: string;
-  name: string;
-  systemPrompt: string;
 }
 
 export interface RuntimeContext {
@@ -892,7 +885,6 @@ export const DEFAULT_USER_PROFILE: UserProfile = {
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
-  characterId: "default",
   telegram: {
     enabled: false,
     botToken: "",

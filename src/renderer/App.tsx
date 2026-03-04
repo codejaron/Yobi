@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppConfig,
   AppStatus,
-  CharacterProfile,
   MindSnapshot
 } from "@shared/types";
 import { SideNav } from "@renderer/components/layout/SideNav";
@@ -12,7 +11,6 @@ import { DashboardPage } from "@renderer/pages/Dashboard";
 import { TopicPoolPage } from "@renderer/pages/TopicPool";
 import { ConsoleChatPage } from "@renderer/pages/ConsoleChat";
 import { ProvidersPage } from "@renderer/pages/Providers";
-import { CharacterPage } from "@renderer/pages/Character";
 import { MemoryPage } from "@renderer/pages/Memory";
 import { McpPage } from "@renderer/pages/Mcp";
 import { SettingsPage } from "@renderer/pages/Settings";
@@ -28,8 +26,6 @@ function pageTitle(page: PageId): string {
       return "Provider 与模型路由";
     case "console":
       return "聊天控制台";
-    case "character":
-      return "角色人设";
     case "memory":
       return "Mind Center";
     case "mcp":
@@ -45,7 +41,6 @@ export default function App() {
   const [activePage, setActivePage] = useState<PageId>("dashboard");
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
-  const [character, setCharacter] = useState<CharacterProfile | null>(null);
   const [mindSnapshot, setMindSnapshot] = useState<MindSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
@@ -74,10 +69,6 @@ export default function App() {
       setConfig(nextConfig);
       setStatus(nextStatus);
       setMindSnapshot(nextMindSnapshot);
-
-      const currentCharacter = await window.companion.getCharacter(nextConfig.characterId);
-
-      setCharacter(currentCharacter);
       setNotice("就绪");
 
       unsubStatus = window.companion.onStatus((update) => {
@@ -132,16 +123,12 @@ export default function App() {
     try {
       const saved = await window.companion.saveConfig(config);
       setConfig(saved);
-      if (character && character.id !== saved.characterId) {
-        const profile = await window.companion.getCharacter(saved.characterId);
-        setCharacter(profile);
-      }
       setNotice(`已保存 (${new Date().toLocaleTimeString()})`);
       await refreshStatus();
     } finally {
       setSaving(false);
     }
-  }, [character, config, refreshStatus]);
+  }, [config, refreshStatus]);
 
   const content = useMemo(() => {
     if (!config) {
@@ -162,25 +149,6 @@ export default function App() {
 
     if (activePage === "providers") {
       return <ProvidersPage config={config} setConfig={setConfig} />;
-    }
-
-    if (activePage === "character") {
-      return (
-        <CharacterPage
-          profile={character}
-          onSave={async (profile) => {
-            await window.companion.saveCharacter(profile);
-            setCharacter(profile);
-            if (config.characterId !== profile.id) {
-              setConfig({
-                ...config,
-                characterId: profile.id
-              });
-            }
-            setNotice(`角色已保存 (${new Date().toLocaleTimeString()})`);
-          }}
-        />
-      );
     }
 
     if (activePage === "memory") {
@@ -219,7 +187,7 @@ export default function App() {
     }
 
     return <SettingsPage config={config} status={status} setConfig={setConfig} />;
-  }, [activePage, character, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
+  }, [activePage, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">

@@ -4,7 +4,6 @@ import {
   Gauge,
   ListChecks,
   MessageSquare,
-  MessageCircleHeart,
   Plug,
   Settings2
 } from "lucide-react";
@@ -21,7 +20,6 @@ const items: Array<{
   { id: "topics", label: "话题池", icon: ListChecks },
   { id: "console", label: "聊天", icon: MessageSquare },
   { id: "providers", label: "Provider", icon: Bot },
-  { id: "character", label: "角色", icon: MessageCircleHeart },
   { id: "memory", label: "记忆", icon: Brain },
   { id: "mcp", label: "MCP", icon: Plug },
   { id: "settings", label: "设置", icon: Settings2 }

@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { streamText, stepCountIs, type ToolSet } from "ai";
 import type { AppConfig, TokenUsageSource } from "@shared/types";
-import type { CharacterStore } from "./character";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { stripEmotionTags } from "./emotion-tags";
@@ -96,7 +95,6 @@ export class ConversationEngine {
     private readonly memory: YobiMemory,
     private readonly modelFactory: ModelFactory,
     private readonly toolRegistry: ToolRegistry,
-    private readonly characterStore: CharacterStore,
     private readonly stateStore: StateStore,
     private readonly paths: CompanionPaths,
     private readonly getConfig: () => AppConfig
@@ -150,9 +148,7 @@ export class ConversationEngine {
       maxTokens: Math.min(24_000, Math.max(4_000, config.openclaw.contextTokens || 8_000))
     });
 
-    const character = await this.characterStore.getCharacter(config.characterId);
     const system = [
-      character.systemPrompt,
       assembled.system,
       input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : "",
       "回复可选在末尾附带 <delta mood=\"+0.05\" energy=\"-0.02\" connection=\"+0.10\"/> 作为状态变化建议。"
