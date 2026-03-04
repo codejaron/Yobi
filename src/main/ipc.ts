@@ -89,6 +89,7 @@ export function registerIpcHandlers(): void {
     ) => runtime.openSystemPermissionSettings(permission)
   );
   ipcMain.handle("system:permissions:reset", () => runtime.resetSystemPermissions());
+  ipcMain.handle("openclaw:webui:open", () => runtime.openOpenClawWebUi());
 
   ipcMain.handle("pet:model:import", async (event) => {
     const senderWindow = BrowserWindow.fromWebContents(event.sender);

@@ -65,6 +65,11 @@ export function SettingsPage({
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [openingOpenClawWebUi, setOpeningOpenClawWebUi] = useState(false);
+  const [openClawWebUiNotice, setOpenClawWebUiNotice] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
   const [isRecordingPttHotkey, setIsRecordingPttHotkey] = useState(false);
   const [pttHotkeyNotice, setPttHotkeyNotice] = useState("");
 
@@ -182,6 +187,30 @@ export function SettingsPage({
     setIsRecordingPttHotkey(false);
   };
 
+  const openClawWebUi = async (): Promise<void> => {
+    if (openingOpenClawWebUi) {
+      return;
+    }
+
+    setOpeningOpenClawWebUi(true);
+    setOpenClawWebUiNotice(null);
+    try {
+      const result = await window.companion.openOpenClawWebUi();
+      setOpenClawWebUiNotice({
+        type: result.opened ? "success" : "error",
+        message: result.message
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "打开失败，请稍后重试。";
+      setOpenClawWebUiNotice({
+        type: "error",
+        message
+      });
+    } finally {
+      setOpeningOpenClawWebUi(false);
+    }
+  };
+
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <TelegramChannelCard config={config} setConfig={setConfig} />
@@ -219,6 +248,9 @@ export function SettingsPage({
         clawProviderOptions={clawProviderOptions}
         clawPrimarySelection={clawPrimarySelection}
         clawFallbackInput={clawFallbackInput}
+        openClawWebUi={openClawWebUi}
+        openingOpenClawWebUi={openingOpenClawWebUi}
+        openClawWebUiNotice={openClawWebUiNotice}
       />
     </div>
   );

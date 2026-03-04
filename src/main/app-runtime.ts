@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BrowserWindow, shell } from "electron";
 import type {
   AppConfig,
   AppStatus,
@@ -203,6 +204,7 @@ export class CompanionRuntime {
 
   private statusListeners = new Set<(status: AppStatus) => void>();
   private clawEventListeners = new Set<(event: ClawEvent) => void>();
+  private openclawWebUiWindow: BrowserWindow | null = null;
   private lastUserAt: string | null = null;
   private lastProactiveAt: string | null = null;
   private lastInboundChannel: RuntimeInboundChannel | null = null;
@@ -570,6 +572,84 @@ export class CompanionRuntime {
 
   async resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {
     return this.systemPermissionsService.resetSystemPermissions();
+  }
+
+  async openOpenClawWebUi(): Promise<{ opened: boolean; message: string }> {
+    const config = this.getConfig();
+
+    if (!config.openclaw.enabled) {
+      return {
+        opened: false,
+        message: "OpenClaw 未启用，请先开启并保存配置。"
+      };
+    }
+
+    const status = this.openclawRuntime.getStatus();
+    if (!status.online) {
+      return {
+        opened: false,
+        message: `OpenClaw Gateway 尚未就绪：${status.message}`
+      };
+    }
+
+    try {
+      const dashboardUrl = await this.openclawRuntime.getDashboardUrl();
+      if (this.openclawWebUiWindow && !this.openclawWebUiWindow.isDestroyed()) {
+        if (this.openclawWebUiWindow.isMinimized()) {
+          this.openclawWebUiWindow.restore();
+        }
+        if (!this.openclawWebUiWindow.isVisible()) {
+          this.openclawWebUiWindow.show();
+        }
+
+        void this.openclawWebUiWindow.loadURL(dashboardUrl);
+        this.openclawWebUiWindow.focus();
+        return {
+          opened: true,
+          message: "已在应用内打开 OpenClaw Web UI。"
+        };
+      }
+
+      const window = new BrowserWindow({
+        width: 1280,
+        height: 840,
+        minWidth: 960,
+        minHeight: 640,
+        title: "OpenClaw Web UI",
+        autoHideMenuBar: true,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true
+        }
+      });
+
+      window.webContents.setWindowOpenHandler(({ url }) => {
+        void shell.openExternal(url);
+        return {
+          action: "deny"
+        };
+      });
+
+      this.openclawWebUiWindow = window;
+      window.on("closed", () => {
+        if (this.openclawWebUiWindow === window) {
+          this.openclawWebUiWindow = null;
+        }
+      });
+
+      await window.loadURL(dashboardUrl);
+      return {
+        opened: true,
+        message: "已在应用内打开 OpenClaw Web UI。"
+      };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "未知错误";
+      return {
+        opened: false,
+        message: `打开失败：${detail}`
+      };
+    }
   }
 
   async getConsoleChatHistory(input?: {

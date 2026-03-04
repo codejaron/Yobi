@@ -64,6 +64,7 @@ export interface CompanionApi {
     permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }>;
   resetSystemPermissions(): Promise<{ reset: boolean; message?: string }>;
+  openOpenClawWebUi(): Promise<{ opened: boolean; message: string }>;
   importPetModelFromDialog(): Promise<{
     canceled: boolean;
     modelDir?: string;

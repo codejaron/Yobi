@@ -1,4 +1,5 @@
 import type { AppConfig } from "@shared/types";
+import { Button } from "@renderer/components/ui/button";
 import {
   Card,
   CardContent,
@@ -24,6 +25,12 @@ interface OpenClawSettingsCardProps {
     modelId: string;
   };
   clawFallbackInput: string;
+  openClawWebUi: () => Promise<void>;
+  openingOpenClawWebUi: boolean;
+  openClawWebUiNotice: {
+    type: "success" | "error";
+    message: string;
+  } | null;
 }
 
 export function OpenClawSettingsCard({
@@ -31,7 +38,10 @@ export function OpenClawSettingsCard({
   setConfig,
   clawProviderOptions,
   clawPrimarySelection,
-  clawFallbackInput
+  clawFallbackInput,
+  openClawWebUi,
+  openingOpenClawWebUi,
+  openClawWebUiNotice
 }: OpenClawSettingsCardProps) {
   return (
     <Card>
@@ -40,6 +50,35 @@ export function OpenClawSettingsCard({
         <CardDescription>Claw 双通道配置（模型、浏览器、心跳、工具权限）。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="space-y-1.5">
+          <Label>OpenClaw Web UI</Label>
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+            <div className="pr-3">
+              <p className="text-sm">一键在应用内窗口打开 OpenClaw 控制台页面</p>
+              <p className="text-xs text-muted-foreground">
+                复用 Yobi 当前网关地址、token 和配置文件
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void openClawWebUi()}
+              disabled={openingOpenClawWebUi}
+            >
+              {openingOpenClawWebUi ? "打开中..." : "打开 Web UI"}
+            </Button>
+          </div>
+          {openClawWebUiNotice ? (
+            <p
+              className={`text-xs ${
+                openClawWebUiNotice.type === "success" ? "text-emerald-700" : "text-rose-700"
+              }`}
+            >
+              {openClawWebUiNotice.message}
+            </p>
+          ) : null}
+        </div>
+
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
           <Label>启用 OpenClaw</Label>
           <Switch

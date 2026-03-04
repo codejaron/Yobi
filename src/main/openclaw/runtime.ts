@@ -112,6 +112,19 @@ export class OpenClawRuntime {
     return this.gatewayAuthToken;
   }
 
+  async getDashboardUrl(): Promise<string> {
+    const { stdout, stderr } = await execFileAsync(resolveOpenClawBin(), ["dashboard", "--no-open"], {
+      env: this.resolveBaseEnv()
+    });
+    const output = `${stdout}\n${stderr}`;
+    const matched = output.match(/Dashboard URL:\s*(\S+)/i);
+    if (!matched?.[1]) {
+      throw new Error("无法获取 OpenClaw Dashboard URL");
+    }
+
+    return matched[1].trim();
+  }
+
   async start(config: AppConfig): Promise<void> {
     if (!config.openclaw.enabled) {
       this.gatewayAuthToken = "";
@@ -332,25 +345,16 @@ export class OpenClawRuntime {
     const anthropicApiKey = resolvePreferredProviderKey("anthropic");
     if (anthropicApiKey) {
       env.ANTHROPIC_API_KEY = anthropicApiKey;
-      providerConfigs.anthropic = {
-        apiKey: anthropicApiKey
-      };
     }
 
     const openaiApiKey = resolvePreferredProviderKey("openai");
     if (openaiApiKey) {
       env.OPENAI_API_KEY = openaiApiKey;
-      providerConfigs.openai = {
-        apiKey: openaiApiKey
-      };
     }
 
     const openrouterApiKey = resolvePreferredProviderKey("openrouter");
     if (openrouterApiKey) {
       env.OPENROUTER_API_KEY = openrouterApiKey;
-      providerConfigs.openrouter = {
-        apiKey: openrouterApiKey
-      };
     }
 
     for (const [customProviderId, modelIds] of customModelsByProvider.entries()) {

@@ -109,6 +109,9 @@ const api: CompanionApi = {
   resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {
     return ipcRenderer.invoke("system:permissions:reset");
   },
+  openOpenClawWebUi(): Promise<{ opened: boolean; message: string }> {
+    return ipcRenderer.invoke("openclaw:webui:open");
+  },
   importPetModelFromDialog(): Promise<{
     canceled: boolean;
     modelDir?: string;

@@ -24,7 +24,7 @@ export async function writeJsonFile<T>(filePath: string, data: T): Promise<void>
 }
 
 export async function writeJsonFileAtomic<T>(filePath: string, data: T): Promise<void> {
-  const tempPath = `${filePath}.tmp`;
+  const tempPath = createAtomicTempPath(filePath);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   await fs.rename(tempPath, filePath);
@@ -39,7 +39,7 @@ export async function readTextFile(filePath: string, fallback = ""): Promise<str
 }
 
 export async function writeTextFileAtomic(filePath: string, content: string): Promise<void> {
-  const tempPath = `${filePath}.tmp`;
+  const tempPath = createAtomicTempPath(filePath);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(tempPath, content, "utf8");
   await fs.rename(tempPath, filePath);
@@ -75,4 +75,9 @@ export async function writeJsonlFileAtomic<T>(filePath: string, rows: T[]): Prom
   const payload = rows.map((row) => JSON.stringify(row)).join("\n");
   const content = payload.length > 0 ? `${payload}\n` : "";
   await writeTextFileAtomic(filePath, content);
+}
+
+function createAtomicTempPath(filePath: string): string {
+  const nonce = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${filePath}.${nonce}.tmp`;
 }

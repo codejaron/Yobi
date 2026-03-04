@@ -10,6 +10,7 @@ export class KernelTaskQueue {
   private tasks: PendingTask[] = [];
   private handlers = new Map<PendingTaskType, TaskHandler>();
   private runningIds = new Set<string>();
+  private persistChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly paths: CompanionPaths,
@@ -139,7 +140,22 @@ export class KernelTaskQueue {
   }
 
   private async persist(): Promise<void> {
-    await writeJsonlFileAtomic(this.paths.pendingTasksPath, this.tasks);
+    const snapshot = this.tasks.map((task) => ({
+      ...task,
+      payload: {
+        ...task.payload
+      }
+    }));
+
+    const writeTask = async () => {
+      await writeJsonlFileAtomic(this.paths.pendingTasksPath, snapshot);
+    };
+
+    const next = this.persistChain
+      .catch(() => undefined)
+      .then(writeTask);
+    this.persistChain = next;
+    await next;
   }
 }
 
