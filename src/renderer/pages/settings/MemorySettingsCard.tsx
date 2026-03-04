@@ -8,113 +8,292 @@ import {
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { Label } from "@renderer/components/ui/label";
-import { Select } from "@renderer/components/ui/select";
 import { Switch } from "@renderer/components/ui/switch";
 
 interface MemorySettingsCardProps {
   config: AppConfig;
   setConfig: (next: AppConfig) => void;
-  observationalProviderOptions: Array<{
-    id: string;
-    label: string;
-  }>;
+}
+
+function toInt(raw: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
 export function MemorySettingsCard({
   config,
-  setConfig,
-  observationalProviderOptions
+  setConfig
 }: MemorySettingsCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>记忆策略</CardTitle>
-        <CardDescription>Recent Messages + Working Memory + 可选 Observational Memory。</CardDescription>
+        <CardTitle>内核与记忆</CardTitle>
+        <CardDescription>
+          配置 buffer 上限、tick 节拍、fact extraction 预算与关系抗抖动窗口。
+        </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="space-y-1.5">
-          <Label>最近消息条数（不开 Observational Memory 时）</Label>
-          <Input
-            value={String(config.memory.recentMessages)}
-            onChange={(event) =>
-              setConfig({
-                ...config,
-                memory: {
-                  ...config.memory,
-                  recentMessages:
-                    Number.isFinite(Number(event.target.value))
-                      ? Math.max(10, Math.min(200, Number(event.target.value)))
-                      : config.memory.recentMessages
-                }
-              })
-            }
-          />
-        </div>
-
+      <CardContent className="space-y-4">
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-          <Label>启用 Observational Memory</Label>
+          <Label>启用 Kernel V2</Label>
           <Switch
-            checked={config.memory.observational.enabled}
+            checked={config.kernel.enabled}
             onChange={(checked) =>
               setConfig({
                 ...config,
-                memory: {
-                  ...config.memory,
-                  observational: {
-                    ...config.memory.observational,
-                    enabled: checked
-                  }
+                kernel: {
+                  ...config.kernel,
+                  enabled: checked
                 }
               })
             }
           />
         </div>
 
-        <div className="space-y-1.5">
-          <Label>Observational Memory Provider</Label>
-          <Select
-            value={config.memory.observational.providerId}
-            onChange={(event) =>
-              setConfig({
-                ...config,
-                memory: {
-                  ...config.memory,
-                  observational: {
-                    ...config.memory.observational,
-                    providerId: event.target.value
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Buffer 最大消息数</Label>
+            <Input
+              type="number"
+              min={20}
+              max={1000}
+              value={String(config.kernel.buffer.maxMessages)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    buffer: {
+                      ...config.kernel.buffer,
+                      maxMessages: toInt(event.target.value, config.kernel.buffer.maxMessages, 20, 1000)
+                    }
                   }
-                }
-              })
-            }
-          >
-            <option value="">请选择 Provider</option>
-            {observationalProviderOptions.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.label}
-              </option>
-            ))}
-          </Select>
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Buffer 低水位</Label>
+            <Input
+              type="number"
+              min={10}
+              max={999}
+              value={String(config.kernel.buffer.lowWatermark)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    buffer: {
+                      ...config.kernel.buffer,
+                      lowWatermark: toInt(event.target.value, config.kernel.buffer.lowWatermark, 10, 999)
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>活跃 Tick(ms)</Label>
+            <Input
+              type="number"
+              min={1000}
+              value={String(config.kernel.tick.activeIntervalMs)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    tick: {
+                      ...config.kernel.tick,
+                      activeIntervalMs: toInt(
+                        event.target.value,
+                        config.kernel.tick.activeIntervalMs,
+                        1000,
+                        600000
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>安静 Tick(ms)</Label>
+            <Input
+              type="number"
+              min={1000}
+              value={String(config.kernel.tick.quietIntervalMs)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    tick: {
+                      ...config.kernel.tick,
+                      quietIntervalMs: toInt(
+                        event.target.value,
+                        config.kernel.tick.quietIntervalMs,
+                        1000,
+                        600000
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Fact 输入预算(tokens)</Label>
+            <Input
+              type="number"
+              min={256}
+              value={String(config.kernel.factExtraction.maxInputTokens)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    factExtraction: {
+                      ...config.kernel.factExtraction,
+                      maxInputTokens: toInt(
+                        event.target.value,
+                        config.kernel.factExtraction.maxInputTokens,
+                        256,
+                        16000
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Fact 输出预算(tokens)</Label>
+            <Input
+              type="number"
+              min={128}
+              value={String(config.kernel.factExtraction.maxOutputTokens)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    factExtraction: {
+                      ...config.kernel.factExtraction,
+                      maxOutputTokens: toInt(
+                        event.target.value,
+                        config.kernel.factExtraction.maxOutputTokens,
+                        128,
+                        4000
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>关系升级窗口(天)</Label>
+            <Input
+              type="number"
+              min={1}
+              value={String(config.kernel.relationship.upgradeWindowDays)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    relationship: {
+                      ...config.kernel.relationship,
+                      upgradeWindowDays: toInt(
+                        event.target.value,
+                        config.kernel.relationship.upgradeWindowDays,
+                        1,
+                        30
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>关系降级窗口(天)</Label>
+            <Input
+              type="number"
+              min={1}
+              value={String(config.kernel.relationship.downgradeWindowDays)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    relationship: {
+                      ...config.kernel.relationship,
+                      downgradeWindowDays: toInt(
+                        event.target.value,
+                        config.kernel.relationship.downgradeWindowDays,
+                        1,
+                        90
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
         </div>
 
         <div className="space-y-1.5">
-          <Label>Observational Memory 模型</Label>
+          <Label>会话恢复阈值（小时）</Label>
           <Input
-            value={config.memory.observational.model}
-            placeholder="例如: gemini-2.5-flash"
+            type="number"
+            min={1}
+            max={168}
+            value={String(config.kernel.sessionReentryGapHours)}
             onChange={(event) =>
               setConfig({
                 ...config,
-                memory: {
-                  ...config.memory,
-                  observational: {
-                    ...config.memory.observational,
-                    model: event.target.value
-                  }
+                kernel: {
+                  ...config.kernel,
+                  sessionReentryGapHours: toInt(event.target.value, config.kernel.sessionReentryGapHours, 1, 168)
                 }
               })
             }
           />
         </div>
+
+        <div className="space-y-1.5">
+          <Label>每日任务小时（0-23）</Label>
+          <Input
+            type="number"
+            min={0}
+            max={23}
+            value={String(config.kernel.dailyTaskHour)}
+            onChange={(event) =>
+              setConfig({
+                ...config,
+                kernel: {
+                  ...config.kernel,
+                  dailyTaskHour: toInt(event.target.value, config.kernel.dailyTaskHour, 0, 23)
+                }
+              })
+            }
+          />
+        </div>
+
       </CardContent>
     </Card>
   );

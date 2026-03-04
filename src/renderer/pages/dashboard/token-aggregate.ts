@@ -43,14 +43,12 @@ export interface TokenAggregateResult {
 
 const CHAT_SOURCES: TokenUsageSource[] = ["chat:console", "chat:telegram", "chat:qq"];
 const BROWSE_INTEREST_SOURCE: TokenUsageSource = "browse:bilibili-interest";
-const BACKGROUND_RECALL_SOURCE: TokenUsageSource = "background:recall";
-const BACKGROUND_PROACTIVE_SOURCE: TokenUsageSource = "background:proactive";
-const BACKGROUND_WORKING_MEMORY_SOURCE: TokenUsageSource = "background:working-memory";
+const BACKGROUND_FACT_EXTRACTION_SOURCE: TokenUsageSource = "background:fact-extraction";
+const BACKGROUND_REFLECTION_SOURCE: TokenUsageSource = "background:reflection";
 const BACKGROUND_SOURCES: TokenUsageSource[] = [
   BROWSE_INTEREST_SOURCE,
-  BACKGROUND_RECALL_SOURCE,
-  BACKGROUND_PROACTIVE_SOURCE,
-  BACKGROUND_WORKING_MEMORY_SOURCE
+  BACKGROUND_FACT_EXTRACTION_SOURCE,
+  BACKGROUND_REFLECTION_SOURCE
 ];
 
 function emptyCounters(): TokenSourceCounters {
@@ -182,16 +180,12 @@ export function aggregateTokenStats(
         ...(sourceTotals[BROWSE_INTEREST_SOURCE] ?? emptyCounters())
       },
       {
-        label: "回想",
-        ...(sourceTotals[BACKGROUND_RECALL_SOURCE] ?? emptyCounters())
+        label: "事实提取",
+        ...(sourceTotals[BACKGROUND_FACT_EXTRACTION_SOURCE] ?? emptyCounters())
       },
       {
-        label: "主动决策",
-        ...(sourceTotals[BACKGROUND_PROACTIVE_SOURCE] ?? emptyCounters())
-      },
-      {
-        label: "工作记忆刷新",
-        ...(sourceTotals[BACKGROUND_WORKING_MEMORY_SOURCE] ?? emptyCounters())
+        label: "反思",
+        ...(sourceTotals[BACKGROUND_REFLECTION_SOURCE] ?? emptyCounters())
       }
     ],
     trendBars,

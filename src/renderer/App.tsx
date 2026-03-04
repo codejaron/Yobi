@@ -3,7 +3,7 @@ import type {
   AppConfig,
   AppStatus,
   CharacterProfile,
-  WorkingMemoryDocument
+  MindSnapshot
 } from "@shared/types";
 import { SideNav } from "@renderer/components/layout/SideNav";
 import { Button } from "@renderer/components/ui/button";
@@ -31,7 +31,7 @@ function pageTitle(page: PageId): string {
     case "character":
       return "角色人设";
     case "memory":
-      return "工作记忆";
+      return "Mind Center";
     case "mcp":
       return "MCP 工具中心";
     case "settings":
@@ -46,7 +46,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [character, setCharacter] = useState<CharacterProfile | null>(null);
-  const [workingMemory, setWorkingMemory] = useState<WorkingMemoryDocument | null>(null);
+  const [mindSnapshot, setMindSnapshot] = useState<MindSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
 
@@ -55,9 +55,9 @@ export default function App() {
     setStatus(next);
   }, []);
 
-  const refreshWorkingMemory = useCallback(async (): Promise<void> => {
-    const doc = await window.companion.getWorkingMemory();
-    setWorkingMemory(doc);
+  const refreshMindSnapshot = useCallback(async (): Promise<void> => {
+    const doc = await window.companion.getMindSnapshot();
+    setMindSnapshot(doc);
   }, []);
 
   useEffect(() => {
@@ -65,15 +65,15 @@ export default function App() {
     let unsubPetEnabled: (() => void) | null = null;
 
     const load = async (): Promise<void> => {
-      const [nextConfig, nextStatus, nextWorkingMemory] = await Promise.all([
+      const [nextConfig, nextStatus, nextMindSnapshot] = await Promise.all([
         window.companion.getConfig(),
         window.companion.getStatus(),
-        window.companion.getWorkingMemory()
+        window.companion.getMindSnapshot()
       ]);
 
       setConfig(nextConfig);
       setStatus(nextStatus);
-      setWorkingMemory(nextWorkingMemory);
+      setMindSnapshot(nextMindSnapshot);
 
       const currentCharacter = await window.companion.getCharacter(nextConfig.characterId);
 
@@ -186,15 +186,29 @@ export default function App() {
     if (activePage === "memory") {
       return (
         <MemoryPage
-          document={workingMemory}
-          onSave={async (markdown) => {
-            const saved = await window.companion.saveWorkingMemory({ markdown });
-            setWorkingMemory(saved);
-            setNotice("工作记忆已更新");
+          snapshot={mindSnapshot}
+          onSaveSoul={async (markdown) => {
+            await window.companion.saveSoul({
+              markdown
+            });
+            await refreshMindSnapshot();
+            setNotice("SOUL 已更新");
+          }}
+          onSavePersona={async (markdown) => {
+            await window.companion.savePersona({
+              markdown
+            });
+            await refreshMindSnapshot();
+            setNotice("PERSONA 已更新");
+          }}
+          onTriggerKernelTask={async (taskType) => {
+            const result = await window.companion.triggerKernelTask(taskType);
+            await refreshMindSnapshot();
+            return result;
           }}
           onRefresh={async () => {
-            await refreshWorkingMemory();
-            setNotice("已刷新工作记忆");
+            await refreshMindSnapshot();
+            setNotice("已刷新 Mind 快照");
           }}
         />
       );
@@ -205,7 +219,7 @@ export default function App() {
     }
 
     return <SettingsPage config={config} status={status} setConfig={setConfig} />;
-  }, [activePage, character, config, refreshStatus, status, workingMemory, refreshWorkingMemory]);
+  }, [activePage, character, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">

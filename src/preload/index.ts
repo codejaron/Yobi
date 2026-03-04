@@ -8,7 +8,8 @@ import type {
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
-  WorkingMemoryDocument
+  KernelStateDocument,
+  UserProfile
 } from "@shared/types";
 import type { CompanionApi } from "@shared/ipc";
 
@@ -33,12 +34,31 @@ const api: CompanionApi = {
   clearHistory(): Promise<void> {
     return ipcRenderer.invoke("history:clear");
   },
-
-  getWorkingMemory(): Promise<WorkingMemoryDocument> {
-    return ipcRenderer.invoke("memory:get");
+  getMindSnapshot() {
+    return ipcRenderer.invoke("mind:snapshot:get");
   },
-  saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument> {
-    return ipcRenderer.invoke("memory:save", input);
+  getSoul() {
+    return ipcRenderer.invoke("mind:soul:get");
+  },
+  saveSoul(input: { markdown: string }) {
+    return ipcRenderer.invoke("mind:soul:save", input);
+  },
+  getPersona() {
+    return ipcRenderer.invoke("mind:persona:get");
+  },
+  savePersona(input: { markdown: string }) {
+    return ipcRenderer.invoke("mind:persona:save", input);
+  },
+  patchState(input: { patch: Partial<KernelStateDocument> }) {
+    return ipcRenderer.invoke("mind:state:patch", input);
+  },
+  patchProfile(input: { patch: Partial<UserProfile> }) {
+    return ipcRenderer.invoke("mind:profile:patch", input);
+  },
+  triggerKernelTask(taskType: "tick-now" | "daily-now") {
+    return ipcRenderer.invoke("kernel:task:trigger", {
+      taskType
+    });
   },
 
   getStatus(): Promise<AppStatus> {
@@ -67,11 +87,11 @@ const api: CompanionApi = {
   }> {
     return ipcRenderer.invoke("browse:bili:cookie:save", input);
   },
-  triggerRecallTask(): Promise<{ accepted: boolean; message: string }> {
-    return ipcRenderer.invoke("background:recall:trigger");
+  triggerTopicRecall(): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("topic:recall:trigger");
   },
-  triggerWanderTask(): Promise<{ accepted: boolean; message: string }> {
-    return ipcRenderer.invoke("background:wander:trigger");
+  triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }> {
+    return ipcRenderer.invoke("topic:browse:trigger");
   },
   deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {
     return ipcRenderer.invoke("topic-pool:item:delete", {

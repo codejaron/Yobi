@@ -72,6 +72,82 @@ const proactiveQuietHoursSchema = z
 
 const browseAuthStateSchema = z.enum(["missing", "pending", "active", "expired", "error"]);
 
+const kernelTickSchema = z
+  .object({
+    activeIntervalMs: z.number().int().min(1000).default(5000),
+    warmIntervalMs: z.number().int().min(1000).default(30000),
+    idleIntervalMs: z.number().int().min(1000).default(3 * 60_000),
+    quietIntervalMs: z.number().int().min(1000).default(10 * 60_000)
+  })
+  .strict();
+
+const kernelBufferSchema = z
+  .object({
+    maxMessages: z.number().int().min(20).max(1000).default(200),
+    lowWatermark: z.number().int().min(10).max(999).default(140)
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.lowWatermark >= value.maxMessages) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["lowWatermark"],
+        message: "lowWatermark must be less than maxMessages"
+      });
+    }
+  });
+
+const kernelRelationshipSchema = z
+  .object({
+    upgradeWindowDays: z.number().int().min(1).max(30).default(3),
+    downgradeWindowDays: z.number().int().min(1).max(90).default(7)
+  })
+  .strict();
+
+const kernelQueueSchema = z
+  .object({
+    maxConcurrent: z.number().int().min(1).max(8).default(1),
+    retryLimit: z.number().int().min(0).max(8).default(2)
+  })
+  .strict();
+
+const kernelFactExtractionSchema = z
+  .object({
+    maxInputTokens: z.number().int().min(256).max(16000).default(3000),
+    maxOutputTokens: z.number().int().min(128).max(4000).default(800)
+  })
+  .strict();
+
+const kernelSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    tick: kernelTickSchema.default({
+      activeIntervalMs: 5000,
+      warmIntervalMs: 30000,
+      idleIntervalMs: 3 * 60_000,
+      quietIntervalMs: 10 * 60_000
+    }),
+    buffer: kernelBufferSchema.default({
+      maxMessages: 200,
+      lowWatermark: 140
+    }),
+    relationship: kernelRelationshipSchema.default({
+      upgradeWindowDays: 3,
+      downgradeWindowDays: 7
+    }),
+    queue: kernelQueueSchema.default({
+      maxConcurrent: 1,
+      retryLimit: 2
+    }),
+    factExtraction: kernelFactExtractionSchema.default({
+      maxInputTokens: 3000,
+      maxOutputTokens: 800
+    }),
+    sessionReentryGapHours: z.number().int().min(1).max(168).default(6),
+    dailyTaskHour: z.number().int().min(0).max(23).default(3)
+  })
+  .strict();
+
 export const appConfigSchema = z
   .object({
     characterId: z.string().default("default"),
@@ -98,7 +174,9 @@ export const appConfigSchema = z
     providers: z.array(providerSchema),
     modelRouting: z
       .object({
-        chat: modelRouteSchema
+        chat: modelRouteSchema,
+        factExtraction: modelRouteSchema.optional(),
+        reflection: modelRouteSchema.optional()
       })
       .strict(),
     voice: z
@@ -174,16 +252,36 @@ export const appConfigSchema = z
       .strict(),
     memory: z
       .object({
-        recentMessages: z.number().int().min(10).max(200).default(40),
-        observational: z
-          .object({
-            enabled: z.boolean().default(false),
-            providerId: z.string().default(""),
-            model: z.string().default("")
-          })
-          .strict()
+        recentMessages: z.number().int().min(10).max(400).default(60)
       })
       .strict(),
+    kernel: kernelSchema.default({
+      enabled: true,
+      tick: {
+        activeIntervalMs: 5000,
+        warmIntervalMs: 30000,
+        idleIntervalMs: 3 * 60_000,
+        quietIntervalMs: 10 * 60_000
+      },
+      buffer: {
+        maxMessages: 200,
+        lowWatermark: 140
+      },
+      relationship: {
+        upgradeWindowDays: 3,
+        downgradeWindowDays: 7
+      },
+      queue: {
+        maxConcurrent: 1,
+        retryLimit: 2
+      },
+      factExtraction: {
+        maxInputTokens: 3000,
+        maxOutputTokens: 800
+      },
+      sessionReentryGapHours: 6,
+      dailyTaskHour: 3
+    }),
     openclaw: z
       .object({
         enabled: z.boolean().default(false),
@@ -228,7 +326,6 @@ export type AppConfig = z.infer<typeof appConfigSchema>;
 export type BrowseAuthState = z.infer<typeof browseAuthStateSchema>;
 
 export type ChatRole = "system" | "user" | "assistant";
-
 export type CommandApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export type ConsoleRunEventV2 =
@@ -413,7 +510,6 @@ export interface CharacterProfile {
   id: string;
   name: string;
   systemPrompt: string;
-  workingMemoryTemplate?: string;
 }
 
 export interface RuntimeContext {
@@ -467,14 +563,188 @@ export interface BrowseStatus {
   pausedReason: string | null;
 }
 
+export type RelationshipStage =
+  | "stranger"
+  | "acquaintance"
+  | "familiar"
+  | "close"
+  | "intimate";
+
+export interface EmotionalState {
+  mood: number;
+  energy: number;
+  connection: number;
+  curiosity: number;
+  confidence: number;
+  irritation: number;
+}
+
+export interface RelationshipState {
+  stage: RelationshipStage;
+  upgradeStreak: number;
+  downgradeStreak: number;
+}
+
+export interface KernelStateDocument {
+  emotional: EmotionalState;
+  relationship: RelationshipState;
+  coldStart: boolean;
+  sessionReentry?: {
+    active: boolean;
+    gapHours: number;
+    gapLabel: string;
+    activatedAt: string;
+  } | null;
+  updatedAt: string;
+}
+
+export type FactCategory =
+  | "identity"
+  | "preference"
+  | "event"
+  | "goal"
+  | "relationship"
+  | "emotion_pattern";
+
+export type FactTtlClass = "permanent" | "stable" | "active" | "session";
+
+export interface Fact {
+  id: string;
+  entity: string;
+  key: string;
+  value: string;
+  category: FactCategory;
+  confidence: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  ttl_class: FactTtlClass;
+  last_accessed_at: string;
+  superseded_by: string | null;
+  source_range?: string;
+}
+
+export interface UserProfile {
+  identity: {
+    timezone: string | null;
+    typical_schedule: string | null;
+    language_preference: string;
+  };
+  communication: {
+    avg_message_length: "short" | "medium" | "long";
+    emoji_usage: "none" | "occasional" | "frequent";
+    humor_receptivity: number;
+    advice_receptivity: number;
+    emotional_openness: number;
+    preferred_comfort_style: string | null;
+    catchphrases: string[];
+    tone_words: string[];
+  };
+  patterns: {
+    active_hours: string | null;
+    chat_frequency: string | null;
+    topic_preferences: string[];
+    session_style: string | null;
+    response_to_proactive: string | null;
+  };
+  interaction_notes: {
+    what_works: string[];
+    what_fails: string[];
+    sensitive_topics: string[];
+    trust_areas: {
+      tech: number;
+      life_advice: number;
+      emotional_support: number;
+      entertainment: number;
+    };
+  };
+  pending_confirmations: Array<{
+    id: string;
+    field: string;
+    value: string;
+    needs_confirmation: boolean;
+    confirmed: boolean;
+    created_at: string;
+  }>;
+  updated_at: string;
+}
+
+export interface Episode {
+  id: string;
+  date: string;
+  summary: string;
+  emotional_context: {
+    user_mood: string;
+    yobi_mood: string;
+  };
+  unresolved: string[];
+  significance: number;
+  source_ranges: string[];
+  updated_at: string;
+}
+
+export interface ReflectionProposal {
+  id: string;
+  created_at: string;
+  summary: string;
+  evidence: string[];
+  scores: {
+    specificity: number;
+    evidence: number;
+    novelty: number;
+    usefulness: number;
+  };
+  risk: "low" | "high";
+  requires_review: boolean;
+  applied: boolean;
+}
+
+export type PendingTaskType =
+  | "fact-extraction"
+  | "profile-semantic-update"
+  | "daily-episode"
+  | "daily-reflection";
+
+export type PendingTaskStatus = "pending" | "running" | "completed" | "failed";
+
+export interface PendingTask {
+  id: string;
+  type: PendingTaskType;
+  status: PendingTaskStatus;
+  payload: Record<string, unknown>;
+  source_range?: string;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+  last_error?: string;
+}
+
+export interface BufferMessage {
+  id: string;
+  ts: string;
+  role: ChatRole;
+  channel: "telegram" | "console" | "qq";
+  text: string;
+  meta?: Record<string, unknown>;
+  extracted?: boolean;
+}
+
+export interface MindSnapshot {
+  soul: string;
+  persona: string;
+  state: KernelStateDocument;
+  profile: UserProfile;
+  recentFacts: Fact[];
+  recentEpisodes: Episode[];
+}
+
 export const TOKEN_USAGE_SOURCES = [
   "chat:console",
   "chat:telegram",
   "chat:qq",
   "browse:bilibili-interest",
-  "background:recall",
-  "background:proactive",
-  "background:working-memory"
+  "background:fact-extraction",
+  "background:reflection"
 ] as const;
 
 export type TokenUsageSource = (typeof TOKEN_USAGE_SOURCES)[number];
@@ -503,6 +773,15 @@ export interface TokenStatsStatus {
   };
 }
 
+export interface KernelStatus {
+  enabled: boolean;
+  tickIntervalMs: number;
+  queueDepth: number;
+  lastTickAt: string | null;
+  stage: RelationshipStage;
+  coldStart: boolean;
+}
+
 export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
   retentionDays: 90,
   lastUpdatedAt: null,
@@ -527,6 +806,7 @@ export interface AppStatus {
   browseStatus: BrowseStatus;
   tokenStats: TokenStatsStatus;
   systemPermissions: SystemPermissionStatus;
+  kernel?: KernelStatus;
 }
 
 export interface InterestProfile {
@@ -550,39 +830,66 @@ export interface ReminderDocument {
   items: ReminderItem[];
 }
 
-export interface WorkingMemoryDocument {
-  markdown: string;
-  updatedAt: string;
-}
+export const DEFAULT_EMOTIONAL_STATE: EmotionalState = {
+  mood: 0,
+  energy: 0.6,
+  connection: 0.5,
+  curiosity: 0.5,
+  confidence: 0.5,
+  irritation: 0.1
+};
 
-export const DEFAULT_WORKING_MEMORY_TEMPLATE = `# 用户
-- 称呼:
-- 身份/职业:
-- 性格印象:
-- 兴趣和偏好:
-- 近期生活状态:
-- 在意/敏感的事:
+export const DEFAULT_KERNEL_STATE: KernelStateDocument = {
+  emotional: {
+    ...DEFAULT_EMOTIONAL_STATE
+  },
+  relationship: {
+    stage: "stranger",
+    upgradeStreak: 0,
+    downgradeStreak: 0
+  },
+  coldStart: true,
+  sessionReentry: null,
+  updatedAt: new Date(0).toISOString()
+};
 
-# 交流风格
-- 用户偏好的回复长度: (短/中/长/未知)
-- 用户偏好的语气: (轻松/严肃/混合/未知)
-- 用户是否接受吐槽: (是/否/未知)
-- 用户习惯的对话节奏: (快速你来我往/慢慢聊/未知)
-
-# 关系
-- 阶段: (新认识/逐渐熟悉/已经很熟/老友)
-- 信任程度: (试探中/比较信任/很信任)
-- 相处模式备注:
-
-# Yobi 自身
-- 当前心情倾向:
-- 最近关注的事:
-- 对用户的当前看法:
-- 想在下次聊天中提起的事:
-
-# 重要记忆
-(记录对关系有意义的事实、承诺、里程碑)
-`;
+export const DEFAULT_USER_PROFILE: UserProfile = {
+  identity: {
+    timezone: null,
+    typical_schedule: null,
+    language_preference: "zh-CN"
+  },
+  communication: {
+    avg_message_length: "medium",
+    emoji_usage: "none",
+    humor_receptivity: 0.5,
+    advice_receptivity: 0.5,
+    emotional_openness: 0.5,
+    preferred_comfort_style: null,
+    catchphrases: [],
+    tone_words: []
+  },
+  patterns: {
+    active_hours: null,
+    chat_frequency: null,
+    topic_preferences: [],
+    session_style: null,
+    response_to_proactive: null
+  },
+  interaction_notes: {
+    what_works: [],
+    what_fails: [],
+    sensitive_topics: [],
+    trust_areas: {
+      tech: 0.5,
+      life_advice: 0.5,
+      emotional_support: 0.5,
+      entertainment: 0.5
+    }
+  },
+  pending_confirmations: [],
+  updated_at: new Date(0).toISOString()
+};
 
 export const DEFAULT_CONFIG: AppConfig = {
   characterId: "default",
@@ -622,6 +929,14 @@ export const DEFAULT_CONFIG: AppConfig = {
     chat: {
       providerId: "anthropic-main",
       model: "claude-sonnet-4"
+    },
+    factExtraction: {
+      providerId: "anthropic-main",
+      model: "claude-3-5-haiku-latest"
+    },
+    reflection: {
+      providerId: "anthropic-main",
+      model: "claude-3-5-haiku-latest"
     }
   },
   voice: {
@@ -680,12 +995,34 @@ export const DEFAULT_CONFIG: AppConfig = {
     reversePromptEvery: 4
   },
   memory: {
-    recentMessages: 40,
-    observational: {
-      enabled: false,
-      providerId: "",
-      model: ""
-    }
+    recentMessages: 60
+  },
+  kernel: {
+    enabled: true,
+    tick: {
+      activeIntervalMs: 5000,
+      warmIntervalMs: 30000,
+      idleIntervalMs: 3 * 60_000,
+      quietIntervalMs: 10 * 60_000
+    },
+    buffer: {
+      maxMessages: 200,
+      lowWatermark: 140
+    },
+    relationship: {
+      upgradeWindowDays: 3,
+      downgradeWindowDays: 7
+    },
+    queue: {
+      maxConcurrent: 1,
+      retryLimit: 2
+    },
+    factExtraction: {
+      maxInputTokens: 3000,
+      maxOutputTokens: 800
+    },
+    sessionReentryGapHours: 6,
+    dailyTaskHour: 3
   },
   openclaw: {
     enabled: false,

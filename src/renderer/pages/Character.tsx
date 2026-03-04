@@ -117,35 +117,6 @@ export function CharacterPage({
           )}
         </div>
 
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <Label>{viewMode === "preview" ? "Working Memory Template 预览" : "Working Memory Template"}</Label>
-            <span className="text-xs text-muted-foreground">
-              {viewMode === "preview" ? "正文与编辑态字号一致" : "支持 Markdown 编辑"}
-            </span>
-          </div>
-          {viewMode === "edit" ? (
-            <Textarea
-              className="min-h-[220px]"
-              value={draft.workingMemoryTemplate ?? ""}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  workingMemoryTemplate: event.target.value
-                })
-              }
-            />
-          ) : (
-            <div className="min-h-[220px] rounded-xl border border-border/70 bg-white/80 px-4 py-4">
-              {(draft.workingMemoryTemplate ?? "").trim().length > 0 ? (
-                <MarkdownContent variant="memory" markdown={draft.workingMemoryTemplate ?? ""} />
-              ) : (
-                <p className="text-sm text-muted-foreground">暂无内容，切换到编辑模式开始编写。</p>
-              )}
-            </div>
-          )}
-        </div>
-
         <Button
           disabled={saving}
           onClick={async () => {

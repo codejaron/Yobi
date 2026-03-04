@@ -44,8 +44,24 @@ export function registerIpcHandlers(): void {
   );
   ipcMain.handle("history:clear", () => runtime.clearHistory());
 
-  ipcMain.handle("memory:get", () => runtime.getWorkingMemory());
-  ipcMain.handle("memory:save", (_, input: { markdown: string }) => runtime.saveWorkingMemory(input));
+  ipcMain.handle("mind:snapshot:get", () => runtime.getMindSnapshot());
+  ipcMain.handle("mind:soul:get", () => runtime.getSoul());
+  ipcMain.handle("mind:soul:save", (_, input: { markdown: string }) => runtime.saveSoul(input));
+  ipcMain.handle("mind:persona:get", () => runtime.getPersona());
+  ipcMain.handle("mind:persona:save", (_, input: { markdown: string }) => runtime.savePersona(input));
+  ipcMain.handle("mind:state:patch", (_, input: { patch: Record<string, unknown> }) =>
+    runtime.patchState({
+      patch: input.patch as any
+    })
+  );
+  ipcMain.handle("mind:profile:patch", (_, input: { patch: Record<string, unknown> }) =>
+    runtime.patchProfile({
+      patch: input.patch as any
+    })
+  );
+  ipcMain.handle("kernel:task:trigger", (_, input: { taskType?: "tick-now" | "daily-now" }) =>
+    runtime.triggerKernelTask(input?.taskType === "daily-now" ? "daily-now" : "tick-now")
+  );
 
   ipcMain.handle("status:get", () => runtime.getStatus());
   ipcMain.handle("browse:bili:qr:start", () => runtime.startBilibiliQrAuth());
@@ -59,8 +75,8 @@ export function registerIpcHandlers(): void {
       cookie: payload?.cookie ?? ""
     })
   );
-  ipcMain.handle("background:recall:trigger", () => runtime.triggerRecallTask());
-  ipcMain.handle("background:wander:trigger", () => runtime.triggerWanderTask());
+  ipcMain.handle("topic:recall:trigger", () => runtime.triggerTopicRecall());
+  ipcMain.handle("topic:browse:trigger", () => runtime.triggerTopicBrowse());
   ipcMain.handle("topic-pool:item:delete", (_, payload: { topicId?: string }) =>
     runtime.deleteTopicPoolItem(payload?.topicId ?? "")
   );

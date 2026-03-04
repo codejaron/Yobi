@@ -1,4 +1,5 @@
-import { generateText, streamText, stepCountIs, type ToolSet } from "ai";
+import { readFile } from "node:fs/promises";
+import { streamText, stepCountIs, type ToolSet } from "ai";
 import type { AppConfig, TokenUsageSource } from "@shared/types";
 import type { CharacterStore } from "./character";
 import type { ModelFactory } from "./model-factory";
@@ -7,6 +8,9 @@ import { stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
+import { assembleContext } from "@main/memory-v2/context-assembler";
+import type { StateStore } from "@main/kernel/state-store";
+import { CompanionPaths } from "@main/storage/paths";
 
 export interface ChatReplyStreamListener {
   onThinkingChange?: (state: "start" | "stop") => void;
@@ -38,14 +42,63 @@ function tokenSourceFromChannel(channel: "telegram" | "console" | "qq"): TokenUs
   return "chat:console";
 }
 
-export class ConversationEngine {
-  private turnsSinceRefresh = 0;
+function parseDeltaTag(text: string): {
+  cleanedText: string;
+  delta: Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>>;
+} {
+  const pattern = /<delta\s+([^>]+?)\s*\/>/gi;
+  const matches = Array.from(text.matchAll(pattern));
+  if (matches.length === 0) {
+    return {
+      cleanedText: text,
+      delta: {}
+    };
+  }
 
+  const latest = matches[matches.length - 1]?.[1] ?? "";
+  const attrs = parseDeltaAttributes(latest);
+  return {
+    cleanedText: text.replace(pattern, ""),
+    delta: attrs
+  };
+}
+
+function parseDeltaAttributes(raw: string): Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>> {
+  const output: Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>> = {};
+  const keys: Array<keyof typeof output> = [
+    "mood",
+    "energy",
+    "connection",
+    "curiosity",
+    "confidence",
+    "irritation"
+  ];
+  for (const key of keys) {
+    const matched = new RegExp(`${key}\\s*=\\s*"([+-]?\\d+(?:\\.\\d+)?)"`).exec(raw);
+    if (!matched) {
+      continue;
+    }
+    const value = Number(matched[1]);
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    output[key] = Math.max(-0.2, Math.min(0.2, value));
+  }
+  return output;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export class ConversationEngine {
   constructor(
     private readonly memory: YobiMemory,
     private readonly modelFactory: ModelFactory,
     private readonly toolRegistry: ToolRegistry,
     private readonly characterStore: CharacterStore,
+    private readonly stateStore: StateStore,
+    private readonly paths: CompanionPaths,
     private readonly getConfig: () => AppConfig
   ) {}
 
@@ -60,7 +113,6 @@ export class ConversationEngine {
   }): Promise<string> {
     const config = this.getConfig();
     const providerOptions = resolveOpenAIStoreOption(config);
-    const character = await this.characterStore.getCharacter(config.characterId);
     const normalizedText = input.text.trim();
 
     if (!normalizedText) {
@@ -77,18 +129,36 @@ export class ConversationEngine {
       }
     });
 
-    const recalled = await this.memory.recall({
-      threadId: input.threadId,
-      resourceId: input.resourceId
+    const [soul, persona, profile, facts, episodes] = await Promise.all([
+      readFile(this.paths.soulPath, "utf8").catch(() => ""),
+      readFile(this.paths.personaPath, "utf8").catch(() => ""),
+      this.memory.getProfile(),
+      this.memory.listFacts(),
+      this.memory.listRecentEpisodes(30)
+    ]);
+    const stateSnapshot = this.stateStore.getSnapshot();
+    const buffer = await this.memory.listRecentBufferMessages(config.memory.recentMessages);
+    const assembled = assembleContext({
+      soul: soul.trim(),
+      persona: persona.trim(),
+      stage: stateSnapshot.relationship.stage,
+      state: stateSnapshot,
+      profile,
+      buffer,
+      facts,
+      episodes,
+      maxTokens: Math.min(24_000, Math.max(4_000, config.openclaw.contextTokens || 8_000))
     });
 
+    const character = await this.characterStore.getCharacter(config.characterId);
     const system = [
       character.systemPrompt,
-      `\n用户画像:\n${recalled.workingMemory}`,
-      input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""
+      assembled.system,
+      input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : "",
+      "回复可选在末尾附带 <delta mood=\"+0.05\" energy=\"-0.02\" connection=\"+0.10\"/> 作为状态变化建议。"
     ]
       .filter(Boolean)
-      .join("\n");
+      .join("\n\n");
 
     const messages = await this.memory.mapRecentToModelMessages({
       threadId: input.threadId,
@@ -186,7 +256,9 @@ export class ConversationEngine {
 
     const fallbackReply = "我这次没有生成有效回复，请重试一次。";
     const rawFinalText = trimmedText || fallbackReply;
-    const finalText = stripEmotionTags(rawFinalText).trim() || fallbackReply;
+    const parsedDelta = parseDeltaTag(rawFinalText);
+    const textWithoutDelta = parsedDelta.cleanedText.trim() || fallbackReply;
+    const finalText = stripEmotionTags(textWithoutDelta).trim() || fallbackReply;
 
     await this.memory.rememberMessage({
       threadId: input.threadId,
@@ -198,26 +270,22 @@ export class ConversationEngine {
       }
     });
 
+    this.applyDeltaSuggestion(parsedDelta.delta);
+
     try {
       const totalUsage = await result.totalUsage;
       reportTokenUsage({
         source: tokenSourceFromChannel(input.channel),
         usage: totalUsage,
+        systemText: system,
         inputText: normalizedText,
-        outputText: finalText
+        outputText: textWithoutDelta
       });
     } catch (error) {
       console.warn("[conversation] token usage capture failed:", error);
     }
 
-    this.scheduleWorkingMemoryRefresh({
-      threadId: input.threadId,
-      resourceId: input.resourceId,
-      currentWorkingMemory: recalled.workingMemory,
-      workingMemoryTemplate: character.workingMemoryTemplate ?? recalled.workingMemory
-    });
-
-    return rawFinalText;
+    return textWithoutDelta;
   }
 
   async rememberAssistantMessage(input: {
@@ -226,125 +294,49 @@ export class ConversationEngine {
     resourceId: string;
     threadId: string;
     metadata?: Record<string, unknown>;
-    userTextForWorkingMemory?: string;
   }): Promise<void> {
     const rawText = input.text.trim();
     if (!rawText) {
       return;
     }
-    const normalizedText = stripEmotionTags(rawText).trim() || rawText;
-
+    const finalText = stripEmotionTags(rawText).trim() || rawText;
     await this.memory.rememberMessage({
       threadId: input.threadId,
       resourceId: input.resourceId,
       role: "assistant",
-      text: normalizedText,
+      text: finalText,
       metadata: {
         channel: input.channel,
         ...(input.metadata ?? {})
       }
     });
-
-    const recalled = await this.memory.recall({
-      threadId: input.threadId,
-      resourceId: input.resourceId
-    });
-    const character = await this.characterStore.getCharacter(this.getConfig().characterId);
-
-    this.scheduleWorkingMemoryRefresh({
-      threadId: input.threadId,
-      resourceId: input.resourceId,
-      currentWorkingMemory: recalled.workingMemory,
-      workingMemoryTemplate: character.workingMemoryTemplate ?? recalled.workingMemory
-    });
   }
 
-  private scheduleWorkingMemoryRefresh(input: {
-    threadId: string;
-    resourceId: string;
-    currentWorkingMemory: string;
-    workingMemoryTemplate: string;
-  }): void {
-    this.turnsSinceRefresh += 1;
-
-    const isBlankMemory = input.currentWorkingMemory === input.workingMemoryTemplate;
-    if (!isBlankMemory && this.turnsSinceRefresh < 50) {
+  private applyDeltaSuggestion(
+    delta: Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>>
+  ): void {
+    if (Object.keys(delta).length === 0) {
       return;
     }
-
-    this.turnsSinceRefresh = 0;
-    void this.refreshWorkingMemory(input);
-  }
-
-  private async refreshWorkingMemory(input: {
-    threadId: string;
-    resourceId: string;
-    currentWorkingMemory: string;
-    workingMemoryTemplate: string;
-  }): Promise<void> {
-    try {
-      const historyPage = await this.memory.listHistoryByCursor({
-        threadId: input.threadId,
-        resourceId: input.resourceId,
-        limit: 50
-      });
-      const history = historyPage.items;
-
-      if (history.length === 0) {
-        return;
+    this.stateStore.mutate((state) => {
+      if (typeof delta.mood === "number") {
+        state.emotional.mood = clamp(state.emotional.mood + delta.mood, -1, 1);
       }
-
-      const exchanges = history
-        .map((message) => `${message.role === "user" ? "用户" : "Yobi"}: ${message.text}`)
-        .join("\n");
-
-      const model = this.modelFactory.getChatModel();
-      const systemPrompt = [
-        "你负责维护 Yobi 的工作记忆。这份记忆同时记录用户画像和 Yobi 自身的状态。",
-        "",
-        "更新原则：",
-        "- 有新信息才更新对应字段，没有则保持原内容不变。",
-        "- 「交流风格」要从用户的实际行为推断（消息长度、用词习惯、对吐槽的反应），不要问用户。",
-        "- 「关系阶段」根据互动深度和时间自然演进，不要跳级。新用户默认'新认识'。",
-        "- 「Yobi 自身」要基于对话内容更新 Yobi 的心情、看法和关注点。Yobi 不总是开心的——如果用户冷淡，Yobi 可以记录'有点无聊'；如果聊得投机，可以记录'挺开心'。",
-        "- 「重要记忆」只记录真正重要的事（承诺、里程碑、用户分享的重要经历），不要把每轮闲聊都塞进去。",
-        "- 如果用户纠正了之前的信息，直接更新，不保留旧的错误版本。",
-        "",
-        "输出完整的 markdown，结构必须沿用模板，不添加解释。"
-      ].join("\n");
-      const userPrompt = [
-        `模板结构:\n${input.workingMemoryTemplate}`,
-        `当前工作记忆:\n${input.currentWorkingMemory}`,
-        `最近 ${history.length} 轮对话:\n${exchanges}`,
-        "请返回更新后的完整工作记忆。"
-      ].join("\n\n");
-      const response = await generateText({
-        model,
-        providerOptions: resolveOpenAIStoreOption(this.getConfig()),
-        system: systemPrompt,
-        prompt: userPrompt
-      });
-
-      reportTokenUsage({
-        source: "background:working-memory",
-        usage: response.totalUsage,
-        systemText: systemPrompt,
-        inputText: userPrompt,
-        outputText: response.text
-      });
-
-      const markdown = response.text.trim();
-      if (!markdown) {
-        return;
+      if (typeof delta.energy === "number") {
+        state.emotional.energy = clamp(state.emotional.energy + delta.energy, 0, 1);
       }
-
-      await this.memory.updateWorkingMemoryFromSummary({
-        threadId: input.threadId,
-        resourceId: input.resourceId,
-        markdown
-      });
-    } catch (error) {
-      console.warn("[conversation] working memory refresh skipped:", error);
-    }
+      if (typeof delta.connection === "number") {
+        state.emotional.connection = clamp(state.emotional.connection + delta.connection, 0, 1);
+      }
+      if (typeof delta.curiosity === "number") {
+        state.emotional.curiosity = clamp(state.emotional.curiosity + delta.curiosity, 0, 1);
+      }
+      if (typeof delta.confidence === "number") {
+        state.emotional.confidence = clamp(state.emotional.confidence + delta.confidence, 0, 1);
+      }
+      if (typeof delta.irritation === "number") {
+        state.emotional.irritation = clamp(state.emotional.irritation + delta.irritation, 0, 1);
+      }
+    });
   }
 }

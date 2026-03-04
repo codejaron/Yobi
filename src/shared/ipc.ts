@@ -8,7 +8,9 @@ import type {
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
-  WorkingMemoryDocument
+  KernelStateDocument,
+  MindSnapshot,
+  UserProfile
 } from "./types";
 
 export interface CursorHistoryPage {
@@ -27,8 +29,14 @@ export interface CompanionApi {
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]>;
   clearHistory(): Promise<void>;
 
-  getWorkingMemory(): Promise<WorkingMemoryDocument>;
-  saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument>;
+  getMindSnapshot(): Promise<MindSnapshot>;
+  getSoul(): Promise<{ markdown: string; updatedAt: string }>;
+  saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }>;
+  getPersona(): Promise<{ markdown: string; updatedAt: string }>;
+  savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }>;
+  patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument>;
+  patchProfile(input: { patch: Partial<UserProfile> }): Promise<UserProfile>;
+  triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }>;
 
   getStatus(): Promise<AppStatus>;
   startBilibiliQrAuth(): Promise<{
@@ -48,8 +56,8 @@ export interface CompanionApi {
     message: string;
     authState: BrowseAuthState;
   }>;
-  triggerRecallTask(): Promise<{ accepted: boolean; message: string }>;
-  triggerWanderTask(): Promise<{ accepted: boolean; message: string }>;
+  triggerTopicRecall(): Promise<{ accepted: boolean; message: string }>;
+  triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }>;
   deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }>;
   clearTopicPool(): Promise<{ accepted: boolean; message: string }>;
   openSystemPermissionSettings(

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { WorkingMemoryDocument } from "@shared/types";
+import { useEffect, useMemo, useState } from "react";
+import type { MindSnapshot } from "@shared/types";
 import { Button } from "@renderer/components/ui/button";
 import {
   Card,
@@ -8,117 +8,196 @@ import {
   CardHeader,
   CardTitle
 } from "@renderer/components/ui/card";
-import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { Label } from "@renderer/components/ui/label";
 import { Textarea } from "@renderer/components/ui/textarea";
 
 export function MemoryPage({
-  document,
-  onSave,
-  onRefresh
+  snapshot,
+  onRefresh,
+  onSaveSoul,
+  onSavePersona,
+  onTriggerKernelTask
 }: {
-  document: WorkingMemoryDocument | null;
-  onSave: (markdown: string) => Promise<void>;
+  snapshot: MindSnapshot | null;
   onRefresh: () => Promise<void>;
+  onSaveSoul: (markdown: string) => Promise<void>;
+  onSavePersona: (markdown: string) => Promise<void>;
+  onTriggerKernelTask: (taskType: "tick-now" | "daily-now") => Promise<{ accepted: boolean; message: string }>;
 }) {
-  const [draft, setDraft] = useState(document?.markdown ?? "");
-  const [saving, setSaving] = useState(false);
-  const [viewMode, setViewMode] = useState<"preview" | "edit">("preview");
+  const [soulDraft, setSoulDraft] = useState(snapshot?.soul ?? "");
+  const [personaDraft, setPersonaDraft] = useState(snapshot?.persona ?? "");
+  const [saving, setSaving] = useState<"soul" | "persona" | null>(null);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    setDraft(document?.markdown ?? "");
-  }, [document?.markdown]);
+    setSoulDraft(snapshot?.soul ?? "");
+    setPersonaDraft(snapshot?.persona ?? "");
+  }, [snapshot?.soul, snapshot?.persona]);
+
+  const stateJson = useMemo(
+    () => (snapshot ? JSON.stringify(snapshot.state, null, 2) : "{}"),
+    [snapshot]
+  );
+  const profileJson = useMemo(
+    () => (snapshot ? JSON.stringify(snapshot.profile, null, 2) : "{}"),
+    [snapshot]
+  );
+  const factsJson = useMemo(
+    () => (snapshot ? JSON.stringify(snapshot.recentFacts, null, 2) : "[]"),
+    [snapshot]
+  );
+  const episodesJson = useMemo(
+    () => (snapshot ? JSON.stringify(snapshot.recentEpisodes, null, 2) : "[]"),
+    [snapshot]
+  );
 
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader className="space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="space-y-1.5">
-              <CardTitle>Working Memory</CardTitle>
-              <CardDescription>
-                这里展示并编辑当前工作记忆。内容会直接影响后续对话风格与上下文引用。
-              </CardDescription>
-            </div>
-
-            <div className="inline-flex rounded-full border border-border/70 bg-white/80 p-1">
-              <button
-                type="button"
-                onClick={() => setViewMode("preview")}
-                className={`rounded-full px-3 py-1.5 text-xs transition ${
-                  viewMode === "preview"
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                预览
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("edit")}
-                className={`rounded-full px-3 py-1.5 text-xs transition ${
-                  viewMode === "edit"
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                编辑
-              </button>
-            </div>
-          </div>
+        <CardHeader>
+          <CardTitle>Mind Center</CardTitle>
+          <CardDescription>
+            编辑 SOUL / PERSONA，查看 STATE / PROFILE / FACTS / EPISODES 快照。
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label>{viewMode === "preview" ? "Markdown 预览" : "Markdown 内容"}</Label>
-              <span className="text-xs text-muted-foreground">
-                {viewMode === "preview" ? "实时预览当前草稿" : "切换到预览查看效果"}
-              </span>
-            </div>
-
-            {viewMode === "edit" ? (
-              <Textarea
-                rows={20}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-              />
-            ) : (
-              <div className="min-h-[420px] rounded-xl border border-border/70 bg-white/80 px-4 py-4">
-                {draft.trim().length > 0 ? (
-                  <MarkdownContent variant="memory" markdown={draft} />
-                ) : (
-                  <p className="text-sm text-muted-foreground">暂无内容，切换到编辑模式开始编写。</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={async () => {
-                setSaving(true);
-                try {
-                  await onSave(draft);
-                } finally {
-                  setSaving(false);
-                }
+                setNotice("");
+                const result = await onTriggerKernelTask("tick-now");
+                setNotice(result.message);
+                await onRefresh();
               }}
-              disabled={saving}
+              variant="outline"
             >
-              {saving ? "保存中..." : "保存工作记忆"}
+              触发一次内核 Tick
             </Button>
-
-            <Button variant="outline" onClick={() => void onRefresh()}>
-              重新读取
+            <Button
+              onClick={async () => {
+                setNotice("");
+                const result = await onTriggerKernelTask("daily-now");
+                setNotice(result.message);
+                await onRefresh();
+              }}
+              variant="outline"
+            >
+              触发每日任务
+            </Button>
+            <Button
+              onClick={() => {
+                void onRefresh().then(() => setNotice("已刷新 Mind 快照"));
+              }}
+            >
+              刷新快照
             </Button>
           </div>
-
-          <p className="text-xs text-muted-foreground">
-            最近更新时间：
-            {document?.updatedAt ? new Date(document.updatedAt).toLocaleString() : "-"}
-          </p>
+          {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
         </CardContent>
       </Card>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>SOUL (可编辑)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Textarea rows={16} value={soulDraft} onChange={(event) => setSoulDraft(event.target.value)} />
+            <Button
+              disabled={saving !== null}
+              onClick={async () => {
+                setSaving("soul");
+                try {
+                  await onSaveSoul(soulDraft);
+                  setNotice("SOUL 已保存");
+                  await onRefresh();
+                } finally {
+                  setSaving(null);
+                }
+              }}
+            >
+              {saving === "soul" ? "保存中..." : "保存 SOUL"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>PERSONA (可编辑)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Textarea
+              rows={16}
+              value={personaDraft}
+              onChange={(event) => setPersonaDraft(event.target.value)}
+            />
+            <Button
+              disabled={saving !== null}
+              onClick={async () => {
+                setSaving("persona");
+                try {
+                  await onSavePersona(personaDraft);
+                  setNotice("PERSONA 已保存");
+                  await onRefresh();
+                } finally {
+                  setSaving(null);
+                }
+              }}
+            >
+              {saving === "persona" ? "保存中..." : "保存 PERSONA"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>STATE (只读)</CardTitle>
+          <CardDescription>实时情绪与关系状态。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ReadonlyJson value={stateJson} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>PROFILE (只读)</CardTitle>
+          <CardDescription>用户画像与确认中推断。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ReadonlyJson value={profileJson} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>FACTS (只读)</CardTitle>
+          <CardDescription>最近结构化事实。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ReadonlyJson value={factsJson} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>EPISODES (只读)</CardTitle>
+          <CardDescription>最近情景记忆。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ReadonlyJson value={episodesJson} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ReadonlyJson({ value }: { value: string }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>JSON</Label>
+      <Textarea value={value} rows={16} readOnly className="font-mono text-xs" />
     </div>
   );
 }

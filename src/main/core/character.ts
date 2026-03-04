@@ -1,9 +1,6 @@
 import { promises as fs } from "node:fs";
 import { CompanionPaths } from "@main/storage/paths";
-import {
-  DEFAULT_WORKING_MEMORY_TEMPLATE,
-  type CharacterProfile
-} from "@shared/types";
+import { type CharacterProfile } from "@shared/types";
 
 const DEFAULT_CHARACTER: CharacterProfile = {
   id: "default",
@@ -54,7 +51,6 @@ const DEFAULT_CHARACTER: CharacterProfile = {
 
 ## 语言
 - 默认用中文。如果用户用其他语言跟你说话，跟着切换。`,
-  workingMemoryTemplate: DEFAULT_WORKING_MEMORY_TEMPLATE
 };
 
 export class CharacterStore {
@@ -81,17 +77,12 @@ export class CharacterStore {
     const parsed = JSON.parse(raw) as CharacterProfile;
     return {
       ...DEFAULT_CHARACTER,
-      ...parsed,
-      workingMemoryTemplate: parsed.workingMemoryTemplate || DEFAULT_WORKING_MEMORY_TEMPLATE
+      ...parsed
     };
   }
 
   async saveCharacter(profile: CharacterProfile): Promise<void> {
     const filePath = `${this.paths.charactersDir}/${profile.id}.json`;
-    const normalized: CharacterProfile = {
-      ...profile,
-      workingMemoryTemplate: profile.workingMemoryTemplate || DEFAULT_WORKING_MEMORY_TEMPLATE
-    };
-    await fs.writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+    await fs.writeFile(filePath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
   }
 }

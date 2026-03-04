@@ -25,24 +25,92 @@ export class CompanionPaths {
     return path.join(this.baseDir, "reminders.json");
   }
 
-  get runtimeContextPath(): string {
-    return path.join(this.baseDir, "runtime-context.json");
+  get soulPath(): string {
+    return path.join(this.baseDir, "soul.md");
   }
 
-  get backgroundTaskStatePath(): string {
-    return path.join(this.baseDir, "background-tasks.json");
+  get personaPath(): string {
+    return path.join(this.baseDir, "persona.md");
+  }
+
+  get statePath(): string {
+    return path.join(this.baseDir, "state.json");
+  }
+
+  get runtimeContextPath(): string {
+    return path.join(this.baseDir, "runtime-context.json");
   }
 
   get logsDir(): string {
     return path.join(this.baseDir, "logs");
   }
 
-  get modelsDir(): string {
-    return path.join(this.baseDir, "models");
+  get memoryDir(): string {
+    return path.join(this.baseDir, "memory");
   }
 
-  get yobiDbPath(): string {
-    return path.join(this.baseDir, "yobi.db");
+  get factsPath(): string {
+    return path.join(this.memoryDir, "facts.json");
+  }
+
+  get factsArchivePath(): string {
+    return path.join(this.memoryDir, "facts-archive.json");
+  }
+
+  get profilePath(): string {
+    return path.join(this.memoryDir, "profile.json");
+  }
+
+  get episodesDir(): string {
+    return path.join(this.memoryDir, "episodes");
+  }
+
+  get reflectionQueuePath(): string {
+    return path.join(this.memoryDir, "reflection-queue.json");
+  }
+
+  get reflectionLogPath(): string {
+    return path.join(this.memoryDir, "reflection-log.json");
+  }
+
+  get pendingTasksPath(): string {
+    return path.join(this.memoryDir, "pending-tasks.jsonl");
+  }
+
+  get sessionsDir(): string {
+    return path.join(this.baseDir, "sessions");
+  }
+
+  get mainSessionDir(): string {
+    return path.join(this.sessionsDir, "main");
+  }
+
+  get bufferPath(): string {
+    return path.join(this.mainSessionDir, "buffer.jsonl");
+  }
+
+  get unprocessedPath(): string {
+    return path.join(this.mainSessionDir, "unprocessed.jsonl");
+  }
+
+  get sessionArchiveDir(): string {
+    return path.join(this.mainSessionDir, "archive");
+  }
+
+  get topicsDir(): string {
+    return path.join(this.baseDir, "topics");
+  }
+
+  get topicPoolPath(): string {
+    return path.join(this.topicsDir, "pool.json");
+  }
+
+  get topicInterestProfilePath(): string {
+    return path.join(this.topicsDir, "interest-profile.json");
+  }
+
+  get modelsDir(): string {
+    return path.join(this.baseDir, "models");
   }
 
   get openclawStateDir(): string {
@@ -89,14 +157,25 @@ export class CompanionPaths {
     return path.join(this.tokenStatsDir, "state.json");
   }
 
+  get petBrowserProfileDir(): string {
+    return path.join(this.baseDir, "browser-profile");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.charactersDir, { recursive: true });
+    mkdirSync(this.memoryDir, { recursive: true });
+    mkdirSync(this.episodesDir, { recursive: true });
+    mkdirSync(this.sessionsDir, { recursive: true });
+    mkdirSync(this.mainSessionDir, { recursive: true });
+    mkdirSync(this.sessionArchiveDir, { recursive: true });
+    mkdirSync(this.topicsDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
     mkdirSync(this.openclawStateDir, { recursive: true });
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });
     mkdirSync(this.tokenStatsDir, { recursive: true });
+    mkdirSync(this.petBrowserProfileDir, { recursive: true });
   }
 }

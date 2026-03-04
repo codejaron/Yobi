@@ -41,7 +41,7 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
             tokens: 20,
             estimatedTokens: 0
           },
-          "background:recall": {
+          "background:fact-extraction": {
             tokens: 40,
             estimatedTokens: 20
           }
@@ -136,7 +136,7 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
         totalTokens: 80,
         estimatedTokens: 0,
         bySource: {
-          "background:proactive": {
+          "background:reflection": {
             tokens: 80,
             estimatedTokens: 0
           }

@@ -26,10 +26,6 @@ export function SettingsPage({
   status: AppStatus | null;
   setConfig: (next: AppConfig) => void;
 }) {
-  const observationalProviderOptions = config.providers.map((provider) => ({
-    id: provider.id,
-    label: provider.enabled ? provider.label : `${provider.label}（已停用）`
-  }));
   const clawProviderOptions = config.providers.map((provider) => ({
     id: provider.id,
     label: provider.enabled ? provider.label : `${provider.label}（已停用）`
@@ -215,11 +211,7 @@ export function SettingsPage({
 
       <ProactiveSettingsCard config={config} setConfig={setConfig} />
 
-      <MemorySettingsCard
-        config={config}
-        setConfig={setConfig}
-        observationalProviderOptions={observationalProviderOptions}
-      />
+      <MemorySettingsCard config={config} setConfig={setConfig} />
 
       <OpenClawSettingsCard
         config={config}

@@ -136,7 +136,7 @@ export function TopicPoolPage({
                 setTaskNotice(null);
                 setTriggering("recall");
                 void window.companion
-                  .triggerRecallTask()
+                  .triggerTopicRecall()
                   .then(async (result) => {
                     setTaskNotice({
                       type: result.accepted ? "success" : "error",
@@ -169,7 +169,7 @@ export function TopicPoolPage({
                 setTaskNotice(null);
                 setTriggering("wander");
                 void window.companion
-                  .triggerWanderTask()
+                  .triggerTopicBrowse()
                   .then(async (result) => {
                     setTaskNotice({
                       type: result.accepted ? "success" : "error",

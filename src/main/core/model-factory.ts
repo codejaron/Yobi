@@ -65,13 +65,29 @@ export function createModelForProvider(provider: ProviderConfig, model: string):
 export class ModelFactory {
   constructor(private readonly getConfig: () => AppConfig) {}
 
-  getChatModel(): any {
-    const route = this.getConfig().modelRouting.chat;
-    const provider = this.getConfig().providers.find((candidate) => candidate.id === route.providerId);
-    if (!provider) {
-      throw new Error(`Missing provider for chat route: ${route.providerId}`);
+  private getModelByRoute(routeKey: "chat" | "factExtraction" | "reflection"): any {
+    const routes = this.getConfig().modelRouting;
+    const route = routes[routeKey] ?? routes.chat;
+    if (!route) {
+      throw new Error(`Missing model route: ${routeKey}`);
     }
 
+    const provider = this.getConfig().providers.find((candidate) => candidate.id === route.providerId);
+    if (!provider) {
+      throw new Error(`Missing provider for ${routeKey} route: ${route.providerId}`);
+    }
     return createModelForProvider(provider, route.model);
+  }
+
+  getChatModel(): any {
+    return this.getModelByRoute("chat");
+  }
+
+  getFactExtractionModel(): any {
+    return this.getModelByRoute("factExtraction");
+  }
+
+  getReflectionModel(): any {
+    return this.getModelByRoute("reflection");
   }
 }

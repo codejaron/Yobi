@@ -71,14 +71,25 @@ export function ProvidersPage({
     }
 
     const fallback = providers[0];
+    const normalizeRoute = (route: { providerId: string; model: string } | undefined) => {
+      if (!route) {
+        return route;
+      }
+      if (route.providerId !== providerId) {
+        return route;
+      }
+      return {
+        ...route,
+        providerId: fallback.id
+      };
+    };
     setConfig({
       ...config,
       providers,
       modelRouting: {
-        chat:
-          config.modelRouting.chat.providerId === providerId
-            ? { ...config.modelRouting.chat, providerId: fallback.id }
-            : config.modelRouting.chat
+        chat: normalizeRoute(config.modelRouting.chat) ?? config.modelRouting.chat,
+        factExtraction: normalizeRoute(config.modelRouting.factExtraction),
+        reflection: normalizeRoute(config.modelRouting.reflection)
       }
     });
   };
@@ -213,47 +224,62 @@ export function ProvidersPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>聊天模型路由</CardTitle>
+          <CardTitle>模型路由</CardTitle>
+          <CardDescription>chat / factExtraction / reflection。</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>聊天 Provider</Label>
-            <Select
-              value={config.modelRouting.chat.providerId}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  modelRouting: {
-                    ...config.modelRouting,
-                    chat: {
-                      ...config.modelRouting.chat,
-                      providerId: event.target.value
+        <CardContent className="space-y-4">
+          {(
+            [
+              ["chat", "Chat"],
+              ["factExtraction", "Fact Extraction"],
+              ["reflection", "Reflection"]
+            ] as const
+          ).map(([routeKey, label]) => {
+            const route =
+              config.modelRouting[routeKey] ?? config.modelRouting.chat;
+            return (
+              <div key={routeKey} className="grid gap-3 rounded-lg border border-border/70 p-3 md:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label>{label} Provider</Label>
+                  <Select
+                    value={route.providerId}
+                    onChange={(event) =>
+                      setConfig({
+                        ...config,
+                        modelRouting: {
+                          ...config.modelRouting,
+                          [routeKey]: {
+                            ...route,
+                            providerId: event.target.value
+                          }
+                        }
+                      })
                     }
-                  }
-                })
-              }
-            >
-              {providerOptions}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>聊天模型</Label>
-            <Input
-              value={config.modelRouting.chat.model}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  modelRouting: {
-                    ...config.modelRouting,
-                    chat: {
-                      ...config.modelRouting.chat,
-                      model: event.target.value
+                  >
+                    {providerOptions}
+                  </Select>
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label>{label} Model</Label>
+                  <Input
+                    value={route.model}
+                    onChange={(event) =>
+                      setConfig({
+                        ...config,
+                        modelRouting: {
+                          ...config.modelRouting,
+                          [routeKey]: {
+                            ...route,
+                            model: event.target.value
+                          }
+                        }
+                      })
                     }
-                  }
-                })
-              }
-            />
-          </div>
+                  />
+                </div>
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
     </div>

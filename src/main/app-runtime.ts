@@ -7,12 +7,15 @@ import type {
   ClawHistoryItem,
   CommandApprovalDecision,
   ConsoleRunEventV2,
+  MindSnapshot,
   HistoryMessage,
-  WorkingMemoryDocument
+  KernelStateDocument,
+  UserProfile
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
 import { ReminderStore } from "@main/storage/reminder-store";
+import { readTextFile, writeTextFileAtomic } from "@main/storage/fs";
 import {
   RuntimeContextStore,
   type RuntimeInboundChannel
@@ -22,8 +25,6 @@ import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-
 import { ModelFactory } from "@main/core/model-factory";
 import { YobiMemory } from "@main/memory/setup";
 import { ConversationEngine } from "@main/core/conversation";
-import { ProactiveService } from "@main/services/proactive";
-import { BackgroundTaskService } from "@main/services/background-tasks";
 import { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
 import { TelegramChannel } from "@main/channels/telegram";
 import type { InboundMessage } from "@main/channels/types";
@@ -51,6 +52,9 @@ import { DefaultToolRegistry } from "@main/tools/registry";
 import { TokenStatsStore } from "@main/services/token/token-stats-store";
 import { TokenStatsService } from "@main/services/token/token-stats-service";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
+import { ensureKernelBootstrap } from "@main/kernel/init";
+import { StateStore } from "@main/kernel/state-store";
+import { KernelEngine } from "@main/kernel/engine";
 
 interface HistoryQuery {
   query?: string;
@@ -63,7 +67,6 @@ const PRIMARY_THREAD_ID = "primary-thread";
 
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
-  private static readonly PROACTIVE_DECISION_TIMEOUT_MS = 45_000;
 
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
@@ -76,11 +79,11 @@ export class CompanionRuntime {
 
   private readonly memory = new YobiMemory(
     this.paths,
-    () => this.configStore.getConfig(),
-    () => this.characterStore.getCharacter(this.configStore.getConfig().characterId)
+    () => this.configStore.getConfig()
   );
 
   private readonly modelFactory = new ModelFactory(() => this.configStore.getConfig());
+  private readonly stateStore = new StateStore(this.paths);
   private readonly approvalGuard = new ApprovalGuard();
   private readonly toolRegistry = new DefaultToolRegistry(
     () => this.configStore.getConfig(),
@@ -93,15 +96,11 @@ export class CompanionRuntime {
     this.modelFactory,
     this.toolRegistry,
     this.characterStore,
+    this.stateStore,
+    this.paths,
     () => this.configStore.getConfig()
   );
 
-  private readonly proactive = new ProactiveService(
-    this.memory,
-    this.modelFactory,
-    this.characterStore,
-    () => this.configStore.getConfig()
-  );
   private readonly bilibiliBrowse = new BilibiliBrowseService(
     this.paths,
     this.modelFactory,
@@ -119,18 +118,18 @@ export class CompanionRuntime {
       await this.emitStatus();
     }
   );
-  private readonly backgroundTasks = new BackgroundTaskService(
-    this.modelFactory,
-    this.memory,
-    this.bilibiliBrowse,
-    () => this.configStore.getConfig(),
-    {
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID,
-      statePath: this.paths.backgroundTaskStatePath,
-      onTopicPoolUpdated: () => this.emitStatus()
+  private readonly kernel = new KernelEngine({
+    paths: this.paths,
+    memory: this.memory,
+    modelFactory: this.modelFactory,
+    stateStore: this.stateStore,
+    getConfig: () => this.configStore.getConfig(),
+    resourceId: PRIMARY_RESOURCE_ID,
+    threadId: PRIMARY_THREAD_ID,
+    onProactiveMessage: async ({ message, topicId }) => {
+      await this.handleKernelProactive(message, topicId);
     }
-  );
+  });
 
   private readonly channelRouter = new ChannelRouter(this.conversation);
   private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
@@ -188,6 +187,7 @@ export class CompanionRuntime {
         text,
         source: "claw"
       });
+      await this.kernel.onAssistantMessage();
       await this.emitStatus();
     }
   });
@@ -207,16 +207,18 @@ export class CompanionRuntime {
   private lastProactiveAt: string | null = null;
   private lastInboundChannel: RuntimeInboundChannel | null = null;
   private lastInboundChatId: string | null = null;
-  private silenceTimer: NodeJS.Timeout | null = null;
-  private lastSilenceEvaluatedAt: string | null = null;
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
     setTokenRecorder((event) => this.tokenStatsService.record(event));
     await this.configStore.init();
+    await ensureKernelBootstrap(this.paths);
     await this.reminderStore.init();
     await this.runtimeContextStore.init();
     await this.characterStore.init();
+    await this.stateStore.init();
+    await this.memory.init();
+    await this.kernel.init();
 
     this.registerBuiltinTools();
     await this.mcpManager.init(this.toolRegistry);
@@ -233,13 +235,12 @@ export class CompanionRuntime {
     await this.reminderService.init();
     await this.startTelegram();
     await this.startQQ();
-    this.backgroundTasks.start();
+    this.kernel.start();
 
     this.keepAwake.apply(this.getConfig().background.keepAwake);
     this.petService.syncPetWindow();
     await this.petService.syncGlobalPetPushToTalk();
     this.petService.syncRealtimeVoice();
-    this.startSilenceLoop();
 
     await this.openclawRuntime.start(this.getConfig());
     const openclawStatus = this.openclawRuntime.getStatus();
@@ -256,15 +257,11 @@ export class CompanionRuntime {
 
   async stop(): Promise<void> {
     setTokenRecorder(null);
-
-    if (this.silenceTimer) {
-      clearInterval(this.silenceTimer);
-      this.silenceTimer = null;
-    }
+    await this.memory.dumpUnprocessedBuffer();
 
     this.keepAwake.stop();
     this.petService.stop();
-    this.backgroundTasks.stop();
+    await this.kernel.stop();
     await this.clawChannel.disconnect();
     await this.openclawRuntime.stop();
     this.clawChannel.dispose();
@@ -324,7 +321,7 @@ export class CompanionRuntime {
     this.petService.syncPetWindow();
     await this.petService.syncGlobalPetPushToTalk();
     this.petService.syncRealtimeVoice();
-    this.startSilenceLoop();
+    await this.kernel.runTickNow();
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
     return saved;
@@ -356,19 +353,142 @@ export class CompanionRuntime {
     await this.emitStatus();
   }
 
-  async getWorkingMemory(): Promise<WorkingMemoryDocument> {
-    return this.memory.getWorkingMemory({
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID
-    });
+  async getMindSnapshot(): Promise<MindSnapshot> {
+    const [soul, persona, profile, facts, episodes] = await Promise.all([
+      readTextFile(this.paths.soulPath, ""),
+      readTextFile(this.paths.personaPath, ""),
+      this.memory.getProfile(),
+      this.memory.listFacts(),
+      this.memory.listRecentEpisodes(20)
+    ]);
+
+    return {
+      soul,
+      persona,
+      state: this.stateStore.getSnapshot(),
+      profile,
+      recentFacts: facts.slice(-50),
+      recentEpisodes: episodes.slice(0, 20)
+    };
   }
 
-  async saveWorkingMemory(input: { markdown: string }): Promise<WorkingMemoryDocument> {
-    return this.memory.saveWorkingMemory({
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID,
-      markdown: input.markdown
+  async getSoul(): Promise<{ markdown: string; updatedAt: string }> {
+    return {
+      markdown: await readTextFile(this.paths.soulPath, ""),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
+    const markdown = input.markdown.trim();
+    await writeTextFileAtomic(this.paths.soulPath, `${markdown}\n`);
+    return {
+      markdown,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async getPersona(): Promise<{ markdown: string; updatedAt: string }> {
+    return {
+      markdown: await readTextFile(this.paths.personaPath, ""),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
+    const markdown = input.markdown.trim();
+    await writeTextFileAtomic(this.paths.personaPath, `${markdown}\n`);
+    return {
+      markdown,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument> {
+    const next = this.stateStore.mutate((state) => {
+      const patch = input.patch;
+      if (!patch || typeof patch !== "object") {
+        return;
+      }
+      if (patch.emotional) {
+        state.emotional = {
+          ...state.emotional,
+          ...patch.emotional
+        };
+      }
+      if (patch.relationship) {
+        state.relationship = {
+          ...state.relationship,
+          ...patch.relationship
+        };
+      }
+      if (typeof patch.coldStart === "boolean") {
+        state.coldStart = patch.coldStart;
+      }
+      if (patch.sessionReentry !== undefined) {
+        state.sessionReentry = patch.sessionReentry
+          ? {
+              ...state.sessionReentry,
+              ...patch.sessionReentry
+            }
+          : null;
+      }
     });
+    await this.stateStore.flushIfDirty();
+    return next;
+  }
+
+  async patchProfile(input: { patch: Partial<UserProfile> }): Promise<UserProfile> {
+    const next = await this.memory.getProfileStore().applySemanticPatch((draft) => {
+      const patch = input.patch;
+      if (!patch || typeof patch !== "object") {
+        return;
+      }
+      if (patch.identity) {
+        draft.identity = {
+          ...draft.identity,
+          ...patch.identity
+        };
+      }
+      if (patch.communication) {
+        draft.communication = {
+          ...draft.communication,
+          ...patch.communication
+        };
+      }
+      if (patch.patterns) {
+        draft.patterns = {
+          ...draft.patterns,
+          ...patch.patterns
+        };
+      }
+      if (patch.interaction_notes) {
+        draft.interaction_notes = {
+          ...draft.interaction_notes,
+          ...patch.interaction_notes,
+          trust_areas: {
+            ...draft.interaction_notes.trust_areas,
+            ...(patch.interaction_notes.trust_areas ?? {})
+          }
+        };
+      }
+    });
+    return next;
+  }
+
+  async triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }> {
+    if (taskType === "daily-now") {
+      await this.kernel.runDailyNow();
+      return {
+        accepted: true,
+        message: "已触发内核日常任务检查。"
+      };
+    }
+    await this.kernel.runTickNow();
+    return {
+      accepted: true,
+      message: "已触发一次内核 tick。"
+    };
   }
 
   async getStatus(): Promise<AppStatus> {
@@ -398,14 +518,28 @@ export class CompanionRuntime {
     return result;
   }
 
-  async triggerRecallTask(): Promise<{ accepted: boolean; message: string }> {
-    const result = await this.backgroundTasks.triggerRecallNow();
+  async triggerTopicRecall(): Promise<{ accepted: boolean; message: string }> {
+    await this.kernel.runTickNow();
+    const result = {
+      accepted: true,
+      message: "内核已执行一次即时回想检查。"
+    };
     await this.emitStatus();
     return result;
   }
 
-  async triggerWanderTask(): Promise<{ accepted: boolean; message: string }> {
-    const result = await this.backgroundTasks.triggerWanderNow();
+  async triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }> {
+    const browseResult = await this.bilibiliBrowse.runHeartbeat({
+      forceDigest: true
+    });
+    await this.kernel.runTickNow();
+    const result = {
+      accepted: browseResult.reason !== "error",
+      message:
+        browseResult.reason === "error"
+          ? `浏览任务失败：${browseResult.detail ?? "未知错误"}`
+          : "浏览任务已触发。"
+    };
     await this.emitStatus();
     return result;
   }
@@ -588,7 +722,14 @@ export class CompanionRuntime {
   }
 
   async chatFromPet(text: string): Promise<{ replyText: string }> {
-    return this.petService.chatFromPet(text);
+    await this.recordUserActivity({
+      channel: "console"
+    });
+    const result = await this.petService.chatFromPet(text);
+    if (result.replyText.trim()) {
+      await this.kernel.onAssistantMessage();
+    }
+    return result;
   }
 
   async transcribeVoiceInput(input: {
@@ -713,6 +854,7 @@ export class CompanionRuntime {
         timestamp: new Date().toISOString()
       });
       this.petService.emitPetTalkingReply(visibleReply);
+      await this.kernel.onAssistantMessage();
       await this.emitStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : "处理消息时出现未知错误。";
@@ -840,6 +982,7 @@ export class CompanionRuntime {
           text: visibleReply,
           chatId: inbound.chatId
         });
+        await this.kernel.onAssistantMessage();
       }
     } finally {
       this.pet.emitEvent({
@@ -886,6 +1029,7 @@ export class CompanionRuntime {
           text: visibleReply,
           chatId: inbound.chatId
         });
+        await this.kernel.onAssistantMessage();
       }
     } finally {
       this.pet.emitEvent({
@@ -895,91 +1039,38 @@ export class CompanionRuntime {
     }
   }
 
-  private startSilenceLoop(): void {
-    if (this.silenceTimer) {
-      clearInterval(this.silenceTimer);
-    }
-
-    this.silenceTimer = setInterval(() => {
-      void this.checkSilence();
-    }, 60_000);
+  private loadRuntimeContext(): void {
+    const context = this.runtimeContextStore.getContext();
+    this.lastUserAt = context.lastUserAt;
+    this.lastProactiveAt = context.lastProactiveAt;
+    this.lastInboundChannel = context.lastInboundChannel;
+    this.lastInboundChatId = context.lastInboundChatId;
+    this.kernel.setLastUserMessageAt(this.lastUserAt);
+    this.kernel.setLastProactiveAt(this.lastProactiveAt);
   }
 
-  private async checkSilence(): Promise<void> {
-    const proactiveConfig = this.getConfig().proactive;
-    if (!proactiveConfig.enabled) {
-      this.lastSilenceEvaluatedAt = null;
-      return;
-    }
-
-    const now = Date.now();
-    const heartbeatInterval = Math.max(
-      60_000,
-      this.getConfig().browse.enabled ? this.getConfig().browse.eventCheckIntervalMs : 60_000
-    );
-    if (this.lastSilenceEvaluatedAt) {
-      const lastEvaluatedTime = new Date(this.lastSilenceEvaluatedAt).getTime();
-      if (Number.isFinite(lastEvaluatedTime) && now - lastEvaluatedTime < heartbeatInterval) {
-        return;
-      }
-    }
-
-    const lastUserTime = this.lastUserAt ? new Date(this.lastUserAt).getTime() : 0;
-    const silenceMs =
-      Number.isFinite(lastUserTime) && lastUserTime > 0 ? Math.max(0, now - lastUserTime) : now;
-
-    this.lastSilenceEvaluatedAt = new Date(now).toISOString();
-    try {
-      await this.handleProactive({
-        trigger: {
-          type: "heartbeat",
-          detail: `心跳检查（沉默 ${Math.floor(silenceMs / 60000)} 分钟）`,
-          silenceMs
-        }
-      });
-    } catch (error) {
-      console.warn("[proactive] silence check failed:", error);
-      return;
-    }
-    await this.emitStatus();
-  }
-
-  private async handleProactive(input: {
-    trigger: { type: "heartbeat"; detail: string; silenceMs: number };
+  private async recordUserActivity(input: {
+    channel: RuntimeInboundChannel;
+    chatId?: string;
   }): Promise<void> {
-    if (!this.getConfig().proactive.enabled) {
-      return;
-    }
+    this.lastUserAt = new Date().toISOString();
+    this.lastInboundChannel = input.channel;
+    this.lastInboundChatId = input.chatId?.trim() ? input.chatId.trim() : null;
+    await this.persistRuntimeContext();
+    await this.kernel.onUserMessage(this.lastUserAt);
+  }
 
-    const browseStatus = await this.bilibiliBrowse.getStatus();
-    const decision = await this.withTimeout(
-      this.proactive.evaluate({
-        trigger: input.trigger,
-        resourceId: PRIMARY_RESOURCE_ID,
-        threadId: PRIMARY_THREAD_ID,
-        lastProactiveAt: this.lastProactiveAt,
-        lastUserAt: this.lastUserAt,
-        browseStatus
-      }),
-      CompanionRuntime.PROACTIVE_DECISION_TIMEOUT_MS,
-      "主动消息决策超时"
-    );
+  private async recordProactiveActivity(): Promise<void> {
+    this.lastProactiveAt = new Date().toISOString();
+    await this.persistRuntimeContext();
+    this.kernel.setLastProactiveAt(this.lastProactiveAt);
+  }
 
-    if (!decision.speak || !decision.message) {
-      return;
-    }
-
-    const parsedMessage = extractEmotionTag(decision.message);
-    const proactiveMessage = parsedMessage.cleanedText.trim() || decision.message.trim();
+  private async handleKernelProactive(message: string, topicId?: string): Promise<void> {
+    const parsedMessage = extractEmotionTag(message);
+    const proactiveMessage = parsedMessage.cleanedText.trim() || message.trim();
     if (!proactiveMessage) {
       return;
-    }
-
-    if (decision.kind === "eventShare") {
-      const accepted = await this.bilibiliBrowse.tryConsumeEventShareQuota();
-      if (!accepted) {
-        return;
-      }
     }
 
     if (parsedMessage.emotion) {
@@ -996,12 +1087,12 @@ export class CompanionRuntime {
       text: proactiveMessage,
       metadata: {
         proactive: true,
-        source: "yobi",
-        proactiveKind: decision.kind
+        source: "yobi"
       }
     });
-    if (decision.usedTopicId) {
-      await this.memory.markUsed(decision.usedTopicId);
+    await this.kernel.onAssistantMessage();
+    if (topicId) {
+      await this.memory.markUsed(topicId);
     }
 
     this.consoleChannel.emitExternalAssistantMessage({
@@ -1011,7 +1102,7 @@ export class CompanionRuntime {
 
     const config = this.getConfig();
     if (!config.proactive.localOnly) {
-      await this.pushProactiveToExternalChannel(proactiveMessage);
+      await this.pushToRecentInboundChannel(proactiveMessage);
     }
 
     try {
@@ -1025,14 +1116,13 @@ export class CompanionRuntime {
           retryCount: config.voice.retryCount
         }
       });
-
       this.pet.emitEvent({
         type: "speech",
         audioBase64: audio.toString("base64"),
         mimeType: "audio/mpeg"
       });
     } catch (error) {
-      console.warn("[proactive] local speech failed:", error);
+      console.warn("[kernel] proactive speech failed:", error);
     }
 
     this.pet.emitEvent({
@@ -1040,47 +1130,10 @@ export class CompanionRuntime {
       value: "talking"
     });
     await this.recordProactiveActivity();
+    await this.emitStatus();
   }
 
-  private loadRuntimeContext(): void {
-    const context = this.runtimeContextStore.getContext();
-    this.lastUserAt = context.lastUserAt;
-    this.lastProactiveAt = context.lastProactiveAt;
-    this.lastInboundChannel = context.lastInboundChannel;
-    this.lastInboundChatId = context.lastInboundChatId;
-    this.lastSilenceEvaluatedAt = null;
-  }
-
-  private async recordUserActivity(input: {
-    channel: RuntimeInboundChannel;
-    chatId?: string;
-  }): Promise<void> {
-    this.lastUserAt = new Date().toISOString();
-    this.lastInboundChannel = input.channel;
-    this.lastInboundChatId = input.chatId?.trim() ? input.chatId.trim() : null;
-    this.lastSilenceEvaluatedAt = null;
-    await this.persistRuntimeContext();
-  }
-
-  private async recordProactiveActivity(): Promise<void> {
-    this.lastProactiveAt = new Date().toISOString();
-    await this.persistRuntimeContext();
-  }
-
-  private async persistRuntimeContext(): Promise<void> {
-    try {
-      await this.runtimeContextStore.saveContext({
-        lastProactiveAt: this.lastProactiveAt,
-        lastUserAt: this.lastUserAt,
-        lastInboundChannel: this.lastInboundChannel,
-        lastInboundChatId: this.lastInboundChatId
-      });
-    } catch (error) {
-      console.warn("[runtime] runtime context save failed:", error);
-    }
-  }
-
-  private async pushProactiveToExternalChannel(text: string): Promise<void> {
+  private async pushToRecentInboundChannel(text: string): Promise<void> {
     if (this.lastInboundChannel === "telegram") {
       const configuredChatId = this.getConfig().telegram.chatId.trim();
       const targetChatId = this.lastInboundChatId ?? configuredChatId;
@@ -1095,7 +1148,7 @@ export class CompanionRuntime {
           chatId: targetChatId
         });
       } catch (error) {
-        console.warn("[proactive] telegram push failed:", error);
+        console.warn("[kernel] proactive telegram push failed:", error);
       }
       return;
     }
@@ -1116,7 +1169,20 @@ export class CompanionRuntime {
         chatId: targetChatId
       });
     } catch (error) {
-      console.warn("[proactive] qq push failed:", error);
+      console.warn("[kernel] proactive qq push failed:", error);
+    }
+  }
+
+  private async persistRuntimeContext(): Promise<void> {
+    try {
+      await this.runtimeContextStore.saveContext({
+        lastProactiveAt: this.lastProactiveAt,
+        lastUserAt: this.lastUserAt,
+        lastInboundChannel: this.lastInboundChannel,
+        lastInboundChatId: this.lastInboundChatId
+      });
+    } catch (error) {
+      console.warn("[runtime] runtime context save failed:", error);
     }
   }
 
@@ -1142,7 +1208,8 @@ export class CompanionRuntime {
       openclawStatus: openclawStatus.message,
       browseStatus,
       tokenStats,
-      systemPermissions: this.systemPermissionsService.getSnapshot()
+      systemPermissions: this.systemPermissionsService.getSnapshot(),
+      kernel: this.kernel.getStatus()
     };
   }
 
@@ -1198,10 +1265,11 @@ export class CompanionRuntime {
 
     if (
       JSON.stringify(previousConfig.proactive) !== JSON.stringify(nextConfig.proactive) ||
-      JSON.stringify(previousConfig.browse) !== JSON.stringify(nextConfig.browse)
+      JSON.stringify(previousConfig.browse) !== JSON.stringify(nextConfig.browse) ||
+      JSON.stringify(previousConfig.kernel) !== JSON.stringify(nextConfig.kernel)
     ) {
-      await this.runConfigSideEffect("重置后台话题任务", 4_000, async () => {
-        this.backgroundTasks.start();
+      await this.runConfigSideEffect("刷新内核节拍", 4_000, async () => {
+        await this.kernel.runTickNow();
       });
     }
 
