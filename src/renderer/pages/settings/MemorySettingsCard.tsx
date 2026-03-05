@@ -203,6 +203,80 @@ export function MemorySettingsCard({
           </div>
         </div>
 
+        <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+          <Label>启用窗口情绪信号</Label>
+          <Switch
+            checked={config.kernel.emotionSignals.enabled}
+            onChange={(checked) =>
+              setConfig({
+                ...config,
+                kernel: {
+                  ...config.kernel,
+                  emotionSignals: {
+                    ...config.kernel.emotionSignals,
+                    enabled: checked
+                  }
+                }
+              })
+            }
+          />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>信号全效时间(分钟)</Label>
+            <Input
+              type="number"
+              min={1}
+              max={1440}
+              value={String(config.kernel.emotionSignals.stalenessFullEffectMinutes)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    emotionSignals: {
+                      ...config.kernel.emotionSignals,
+                      stalenessFullEffectMinutes: toInt(
+                        event.target.value,
+                        config.kernel.emotionSignals.stalenessFullEffectMinutes,
+                        1,
+                        1440
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>信号最久生效(小时)</Label>
+            <Input
+              type="number"
+              min={1}
+              max={168}
+              value={String(config.kernel.emotionSignals.stalenessMaxAgeHours)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  kernel: {
+                    ...config.kernel,
+                    emotionSignals: {
+                      ...config.kernel.emotionSignals,
+                      stalenessMaxAgeHours: toInt(
+                        event.target.value,
+                        config.kernel.emotionSignals.stalenessMaxAgeHours,
+                        1,
+                        168
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>关系升级窗口(天)</Label>

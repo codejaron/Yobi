@@ -67,7 +67,7 @@ export class ModelFactory {
 
   private getModelByRoute(routeKey: "chat" | "factExtraction" | "reflection"): any {
     const routes = this.getConfig().modelRouting;
-    const route = routes[routeKey] ?? routes.chat;
+    const route = routes[routeKey];
     if (!route) {
       throw new Error(`Missing model route: ${routeKey}`);
     }

@@ -71,10 +71,7 @@ export function ProvidersPage({
     }
 
     const fallback = providers[0];
-    const normalizeRoute = (route: { providerId: string; model: string } | undefined) => {
-      if (!route) {
-        return route;
-      }
+    const normalizeRoute = (route: { providerId: string; model: string }) => {
       if (route.providerId !== providerId) {
         return route;
       }
@@ -87,7 +84,7 @@ export function ProvidersPage({
       ...config,
       providers,
       modelRouting: {
-        chat: normalizeRoute(config.modelRouting.chat) ?? config.modelRouting.chat,
+        chat: normalizeRoute(config.modelRouting.chat),
         factExtraction: normalizeRoute(config.modelRouting.factExtraction),
         reflection: normalizeRoute(config.modelRouting.reflection)
       }
@@ -235,8 +232,10 @@ export function ProvidersPage({
               ["reflection", "Reflection"]
             ] as const
           ).map(([routeKey, label]) => {
-            const route =
-              config.modelRouting[routeKey] ?? config.modelRouting.chat;
+            const route = config.modelRouting[routeKey];
+            const routeProviderExists = config.providers.some(
+              (provider) => provider.id === route.providerId
+            );
             return (
               <div key={routeKey} className="grid gap-3 rounded-lg border border-border/70 p-3 md:grid-cols-3">
                 <div className="space-y-1.5">
@@ -256,8 +255,18 @@ export function ProvidersPage({
                       })
                     }
                   >
+                    {!routeProviderExists ? (
+                      <option value={route.providerId}>
+                        缺失 Provider（{route.providerId}）
+                      </option>
+                    ) : null}
                     {providerOptions}
                   </Select>
+                  {!routeProviderExists ? (
+                    <p className="text-xs text-destructive">
+                      当前路由引用了不存在的 provider，请重新选择后再保存。
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label>{label} Model</Label>

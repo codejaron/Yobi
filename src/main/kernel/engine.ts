@@ -4,6 +4,7 @@ import { z } from "zod";
 import type {
   AppConfig,
   BufferMessage,
+  EmotionalState,
   KernelStatus,
   ReflectionProposal
 } from "@shared/types";
@@ -15,6 +16,7 @@ import { KernelEventQueue } from "./event-queue";
 import { KernelTaskQueue } from "./task-queue";
 import { StateStore } from "./state-store";
 import {
+  type EmotionalSignals,
   runFactExtraction,
   splitExtractionWindows
 } from "@main/memory-v2/extraction-runner";
@@ -357,7 +359,7 @@ export class KernelEngine {
 
     const existingFacts = this.input.memory.getFactsStore().listAll();
     const profileHint = this.input.memory.getProfileStore().getProfile();
-    const operations = await runFactExtraction({
+    const extractionResult = await runFactExtraction({
       messages,
       existingFacts,
       profileHint,
@@ -365,7 +367,7 @@ export class KernelEngine {
       config: this.input.getConfig(),
       maxOutputTokens: this.input.getConfig().kernel.factExtraction.maxOutputTokens
     });
-    const normalizedOperations = operations.map((operation) => ({
+    const normalizedOperations = extractionResult.operations.map((operation) => ({
       ...operation,
       fact: {
         ...operation.fact,
@@ -373,7 +375,33 @@ export class KernelEngine {
       }
     }));
     await this.input.memory.getFactsStore().applyOperations(normalizedOperations);
+    this.applyEmotionalSignals(extractionResult.emotionalSignals, messages);
     await this.input.memory.markExtractedByRange(sourceRange);
+  }
+
+  private applyEmotionalSignals(
+    signals: EmotionalSignals | undefined,
+    messages: BufferMessage[]
+  ): void {
+    const config = this.input.getConfig().kernel.emotionSignals;
+    if (!config.enabled || !signals) {
+      return;
+    }
+
+    const latestTs = messages[messages.length - 1]?.ts ?? "";
+    const ageScale = computeSignalAgeScale(latestTs, new Date(), config);
+    if (ageScale <= 0) {
+      return;
+    }
+
+    this.input.stateStore.mutate((state) => {
+      state.emotional = applyEmotionalSignalsToState({
+        emotional: state.emotional,
+        signals,
+        config,
+        ageScale
+      });
+    });
   }
 
   private async runDailyEpisodeTask(): Promise<void> {
@@ -651,6 +679,10 @@ function clampRange(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function clampAbsDelta(value: number, maxAbs: number): number {
+  return clampRange(value, -Math.abs(maxAbs), Math.abs(maxAbs));
+}
+
 function normalizeBufferRow(raw: unknown): BufferMessage | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -725,4 +757,69 @@ function computeTargetStage(historyCount: number, connection: number): "stranger
     return "acquaintance";
   }
   return "stranger";
+}
+
+export function computeSignalAgeScale(
+  latestMessageTs: string,
+  now: Date,
+  config: AppConfig["kernel"]["emotionSignals"]
+): number {
+  const latestTs = Number.isFinite(new Date(latestMessageTs).getTime())
+    ? new Date(latestMessageTs).getTime()
+    : now.getTime();
+  const ageMinutes = Math.max(0, (now.getTime() - latestTs) / 60_000);
+  const fullEffect = config.stalenessFullEffectMinutes;
+  const maxAgeMinutes = config.stalenessMaxAgeHours * 60;
+
+  if (ageMinutes <= fullEffect) {
+    return 1;
+  }
+  if (ageMinutes >= maxAgeMinutes) {
+    return 0;
+  }
+  const ratio = (ageMinutes - fullEffect) / Math.max(1, maxAgeMinutes - fullEffect);
+  const scaled = 1 - ratio * (1 - config.stalenessMinScale);
+  return clampRange(scaled, config.stalenessMinScale, 1);
+}
+
+export function applyEmotionalSignalsToState(input: {
+  emotional: EmotionalState;
+  signals: EmotionalSignals;
+  config: AppConfig["kernel"]["emotionSignals"];
+  ageScale: number;
+}): EmotionalState {
+  const scaledDelta = (raw: number): number =>
+    clampAbsDelta(raw * input.ageScale, input.config.windowMaxAbsDelta);
+  const next: EmotionalState = {
+    ...input.emotional
+  };
+
+  const moodDelta =
+    input.signals.user_mood === "positive"
+      ? input.config.moodPositiveStep
+      : input.signals.user_mood === "negative"
+        ? -input.config.moodNegativeStep
+        : 0;
+  next.mood = clampRange(next.mood + scaledDelta(moodDelta), -1, 1);
+
+  const energyDelta = (input.signals.engagement - 0.5) * input.config.energyEngagementScale;
+  next.energy = clamp01(next.energy + scaledDelta(energyDelta));
+
+  next.connection = clamp01(next.connection + scaledDelta(input.signals.trust_delta));
+
+  const curiosityDelta = input.signals.curiosity_trigger ? input.config.curiosityBoost : 0;
+  next.curiosity = clamp01(next.curiosity + scaledDelta(curiosityDelta));
+
+  const confidenceDelta = input.signals.friction
+    ? -input.config.confidenceDropOnFriction
+    : input.signals.engagement >= input.config.minPositiveEngagement &&
+        input.signals.trust_delta >= input.config.minPositiveTrustDelta
+      ? input.config.confidenceGain
+      : 0;
+  next.confidence = clamp01(next.confidence + scaledDelta(confidenceDelta));
+
+  const irritationDelta = input.signals.friction ? input.config.irritationBoostOnFriction : 0;
+  next.irritation = clamp01(next.irritation + scaledDelta(irritationDelta));
+
+  return next;
 }

@@ -115,6 +115,20 @@ function migrateRawConfig(raw: unknown): unknown {
   return mergeWithDefaults(DEFAULT_CONFIG, migratedRaw);
 }
 
+function assertRouteProvidersExist(config: AppConfig): void {
+  const providerIds = new Set(config.providers.map((provider) => provider.id));
+  const routes: Array<keyof AppConfig["modelRouting"]> = ["chat", "factExtraction", "reflection"];
+  for (const routeKey of routes) {
+    const route = config.modelRouting[routeKey];
+    if (!route) {
+      throw new Error(`Missing model route config: ${routeKey}`);
+    }
+    if (!providerIds.has(route.providerId)) {
+      throw new Error(`Missing provider for ${routeKey} route: ${route.providerId}`);
+    }
+  }
+}
+
 export class ConfigStore {
   private cached: AppConfig = DEFAULT_CONFIG;
 
@@ -134,7 +148,16 @@ export class ConfigStore {
     const migrated = migrateRawConfig(raw);
     const parsed = appConfigSchema.safeParse(migrated);
     if (parsed.success) {
-      this.cached = this.prepareConfig(parsed.data);
+      const prepared = this.prepareConfig(parsed.data);
+      try {
+        assertRouteProvidersExist(prepared);
+      } catch (error) {
+        console.warn(
+          "[config] model route provider validation failed during init, keep runtime alive:",
+          error
+        );
+      }
+      this.cached = prepared;
       await writeJsonFile(this.paths.configPath, this.cached);
       return;
     }
@@ -149,7 +172,9 @@ export class ConfigStore {
 
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
     const parsed = appConfigSchema.parse(nextConfig);
-    this.cached = this.prepareConfig(parsed);
+    const prepared = this.prepareConfig(parsed);
+    assertRouteProvidersExist(prepared);
+    this.cached = prepared;
     await writeJsonFile(this.paths.configPath, this.cached);
     return this.cached;
   }

@@ -118,6 +118,26 @@ const kernelFactExtractionSchema = z
   })
   .strict();
 
+const kernelEmotionSignalsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    deltaScale: z.number().min(0).max(1).default(0.4),
+    moodPositiveStep: z.number().min(0).max(0.5).default(0.12),
+    moodNegativeStep: z.number().min(0).max(0.5).default(0.08),
+    energyEngagementScale: z.number().min(0).max(0.5).default(0.1),
+    curiosityBoost: z.number().min(0).max(0.5).default(0.15),
+    confidenceGain: z.number().min(0).max(0.2).default(0.02),
+    confidenceDropOnFriction: z.number().min(0).max(0.5).default(0.1),
+    irritationBoostOnFriction: z.number().min(0).max(0.5).default(0.12),
+    minPositiveEngagement: z.number().min(0).max(1).default(0.6),
+    minPositiveTrustDelta: z.number().min(0).max(0.3).default(0.03),
+    windowMaxAbsDelta: z.number().min(0.01).max(1).default(0.2),
+    stalenessFullEffectMinutes: z.number().int().min(1).max(1440).default(30),
+    stalenessMaxAgeHours: z.number().int().min(1).max(168).default(24),
+    stalenessMinScale: z.number().min(0).max(1).default(0.15)
+  })
+  .strict();
+
 const kernelSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -142,6 +162,23 @@ const kernelSchema = z
     factExtraction: kernelFactExtractionSchema.default({
       maxInputTokens: 3000,
       maxOutputTokens: 800
+    }),
+    emotionSignals: kernelEmotionSignalsSchema.default({
+      enabled: true,
+      deltaScale: 0.4,
+      moodPositiveStep: 0.12,
+      moodNegativeStep: 0.08,
+      energyEngagementScale: 0.1,
+      curiosityBoost: 0.15,
+      confidenceGain: 0.02,
+      confidenceDropOnFriction: 0.1,
+      irritationBoostOnFriction: 0.12,
+      minPositiveEngagement: 0.6,
+      minPositiveTrustDelta: 0.03,
+      windowMaxAbsDelta: 0.2,
+      stalenessFullEffectMinutes: 30,
+      stalenessMaxAgeHours: 24,
+      stalenessMinScale: 0.15
     }),
     sessionReentryGapHours: z.number().int().min(1).max(168).default(6),
     dailyTaskHour: z.number().int().min(0).max(23).default(3)
@@ -174,8 +211,8 @@ export const appConfigSchema = z
     modelRouting: z
       .object({
         chat: modelRouteSchema,
-        factExtraction: modelRouteSchema.optional(),
-        reflection: modelRouteSchema.optional()
+        factExtraction: modelRouteSchema,
+        reflection: modelRouteSchema
       })
       .strict(),
     voice: z
@@ -277,6 +314,23 @@ export const appConfigSchema = z
       factExtraction: {
         maxInputTokens: 3000,
         maxOutputTokens: 800
+      },
+      emotionSignals: {
+        enabled: true,
+        deltaScale: 0.4,
+        moodPositiveStep: 0.12,
+        moodNegativeStep: 0.08,
+        energyEngagementScale: 0.1,
+        curiosityBoost: 0.15,
+        confidenceGain: 0.02,
+        confidenceDropOnFriction: 0.1,
+        irritationBoostOnFriction: 0.12,
+        minPositiveEngagement: 0.6,
+        minPositiveTrustDelta: 0.03,
+        windowMaxAbsDelta: 0.2,
+        stalenessFullEffectMinutes: 30,
+        stalenessMaxAgeHours: 24,
+        stalenessMinScale: 0.15
       },
       sessionReentryGapHours: 6,
       dailyTaskHour: 3
@@ -1012,6 +1066,23 @@ export const DEFAULT_CONFIG: AppConfig = {
     factExtraction: {
       maxInputTokens: 3000,
       maxOutputTokens: 800
+    },
+    emotionSignals: {
+      enabled: true,
+      deltaScale: 0.4,
+      moodPositiveStep: 0.12,
+      moodNegativeStep: 0.08,
+      energyEngagementScale: 0.1,
+      curiosityBoost: 0.15,
+      confidenceGain: 0.02,
+      confidenceDropOnFriction: 0.1,
+      irritationBoostOnFriction: 0.12,
+      minPositiveEngagement: 0.6,
+      minPositiveTrustDelta: 0.03,
+      windowMaxAbsDelta: 0.2,
+      stalenessFullEffectMinutes: 30,
+      stalenessMaxAgeHours: 24,
+      stalenessMinScale: 0.15
     },
     sessionReentryGapHours: 6,
     dailyTaskHour: 3

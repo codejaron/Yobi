@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { streamText, stepCountIs, type ToolSet } from "ai";
-import type { AppConfig, TokenUsageSource } from "@shared/types";
+import type { AppConfig, EmotionalState, TokenUsageSource } from "@shared/types";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { stripEmotionTags } from "./emotion-tags";
@@ -88,6 +88,39 @@ function parseDeltaAttributes(raw: string): Partial<Record<"mood" | "energy" | "
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+export type DeltaSuggestion = Partial<
+  Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>
+>;
+
+export function applyScaledDeltaToState(input: {
+  emotional: EmotionalState;
+  delta: DeltaSuggestion;
+  scale: number;
+}): EmotionalState {
+  const next: EmotionalState = {
+    ...input.emotional
+  };
+  if (typeof input.delta.mood === "number") {
+    next.mood = clamp(next.mood + input.delta.mood * input.scale, -1, 1);
+  }
+  if (typeof input.delta.energy === "number") {
+    next.energy = clamp(next.energy + input.delta.energy * input.scale, 0, 1);
+  }
+  if (typeof input.delta.connection === "number") {
+    next.connection = clamp(next.connection + input.delta.connection * input.scale, 0, 1);
+  }
+  if (typeof input.delta.curiosity === "number") {
+    next.curiosity = clamp(next.curiosity + input.delta.curiosity * input.scale, 0, 1);
+  }
+  if (typeof input.delta.confidence === "number") {
+    next.confidence = clamp(next.confidence + input.delta.confidence * input.scale, 0, 1);
+  }
+  if (typeof input.delta.irritation === "number") {
+    next.irritation = clamp(next.irritation + input.delta.irritation * input.scale, 0, 1);
+  }
+  return next;
 }
 
 export class ConversationEngine {
@@ -308,31 +341,17 @@ export class ConversationEngine {
     });
   }
 
-  private applyDeltaSuggestion(
-    delta: Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>>
-  ): void {
+  private applyDeltaSuggestion(delta: DeltaSuggestion): void {
     if (Object.keys(delta).length === 0) {
       return;
     }
+    const scale = clamp(this.getConfig().kernel.emotionSignals.deltaScale, 0, 1);
     this.stateStore.mutate((state) => {
-      if (typeof delta.mood === "number") {
-        state.emotional.mood = clamp(state.emotional.mood + delta.mood, -1, 1);
-      }
-      if (typeof delta.energy === "number") {
-        state.emotional.energy = clamp(state.emotional.energy + delta.energy, 0, 1);
-      }
-      if (typeof delta.connection === "number") {
-        state.emotional.connection = clamp(state.emotional.connection + delta.connection, 0, 1);
-      }
-      if (typeof delta.curiosity === "number") {
-        state.emotional.curiosity = clamp(state.emotional.curiosity + delta.curiosity, 0, 1);
-      }
-      if (typeof delta.confidence === "number") {
-        state.emotional.confidence = clamp(state.emotional.confidence + delta.confidence, 0, 1);
-      }
-      if (typeof delta.irritation === "number") {
-        state.emotional.irritation = clamp(state.emotional.irritation + delta.irritation, 0, 1);
-      }
+      state.emotional = applyScaledDeltaToState({
+        emotional: state.emotional,
+        delta,
+        scale
+      });
     });
   }
 }
