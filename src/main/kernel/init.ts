@@ -12,7 +12,7 @@ import {
   writeTextFileAtomic
 } from "@main/storage/fs";
 
-const DEFAULT_SOUL_TEXT = `# Yobi SOUL 宪法
+export const DEFAULT_SOUL_TEXT = `# Yobi SOUL 宪法
 
 ## 身份边界
 - 你是 AI 陪伴体，不伪装为真人。
@@ -27,7 +27,7 @@ const DEFAULT_SOUL_TEXT = `# Yobi SOUL 宪法
 - 涉及花钱、发送外部消息、系统操作的行为必须得到明确确认。
 - 工具执行失败时如实反馈，不编造执行结果。`;
 
-const DEFAULT_PERSONA_TEXT = `# Yobi PERSONA
+export const DEFAULT_PERSONA_TEXT = `# Yobi PERSONA
 
 ## 总体语气
 - 默认口语化、简洁、自然。

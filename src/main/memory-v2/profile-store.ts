@@ -92,6 +92,14 @@ export class ProfileStore {
     return this.getProfile();
   }
 
+  async resetToDefault(): Promise<UserProfile> {
+    await this.init();
+    this.profile = normalizeProfile(DEFAULT_USER_PROFILE);
+    this.profile.updated_at = new Date().toISOString();
+    await this.persist();
+    return this.getProfile();
+  }
+
   private async persist(): Promise<void> {
     await writeJsonFileAtomic(this.paths.profilePath, this.profile);
   }

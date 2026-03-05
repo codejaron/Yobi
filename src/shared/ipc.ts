@@ -32,6 +32,9 @@ export interface CompanionApi {
   savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }>;
   patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument>;
   patchProfile(input: { patch: Partial<UserProfile> }): Promise<UserProfile>;
+  resetMindSection(input: {
+    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+  }): Promise<{ accepted: boolean; message: string }>;
   triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }>;
 
   getStatus(): Promise<AppStatus>;

@@ -3,6 +3,80 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 
+type JsonRecord = Record<string, unknown>;
+
+function isPlainRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function downgradeDeveloperRoleEntries(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  let changed = false;
+  const mapped = value.map((item) => {
+    if (!isPlainRecord(item) || item.role !== "developer") {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      role: "system"
+    };
+  });
+
+  return changed ? mapped : value;
+}
+
+function rewriteCustomOpenAIRequestBody(body: RequestInit["body"]): RequestInit["body"] {
+  if (typeof body !== "string") {
+    return body;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
+  }
+
+  if (!isPlainRecord(parsed)) {
+    return body;
+  }
+
+  const nextMessages = downgradeDeveloperRoleEntries(parsed.messages);
+  const nextInput = downgradeDeveloperRoleEntries(parsed.input);
+  if (nextMessages === parsed.messages && nextInput === parsed.input) {
+    return body;
+  }
+
+  return JSON.stringify({
+    ...parsed,
+    messages: nextMessages,
+    input: nextInput
+  });
+}
+
+function createCustomOpenAICompatFetch(baseFetch: typeof fetch = fetch): typeof fetch {
+  return async (input, init) => {
+    if (!init) {
+      return baseFetch(input);
+    }
+
+    const rewrittenBody = rewriteCustomOpenAIRequestBody(init.body);
+    if (rewrittenBody === init.body) {
+      return baseFetch(input, init);
+    }
+
+    return baseFetch(input, {
+      ...init,
+      body: rewrittenBody
+    });
+  };
+}
+
 function normalizeCustomOpenAIBaseUrl(raw: string): string {
   const input = raw.trim();
   if (!input) {
@@ -50,7 +124,8 @@ export function createModelForProvider(provider: ProviderConfig, model: string):
     const normalizedBaseUrl = normalizeCustomOpenAIBaseUrl(provider.baseUrl);
     const client = createOpenAI({
       apiKey: provider.apiKey,
-      baseURL: normalizedBaseUrl
+      baseURL: normalizedBaseUrl,
+      fetch: createCustomOpenAICompatFetch()
     });
     return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
   }

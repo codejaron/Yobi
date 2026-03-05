@@ -16,17 +16,24 @@ export function MemoryPage({
   onRefresh,
   onSaveSoul,
   onSavePersona,
-  onTriggerKernelTask
+  onTriggerKernelTask,
+  onResetMindSection
 }: {
   snapshot: MindSnapshot | null;
   onRefresh: () => Promise<void>;
   onSaveSoul: (markdown: string) => Promise<void>;
   onSavePersona: (markdown: string) => Promise<void>;
   onTriggerKernelTask: (taskType: "tick-now" | "daily-now") => Promise<{ accepted: boolean; message: string }>;
+  onResetMindSection: (input: {
+    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+  }) => Promise<{ accepted: boolean; message: string }>;
 }) {
   const [soulDraft, setSoulDraft] = useState(snapshot?.soul ?? "");
   const [personaDraft, setPersonaDraft] = useState(snapshot?.persona ?? "");
   const [saving, setSaving] = useState<"soul" | "persona" | null>(null);
+  const [resetting, setResetting] = useState<
+    "soul" | "persona" | "state" | "profile" | "facts" | "episodes" | null
+  >(null);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -50,6 +57,26 @@ export function MemoryPage({
     () => (snapshot ? JSON.stringify(snapshot.recentEpisodes, null, 2) : "[]"),
     [snapshot]
   );
+
+  const resetSection = async (
+    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes",
+    label: string
+  ) => {
+    const ok = window.confirm(`确认${label}吗？`);
+    if (!ok) {
+      return;
+    }
+    setResetting(section);
+    try {
+      const result = await onResetMindSection({
+        section
+      });
+      setNotice(result.message);
+      await onRefresh();
+    } finally {
+      setResetting(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -103,21 +130,30 @@ export function MemoryPage({
           </CardHeader>
           <CardContent className="space-y-2">
             <Textarea rows={16} value={soulDraft} onChange={(event) => setSoulDraft(event.target.value)} />
-            <Button
-              disabled={saving !== null}
-              onClick={async () => {
-                setSaving("soul");
-                try {
-                  await onSaveSoul(soulDraft);
-                  setNotice("SOUL 已保存");
-                  await onRefresh();
-                } finally {
-                  setSaving(null);
-                }
-              }}
-            >
-              {saving === "soul" ? "保存中..." : "保存 SOUL"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                disabled={saving !== null || resetting !== null}
+                onClick={async () => {
+                  setSaving("soul");
+                  try {
+                    await onSaveSoul(soulDraft);
+                    setNotice("SOUL 已保存");
+                    await onRefresh();
+                  } finally {
+                    setSaving(null);
+                  }
+                }}
+              >
+                {saving === "soul" ? "保存中..." : "保存 SOUL"}
+              </Button>
+              <Button
+                variant="outline"
+                disabled={saving !== null || resetting !== null}
+                onClick={() => void resetSection("soul", "恢复 SOUL 默认内容")}
+              >
+                {resetting === "soul" ? "处理中..." : "恢复默认"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -131,29 +167,46 @@ export function MemoryPage({
               value={personaDraft}
               onChange={(event) => setPersonaDraft(event.target.value)}
             />
-            <Button
-              disabled={saving !== null}
-              onClick={async () => {
-                setSaving("persona");
-                try {
-                  await onSavePersona(personaDraft);
-                  setNotice("PERSONA 已保存");
-                  await onRefresh();
-                } finally {
-                  setSaving(null);
-                }
-              }}
-            >
-              {saving === "persona" ? "保存中..." : "保存 PERSONA"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                disabled={saving !== null || resetting !== null}
+                onClick={async () => {
+                  setSaving("persona");
+                  try {
+                    await onSavePersona(personaDraft);
+                    setNotice("PERSONA 已保存");
+                    await onRefresh();
+                  } finally {
+                    setSaving(null);
+                  }
+                }}
+              >
+                {saving === "persona" ? "保存中..." : "保存 PERSONA"}
+              </Button>
+              <Button
+                variant="outline"
+                disabled={saving !== null || resetting !== null}
+                onClick={() => void resetSection("persona", "恢复 PERSONA 默认内容")}
+              >
+                {resetting === "persona" ? "处理中..." : "恢复默认"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>STATE (只读)</CardTitle>
           <CardDescription>实时情绪与关系状态。</CardDescription>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={saving !== null || resetting !== null}
+            onClick={() => void resetSection("state", "重置 STATE")}
+          >
+            {resetting === "state" ? "处理中..." : "重置"}
+          </Button>
         </CardHeader>
         <CardContent>
           <ReadonlyJson value={stateJson} />
@@ -161,9 +214,17 @@ export function MemoryPage({
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>PROFILE (只读)</CardTitle>
           <CardDescription>用户画像与确认中推断。</CardDescription>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={saving !== null || resetting !== null}
+            onClick={() => void resetSection("profile", "重置 PROFILE")}
+          >
+            {resetting === "profile" ? "处理中..." : "重置"}
+          </Button>
         </CardHeader>
         <CardContent>
           <ReadonlyJson value={profileJson} />
@@ -171,9 +232,17 @@ export function MemoryPage({
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>FACTS (只读)</CardTitle>
           <CardDescription>最近结构化事实。</CardDescription>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={saving !== null || resetting !== null}
+            onClick={() => void resetSection("facts", "清空 FACTS 与归档")}
+          >
+            {resetting === "facts" ? "处理中..." : "清空"}
+          </Button>
         </CardHeader>
         <CardContent>
           <ReadonlyJson value={factsJson} />
@@ -181,9 +250,17 @@ export function MemoryPage({
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>EPISODES (只读)</CardTitle>
           <CardDescription>最近情景记忆。</CardDescription>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={saving !== null || resetting !== null}
+            onClick={() => void resetSection("episodes", "清空 EPISODES")}
+          >
+            {resetting === "episodes" ? "处理中..." : "清空"}
+          </Button>
         </CardHeader>
         <CardContent>
           <ReadonlyJson value={episodesJson} />

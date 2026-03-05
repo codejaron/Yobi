@@ -166,6 +166,13 @@ export class FactsStore {
     };
   }
 
+  async clearAll(): Promise<void> {
+    await this.init();
+    this.activeFacts = [];
+    this.archiveFacts = [];
+    await this.persist();
+  }
+
   private findLatest(entity: string, key: string): Fact | null {
     const matches = this.activeFacts
       .filter((fact) => fact.entity === entity && fact.key === key && fact.superseded_by === null)

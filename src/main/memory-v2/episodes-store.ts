@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Episode } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { fileExists, readJsonFile, writeJsonFileAtomic } from "@main/storage/fs";
+import { promises as fs } from "node:fs";
 
 export interface EpisodeInput {
   date: string;
@@ -51,6 +52,14 @@ export class EpisodesStore {
   async saveDailyEpisodes(date: string, episodes: Episode[]): Promise<void> {
     const targetPath = path.join(this.paths.episodesDir, `${date}.json`);
     await writeJsonFileAtomic(targetPath, episodes.map((episode) => normalizeEpisode(episode)).filter((item): item is Episode => item !== null));
+  }
+
+  async clearAll(): Promise<number> {
+    const files = await this.listEpisodeFiles();
+    for (const file of files) {
+      await fs.unlink(path.join(this.paths.episodesDir, file));
+    }
+    return files.length;
   }
 
   buildEpisode(input: EpisodeInput): Episode {

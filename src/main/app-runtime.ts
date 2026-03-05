@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { BrowserWindow, shell } from "electron";
-import type {
-  AppConfig,
-  AppStatus,
-  ClawEvent,
-  ClawHistoryItem,
-  CommandApprovalDecision,
-  ConsoleRunEventV2,
-  MindSnapshot,
-  HistoryMessage,
-  KernelStateDocument,
-  UserProfile
+import {
+  DEFAULT_KERNEL_STATE,
+  type AppConfig,
+  type AppStatus,
+  type ClawEvent,
+  type ClawHistoryItem,
+  type CommandApprovalDecision,
+  type ConsoleRunEventV2,
+  type MindSnapshot,
+  type HistoryMessage,
+  type KernelStateDocument,
+  type UserProfile
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
@@ -51,7 +52,11 @@ import { DefaultToolRegistry } from "@main/tools/registry";
 import { TokenStatsStore } from "@main/services/token/token-stats-store";
 import { TokenStatsService } from "@main/services/token/token-stats-service";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
-import { ensureKernelBootstrap } from "@main/kernel/init";
+import {
+  DEFAULT_PERSONA_TEXT,
+  DEFAULT_SOUL_TEXT,
+  ensureKernelBootstrap
+} from "@main/kernel/init";
 import { StateStore } from "@main/kernel/state-store";
 import { KernelEngine } from "@main/kernel/engine";
 
@@ -463,6 +468,71 @@ export class CompanionRuntime {
       }
     });
     return next;
+  }
+
+  async resetMindSection(input: {
+    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+  }): Promise<{ accepted: boolean; message: string }> {
+    const section = input.section;
+    if (section === "soul") {
+      await writeTextFileAtomic(this.paths.soulPath, `${DEFAULT_SOUL_TEXT.trim()}\n`);
+      return {
+        accepted: true,
+        message: "SOUL 已恢复默认。"
+      };
+    }
+
+    if (section === "persona") {
+      await writeTextFileAtomic(this.paths.personaPath, `${DEFAULT_PERSONA_TEXT.trim()}\n`);
+      return {
+        accepted: true,
+        message: "PERSONA 已恢复默认。"
+      };
+    }
+
+    if (section === "state") {
+      this.stateStore.mutate((state) => {
+        state.emotional = {
+          ...DEFAULT_KERNEL_STATE.emotional
+        };
+        state.relationship = {
+          ...DEFAULT_KERNEL_STATE.relationship
+        };
+        state.coldStart = DEFAULT_KERNEL_STATE.coldStart;
+        state.sessionReentry = DEFAULT_KERNEL_STATE.sessionReentry
+          ? {
+              ...DEFAULT_KERNEL_STATE.sessionReentry
+            }
+          : null;
+      });
+      await this.stateStore.flushIfDirty();
+      return {
+        accepted: true,
+        message: "STATE 已恢复默认。"
+      };
+    }
+
+    if (section === "profile") {
+      await this.memory.getProfileStore().resetToDefault();
+      return {
+        accepted: true,
+        message: "PROFILE 已恢复默认。"
+      };
+    }
+
+    if (section === "facts") {
+      await this.memory.getFactsStore().clearAll();
+      return {
+        accepted: true,
+        message: "FACTS 与归档已清空。"
+      };
+    }
+
+    const removed = await this.memory.getEpisodesStore().clearAll();
+    return {
+      accepted: true,
+      message: `EPISODES 已清空（${removed} 个文件）。`
+    };
   }
 
   async triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }> {

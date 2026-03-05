@@ -47,6 +47,11 @@ const api: CompanionApi = {
   patchProfile(input: { patch: Partial<UserProfile> }) {
     return ipcRenderer.invoke("mind:profile:patch", input);
   },
+  resetMindSection(input: {
+    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+  }) {
+    return ipcRenderer.invoke("mind:section:reset", input);
+  },
   triggerKernelTask(taskType: "tick-now" | "daily-now") {
     return ipcRenderer.invoke("kernel:task:trigger", {
       taskType

@@ -55,6 +55,18 @@ export function registerIpcHandlers(): void {
       patch: input.patch as any
     })
   );
+  ipcMain.handle(
+    "mind:section:reset",
+    (
+      _,
+      input: {
+        section?: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+      }
+    ) =>
+      runtime.resetMindSection({
+        section: input?.section ?? "state"
+      })
+  );
   ipcMain.handle("kernel:task:trigger", (_, input: { taskType?: "tick-now" | "daily-now" }) =>
     runtime.triggerKernelTask(input?.taskType === "daily-now" ? "daily-now" : "tick-now")
   );

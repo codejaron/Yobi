@@ -169,6 +169,11 @@ export default function App() {
             await refreshMindSnapshot();
             setNotice("PERSONA 已更新");
           }}
+          onResetMindSection={async (input) => {
+            const result = await window.companion.resetMindSection(input);
+            await refreshMindSnapshot();
+            return result;
+          }}
           onTriggerKernelTask={async (taskType) => {
             const result = await window.companion.triggerKernelTask(taskType);
             await refreshMindSnapshot();
