@@ -7,6 +7,9 @@ import {
   type QQGatewayReadyEvent
 } from "./qq-types";
 import type { QQAuthManager } from "./qq-auth";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 const GATEWAY_ENDPOINT = "https://api.sgroup.qq.com/gateway";
 const RECONNECT_DELAY_MS = 5_000;
@@ -165,7 +168,7 @@ export class QQGateway {
         if (version !== this.socketVersion || this.destroyed) {
           return;
         }
-        console.warn("[qq-gateway] websocket error:", error);
+        logger.warn("qq-gateway", "websocket-error", undefined, error);
       });
     } catch (error) {
       this.connected = false;
@@ -292,7 +295,7 @@ export class QQGateway {
 
     if (payload.t === "C2C_MESSAGE_CREATE" && payload.d) {
       void Promise.resolve(this.opts.onC2CMessage(payload.d as QQC2CMessageEvent)).catch((error) => {
-        console.warn("[qq-gateway] message handler failed:", error);
+        logger.warn("qq-gateway", "message-handler-failed", undefined, error);
       });
     }
   }

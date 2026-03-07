@@ -2,6 +2,9 @@ import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import type { QQC2CMessageEvent, QQChannelConfig, QQSendC2CMessageBody } from "./qq-types";
 import { QQAuthManager } from "./qq-auth";
 import { QQGateway } from "./qq-gateway";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 const API_BASE = "https://api.sgroup.qq.com";
 const REPLY_WINDOW_TTL_MS = 55 * 60 * 1000;
@@ -30,10 +33,10 @@ export class QQChannel implements ChatChannel {
       auth: this.auth,
       onC2CMessage: (event) => this.handleC2CMessage(event),
       onConnected: () => {
-        console.log("[qq] gateway connected");
+        logger.info("qq", "gateway-connected");
       },
       onDisconnected: (reason) => {
-        console.warn("[qq] gateway disconnected:", reason);
+        logger.warn("qq", "gateway-disconnected", { reason });
       }
     });
   }
@@ -42,7 +45,7 @@ export class QQChannel implements ChatChannel {
     this.onMessage = onMessage;
     this.startCleanupLoop();
     await this.gateway.connect().catch((error) => {
-      console.warn("[qq] initial connect failed, waiting for reconnect:", error);
+      logger.warn("qq", "initial-connect-failed", undefined, error);
     });
   }
 
@@ -58,7 +61,7 @@ export class QQChannel implements ChatChannel {
 
     const window = this.replyWindows.get(chatId);
     if (!window || Date.now() > window.expiresAt) {
-      console.warn("[qq] no valid passive reply window for user:", chatId);
+      logger.warn("qq", "missing-passive-reply-window", { chatId });
       return;
     }
 
@@ -81,7 +84,7 @@ export class QQChannel implements ChatChannel {
 
     if (!response.ok) {
       const detail = await response.text();
-      console.error("[qq] send message failed:", response.status, detail);
+      logger.error("qq", "send-message-failed", { status: response.status, detail });
     }
   }
 

@@ -263,6 +263,7 @@ export const appConfigSchema = z
       .object({
         enabled: z.boolean().default(false),
         localOnly: z.boolean().default(true),
+        coldStartDelayMs: z.number().int().min(10_000).default(5 * 60 * 1000),
         cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
         silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000),
         quietHours: proactiveQuietHoursSchema.default({
@@ -288,7 +289,27 @@ export const appConfigSchema = z
       .strict(),
     memory: z
       .object({
-        recentMessages: z.number().int().min(10).max(400).default(60)
+        recentMessages: z.number().int().min(10).max(400).default(60),
+        context: z
+          .object({
+            memoryFloorTokens: z.number().int().min(200).max(8000).default(1200)
+          })
+          .strict()
+          .default({
+            memoryFloorTokens: 1200
+          }),
+        embedding: z
+          .object({
+            enabled: z.boolean().default(true),
+            modelId: z.string().min(1).default("embeddinggemma-300m-qat-Q8_0.gguf"),
+            similarityThreshold: z.number().min(0).max(1).default(0.35)
+          })
+          .strict()
+          .default({
+            enabled: true,
+            modelId: "embeddinggemma-300m-qat-Q8_0.gguf",
+            similarityThreshold: 0.35
+          })
       })
       .strict(),
     kernel: kernelSchema.default({
@@ -636,6 +657,7 @@ export interface KernelStateDocument {
   emotional: EmotionalState;
   relationship: RelationshipState;
   coldStart: boolean;
+  lastDecayAt: string | null;
   sessionReentry?: {
     active: boolean;
     gapHours: number;
@@ -760,6 +782,7 @@ export interface PendingTask {
   status: PendingTaskStatus;
   payload: Record<string, unknown>;
   source_range?: string;
+  available_at: string;
   attempts: number;
   created_at: string;
   updated_at: string;
@@ -838,6 +861,16 @@ export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
   }
 };
 
+export interface EmbedderRuntimeStatus {
+  status: "disabled" | "loading" | "ready" | "error";
+  message: string;
+}
+
+export interface BackgroundWorkerRuntimeStatus {
+  available: boolean;
+  message: string;
+}
+
 export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
@@ -853,6 +886,8 @@ export interface AppStatus {
   browseStatus: BrowseStatus;
   tokenStats: TokenStatsStatus;
   systemPermissions: SystemPermissionStatus;
+  embedder: EmbedderRuntimeStatus;
+  backgroundWorker: BackgroundWorkerRuntimeStatus;
   kernel?: KernelStatus;
 }
 
@@ -896,6 +931,7 @@ export const DEFAULT_KERNEL_STATE: KernelStateDocument = {
     downgradeStreak: 0
   },
   coldStart: true,
+  lastDecayAt: null,
   sessionReentry: null,
   updatedAt: new Date(0).toISOString()
 };
@@ -1020,6 +1056,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   proactive: {
     enabled: false,
     localOnly: true,
+    coldStartDelayMs: 5 * 60 * 1000,
     cooldownMs: 25 * 60 * 1000,
     silenceThresholdMs: 40 * 60 * 1000,
     quietHours: {
@@ -1041,7 +1078,15 @@ export const DEFAULT_CONFIG: AppConfig = {
     reversePromptEvery: 4
   },
   memory: {
-    recentMessages: 60
+    recentMessages: 60,
+    context: {
+      memoryFloorTokens: 1200
+    },
+    embedding: {
+      enabled: true,
+      modelId: "embeddinggemma-300m-qat-Q8_0.gguf",
+      similarityThreshold: 0.35
+    }
   },
   kernel: {
     enabled: true,

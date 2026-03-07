@@ -66,6 +66,7 @@ export type EmotionalSignals = z.infer<typeof emotionalSignalsSchema>;
 export interface FactExtractionOutput {
   operations: FactOperationOutput[];
   emotionalSignals?: EmotionalSignals;
+  tokenUsage?: unknown;
 }
 
 export function estimateTokenCount(text: string): number {
@@ -73,7 +74,11 @@ export function estimateTokenCount(text: string): number {
   if (!normalized) {
     return 0;
   }
-  return Math.max(1, Math.ceil(normalized.length / 2));
+
+  const cjkChars = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
+  const latinWords = normalized.match(/[A-Za-z0-9_]+/g)?.length ?? 0;
+  const punctuation = (normalized.match(/[，。！？、,.!?;:()[\]{}"“”‘’`~]/g) ?? []).length;
+  return Math.max(1, Math.ceil(cjkChars * 1.2 + latinWords * 0.35 + punctuation * 0.2));
 }
 
 export function splitExtractionWindows(input: {
@@ -164,7 +169,10 @@ export async function runFactExtraction(input: {
     outputText: JSON.stringify(result.object ?? {})
   });
 
-  return parseExtractionObject(result.object ?? { operations: [] });
+  return {
+    ...parseExtractionObject(result.object ?? { operations: [] }),
+    tokenUsage: result.usage
+  };
 }
 
 function makeRange(start?: string, end?: string): string {

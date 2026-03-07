@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyElapsedEmotionalDecay,
   applyEmotionalSignalsToState,
   computeSignalAgeScale
 } from "../kernel/engine.js";
@@ -112,4 +113,24 @@ test("applyEmotionalSignalsToState: 单窗变化受 windowMaxAbsDelta 限幅", (
   assert.equal(next.mood, 0.05);
   assert.equal(next.connection, 0.55);
   assert.equal(next.curiosity, 0.45);
+});
+
+
+test("applyElapsedEmotionalDecay: 按时间向默认基线指数回归", () => {
+  const next = applyElapsedEmotionalDecay(
+    {
+      ...baseEmotional,
+      mood: 0.8,
+      connection: 0.9,
+      irritation: 0.4
+    },
+    12 * 60 * 60
+  );
+
+  assert.ok(next.mood < 0.8);
+  assert.ok(next.mood > 0);
+  assert.ok(next.connection < 0.9);
+  assert.ok(next.connection > 0.5);
+  assert.ok(next.irritation < 0.4);
+  assert.ok(next.irritation > 0.1);
 });

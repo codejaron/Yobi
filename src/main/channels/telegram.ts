@@ -1,6 +1,9 @@
 import { Bot, InputFile } from "grammy";
 import type { AppConfig } from "@shared/types";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 export class TelegramChannel implements ChatChannel {
   private bot: Bot | null = null;
@@ -36,7 +39,7 @@ export class TelegramChannel implements ChatChannel {
 
     this.bot = new Bot(botToken);
     this.bot.catch((error) => {
-      console.error("Telegram bot middleware error:", error.error);
+      logger.error("telegram", "middleware-error", undefined, error.error);
     });
 
     this.bot.on("message:text", async (ctx) => {

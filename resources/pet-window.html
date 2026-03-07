@@ -208,10 +208,7 @@
     </div>
 
     <script>
-      const { ipcRenderer } = require("electron");
-      const fs = require("node:fs");
-      const path = require("node:path");
-      const { pathToFileURL } = require("node:url");
+      const petApi = window.petApi;
 
       const statusEl = document.getElementById("status");
       const fallbackEl = document.getElementById("fallback");
@@ -313,7 +310,7 @@
         }
 
         try {
-          const raw = fs.readFileSync(modelJsonPath, "utf-8");
+          const raw = petApi.readTextFile(modelJsonPath);
           const parsed = JSON.parse(raw);
           const motions = parsed?.FileReferences?.Motions;
           return normalizeMotionDefinitions(motions);
@@ -328,7 +325,7 @@
         }
 
         try {
-          const raw = fs.readFileSync(modelJsonPath, "utf-8");
+          const raw = petApi.readTextFile(modelJsonPath);
           const parsed = JSON.parse(raw);
           const hitAreas = Array.isArray(parsed?.HitAreas) ? parsed.HitAreas : [];
 
@@ -340,38 +337,7 @@
         }
       };
 
-      const walkFiles = (baseDir) => {
-        const result = [];
-        if (!baseDir || !fs.existsSync(baseDir)) {
-          return result;
-        }
-
-        const stack = [baseDir];
-        while (stack.length > 0) {
-          const dir = stack.pop();
-          let entries = [];
-
-          try {
-            entries = fs.readdirSync(dir, { withFileTypes: true });
-          } catch {
-            continue;
-          }
-
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-              stack.push(fullPath);
-              continue;
-            }
-
-            if (entry.isFile()) {
-              result.push(fullPath);
-            }
-          }
-        }
-
-        return result;
-      };
+      const walkFiles = (baseDir) => petApi.walkFiles(baseDir);
 
       const pickFile = (patternFn) => {
         const files = walkFiles(modelDir);
@@ -398,11 +364,7 @@
           return "";
         }
 
-        try {
-          return pathToFileURL(filePath).toString();
-        } catch {
-          return `file://${encodeURI(filePath)}`;
-        }
+        return petApi.toFileHref(filePath);
       };
 
       const mergeFloatChunks = (chunks) => {
@@ -591,10 +553,10 @@
 
       const resolveCubismCoreCandidates = () => {
         const candidates = [
-          path.join(modelDir, "live2dcubismcore.min.js"),
-          path.join(modelDir, "runtime", "live2dcubismcore.min.js"),
-          appPath ? path.join(appPath, "resources", "live2dcubismcore.min.js") : "",
-          appPath ? path.join(appPath, "resources", "vendor", "live2dcubismcore.min.js") : ""
+          petApi.joinPath(modelDir, "live2dcubismcore.min.js"),
+          petApi.joinPath(modelDir, "runtime", "live2dcubismcore.min.js"),
+          appPath ? petApi.joinPath(appPath, "resources", "live2dcubismcore.min.js") : "",
+          appPath ? petApi.joinPath(appPath, "resources", "vendor", "live2dcubismcore.min.js") : ""
         ].filter(Boolean);
 
         return Array.from(new Set(candidates));
@@ -603,7 +565,7 @@
       const loadCubismCore = async () => {
         const candidates = resolveCubismCoreCandidates();
         for (const filePath of candidates) {
-          if (!fs.existsSync(filePath)) {
+          if (!petApi.fileExists(filePath)) {
             continue;
           }
 
@@ -615,68 +577,37 @@
           } catch {}
         }
 
-        try {
-          await loadScript("https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js");
-          if (window.Live2DCubismCore) {
-            return { ok: true, source: "cdn" };
-          }
-        } catch {}
-
         return { ok: false };
       };
 
       const loadRuntime = async () => {
-        let PIXI = null;
-        let Live2DModel = null;
-        let live2dModule = null;
-
         try {
-          PIXI = require("pixi.js");
-          window.PIXI = PIXI;
-        } catch {}
-
-        try {
-          const mod = require("pixi-live2d-display/cubism4");
-          Live2DModel = mod?.Live2DModel || null;
-          live2dModule = mod || null;
-        } catch {}
-
-        if (!Live2DModel) {
-          try {
-            const mod = require("pixi-live2d-display");
-            Live2DModel = mod?.Live2DModel || mod?.default?.Live2DModel || null;
-            live2dModule = mod || null;
-          } catch {}
-        }
-
-        if (!PIXI || !Live2DModel) {
-          try {
-            const coreState = await loadCubismCore();
-            if (!coreState.ok) {
-              return {
-                error: "missing-cubism-core"
-              };
-            }
-
-            await loadScript("../node_modules/pixi.js/dist/browser/pixi.min.js");
-            await loadScript("../node_modules/pixi-live2d-display/dist/cubism4.min.js");
-            PIXI = window.PIXI;
-            Live2DModel = window.PIXI?.live2d?.Live2DModel || null;
-            live2dModule = window.PIXI?.live2d || null;
-          } catch (error) {
+          const coreState = await loadCubismCore();
+          if (!coreState.ok) {
             return {
-              error: error && error.message ? String(error.message) : "script-load-failed"
+              error: "missing-cubism-core"
             };
           }
-        }
 
-        if (!PIXI || !Live2DModel) {
+          await loadScript("../node_modules/pixi.js/dist/browser/pixi.min.js");
+          await loadScript("../node_modules/pixi-live2d-display/dist/cubism4.min.js");
+
+          const PIXI = window.PIXI;
+          const Live2DModel = window.PIXI?.live2d?.Live2DModel || null;
+          const live2dModule = window.PIXI?.live2d || null;
+
+          if (!PIXI || !Live2DModel) {
+            return {
+              error: "runtime-not-ready"
+            };
+          }
+
+          return { PIXI, Live2DModel, live2dModule };
+        } catch (error) {
           return {
-            error: "runtime-not-ready"
+            error: error && error.message ? String(error.message) : "script-load-failed"
           };
         }
-
-        return { PIXI, Live2DModel, live2dModule };
       };
 
       const disableModelEmbeddedMotionSound = (live2dModule) => {
@@ -924,7 +855,7 @@
               return;
             }
             mousePassthrough = ignore;
-            ipcRenderer.send("pet:window:set-ignore-mouse-events", {
+            petApi.setIgnoreMouseEvents({
               ignore,
               forward: true
             });
@@ -1021,7 +952,7 @@
                 return;
               }
 
-              const result = await ipcRenderer.invoke("pet:voice:transcribe-and-send", {
+              const result = await petApi.transcribeAndSendFromPet({
                 pcm16Base64: recorded.pcm16Base64,
                 sampleRate: recorded.sampleRate
               });
@@ -1601,7 +1532,7 @@
 
             cursorPollInFlight = true;
             try {
-              const point = await ipcRenderer.invoke("pet:window:get-cursor-position");
+              const point = await petApi.getCursorPosition();
               if (!point || typeof point !== "object") {
                 return;
               }
@@ -1767,7 +1698,7 @@
             dragState.moved = true;
             dragState.prevX = event.screenX;
             dragState.prevY = event.screenY;
-            ipcRenderer.send("pet:window:move-by", { dx, dy });
+            petApi.moveWindowBy({ dx, dy });
           });
 
           window.addEventListener("mouseup", (event) => {
@@ -1867,6 +1798,7 @@
           startCursorPolling();
           window.addEventListener("beforeunload", () => {
             stopCursorPolling();
+            unsubscribePetEvents();
             void cancelPushToTalkCapture("");
             setMousePassthrough(false);
           });
@@ -1901,9 +1833,7 @@
               const requestToken = ++chatRequestToken;
 
               try {
-                const response = await ipcRenderer.invoke("pet:chat:send", {
-                  text
-                });
+                const response = await petApi.sendChat(text);
                 if (requestToken !== chatRequestToken) {
                   return;
                 }
@@ -1954,7 +1884,7 @@
             }
 
             event.preventDefault();
-            ipcRenderer.send("pet:menu:show", {
+            petApi.showContextMenu({
               x: Math.round(event.x),
               y: Math.round(event.y)
             });
@@ -1962,7 +1892,7 @@
 
           enterIdle(true);
 
-          ipcRenderer.on("pet:event", (_event, data) => {
+          const unsubscribePetEvents = petApi.onEvent((data) => {
             if (!data || typeof data !== "object") {
               return;
             }

@@ -13,6 +13,7 @@
     "dist:mac": "npm run build && npx electron-builder --mac dmg --publish never",
     "dist:win": "npm run build && npx electron-builder --win nsis --publish never",
     "preview": "electron-vite preview",
+    "test": "rm -rf out/src/main out/tsconfig.node.tsbuildinfo && tsc -p tsconfig.node.json && node --experimental-specifier-resolution=node --loader ./scripts/alias-loader.mjs --test out/src/main/tests/*.test.js",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "grammy": "^1.35.1",
     "js-yaml": "^4.1.1",
     "lucide-react": "^0.542.0",
+    "node-llama-cpp": "^3.17.1",
     "node-screenshots": "^0.2.1",
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "^6.5.10",

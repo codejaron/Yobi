@@ -21,7 +21,15 @@ export default defineConfig({
     resolve: {
       alias
     },
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: path.join(root, "src/preload/index.cjs"),
+          pet: path.join(root, "src/preload/pet.cjs")
+        }
+      }
+    }
   },
   renderer: {
     resolve: {

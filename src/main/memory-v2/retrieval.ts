@@ -30,30 +30,100 @@ const STOP_WORDS = new Set([
   "没"
 ]);
 
-export function extractQueryTerms(texts: string[]): string[] {
-  const output = new Set<string>();
-  for (const text of texts.slice(-3)) {
-    const normalized = text.replace(/[，。！？、,.!?;:()[\]{}"“”‘’`~]/g, " ").replace(/\s+/g, " ");
-    const pieces = normalized.split(" ").map((piece) => piece.trim()).filter(Boolean);
-    for (const piece of pieces) {
-      if (piece.length < 2 || piece.length > 24 || STOP_WORDS.has(piece)) {
+const MAX_QUERY_TERMS = 60;
+
+export interface QueryTerm {
+  value: string;
+  weight: number;
+}
+
+function isCjkChar(char: string): boolean {
+  return /[\u3400-\u9fff]/.test(char);
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/[，。！？、,.!?;:()[\]{}"“”‘’`~]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function extractEnglishTerms(text: string): QueryTerm[] {
+  const matches = normalizeText(text).match(/[a-z0-9][a-z0-9_-]{1,23}/gi) ?? [];
+  const output: QueryTerm[] = [];
+  for (const match of matches) {
+    const value = match.trim().toLowerCase();
+    if (value.length < 2 || STOP_WORDS.has(value)) {
+      continue;
+    }
+    output.push({
+      value,
+      weight: 1
+    });
+  }
+  return output;
+}
+
+function extractChineseNgrams(text: string): QueryTerm[] {
+  const segments = normalizeText(text)
+    .split(" ")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .flatMap((segment) => segment.split(/[^\u3400-\u9fff]+/g))
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const weighted = new Map<string, QueryTerm>();
+  for (const segment of segments) {
+    const chars = [...segment].filter((char) => isCjkChar(char));
+    if (chars.length < 2) {
+      continue;
+    }
+
+    for (const gramSize of [4, 3, 2]) {
+      if (chars.length < gramSize) {
         continue;
       }
-      output.add(piece.toLowerCase());
-      if (output.size >= 40) {
+      for (let index = 0; index <= chars.length - gramSize; index += 1) {
+        const value = chars.slice(index, index + gramSize).join("");
+        if (STOP_WORDS.has(value)) {
+          continue;
+        }
+        const priorityBoost = gramSize === 4 || index === 0 || index + gramSize === chars.length ? 0.1 : 0;
+        const weight = 0.5 + priorityBoost;
+        const existing = weighted.get(value);
+        if (!existing || existing.weight < weight) {
+          weighted.set(value, {
+            value,
+            weight
+          });
+        }
+      }
+    }
+  }
+
+  return [...weighted.values()].sort((a, b) => b.weight - a.weight || b.value.length - a.value.length);
+}
+
+export function extractQueryTerms(texts: string[]): QueryTerm[] {
+  const deduped = new Map<string, QueryTerm>();
+  for (const text of texts.slice(-3)) {
+    for (const term of [...extractEnglishTerms(text), ...extractChineseNgrams(text)]) {
+      const existing = deduped.get(term.value);
+      if (!existing || existing.weight < term.weight) {
+        deduped.set(term.value, term);
+      }
+      if (deduped.size >= MAX_QUERY_TERMS) {
         break;
       }
     }
-    if (output.size >= 40) {
+    if (deduped.size >= MAX_QUERY_TERMS) {
       break;
     }
   }
-  return [...output];
+  return [...deduped.values()].slice(0, MAX_QUERY_TERMS);
 }
 
 export function matchFacts(
   facts: Fact[],
-  terms: string[],
+  terms: QueryTerm[],
   limit = 20
 ): Array<{ fact: Fact; score: number }> {
   if (terms.length === 0 || facts.length === 0) {
@@ -65,8 +135,8 @@ export function matchFacts(
       const haystack = `${fact.entity} ${fact.key} ${fact.value}`.toLowerCase();
       let termHits = 0;
       for (const term of terms) {
-        if (haystack.includes(term)) {
-          termHits += 1;
+        if (haystack.includes(term.value)) {
+          termHits += term.weight;
         }
       }
       if (termHits === 0) {
@@ -90,7 +160,7 @@ export function matchFacts(
 
 export function matchEpisodes(
   episodes: Episode[],
-  terms: string[],
+  terms: QueryTerm[],
   limit = 8
 ): Array<{ episode: Episode; score: number }> {
   if (terms.length === 0 || episodes.length === 0) {
@@ -101,8 +171,8 @@ export function matchEpisodes(
       const haystack = `${episode.summary} ${episode.unresolved.join(" ")}`.toLowerCase();
       let termHits = 0;
       for (const term of terms) {
-        if (haystack.includes(term)) {
-          termHits += 1;
+        if (haystack.includes(term.value)) {
+          termHits += term.weight;
         }
       }
       if (termHits === 0) {

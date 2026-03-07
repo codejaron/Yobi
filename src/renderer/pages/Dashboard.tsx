@@ -349,7 +349,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <Card>
           <CardHeader>
             <CardDescription>Telegram</CardDescription>
@@ -407,6 +407,30 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
             <p className="text-sm text-muted-foreground">
               {formatOpenClawStatus(status?.openclawStatus)}
             </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardDescription>语义记忆检索</CardDescription>
+            <CardTitle className="text-base">
+              Embedder：{status?.embedder.status ?? "unknown"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{status?.embedder.message || "未上报状态"}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardDescription>后台任务执行</CardDescription>
+            <CardTitle className="text-base">
+              {status?.backgroundWorker.available ? "Worker 可用" : "Worker 降级中"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{status?.backgroundWorker.message || "未上报状态"}</p>
           </CardContent>
         </Card>
       </div>

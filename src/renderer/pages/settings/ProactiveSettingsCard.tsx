@@ -118,6 +118,26 @@ export function ProactiveSettingsCard({ config, setConfig }: ProactiveSettingsCa
           />
         </div>
 
+
+        <div className="space-y-1.5">
+          <Label>冷启动主动招呼延迟（毫秒）</Label>
+          <Input
+            type="number"
+            min={10_000}
+            value={String(config.proactive.coldStartDelayMs)}
+            onChange={(event) =>
+              setConfig({
+                ...config,
+                proactive: {
+                  ...config.proactive,
+                  coldStartDelayMs:
+                    Number(event.target.value) || config.proactive.coldStartDelayMs
+                }
+              })
+            }
+          />
+        </div>
+
         <div className="space-y-1.5">
           <Label>沉默阈值（毫秒）</Label>
           <Input

@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { AppConfig, McpServerConfig } from "@shared/types";
 import type { ToolDefinition, ToolRegistry } from "@main/tools/types";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 interface McpSdkModules {
   Client: any;
@@ -80,7 +83,7 @@ export class McpManager {
       }
 
       if (this.servers.has(server.id)) {
-        console.warn(`[mcp] duplicate server id skipped: ${server.id}`);
+        logger.warn("mcp", "duplicate-server-id", { serverId: server.id });
         continue;
       }
 
@@ -95,7 +98,7 @@ export class McpManager {
         if (connection) {
           await this.disconnectClient(connection.client);
         }
-        console.warn(`[mcp] failed to connect "${server.id}":`, error);
+        logger.warn("mcp", "connect-server-failed", { serverId: server.id }, error);
       }
     }
   }
@@ -304,7 +307,7 @@ export class McpManager {
         await client.disconnect();
       }
     } catch (error) {
-      console.warn("[mcp] close failed:", error);
+      logger.warn("mcp", "close-failed", undefined, error);
     }
   }
 

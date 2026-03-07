@@ -1,38 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyScaledDeltaToState } from "../core/conversation.js";
-import type { EmotionalState } from "@shared/types";
+import { computeMessageCadenceScale } from "../kernel/engine.js";
 
-const base: EmotionalState = {
-  mood: 0,
-  energy: 0.6,
-  connection: 0.5,
-  curiosity: 0.5,
-  confidence: 0.5,
-  irritation: 0.1
-};
+test("computeMessageCadenceScale: 首条消息使用完整增幅", () => {
+  assert.equal(computeMessageCadenceScale(null), 1);
+});
 
-test("applyScaledDeltaToState: deltaScale 会按比例缩小即时 delta", () => {
-  const full = applyScaledDeltaToState({
-    emotional: base,
-    delta: {
-      mood: 0.2,
-      connection: 0.1
-    },
-    scale: 1
-  });
+test("computeMessageCadenceScale: 高频连发降到最小缩放", () => {
+  assert.equal(computeMessageCadenceScale(30_000), 0.3);
+  assert.equal(computeMessageCadenceScale(2 * 60_000), 0.3);
+});
 
-  const scaled = applyScaledDeltaToState({
-    emotional: base,
-    delta: {
-      mood: 0.2,
-      connection: 0.1
-    },
-    scale: 0.4
-  });
+test("computeMessageCadenceScale: 长间隔回到完整增幅", () => {
+  assert.equal(computeMessageCadenceScale(10 * 60_000), 1);
+  assert.equal(computeMessageCadenceScale(20 * 60_000), 1);
+});
 
-  assert.equal(full.mood, 0.2);
-  assert.equal(scaled.mood, 0.08);
-  assert.equal(full.connection, 0.6);
-  assert.equal(scaled.connection, 0.54);
+test("computeMessageCadenceScale: 中间区间线性插值", () => {
+  const scale = computeMessageCadenceScale(6 * 60_000);
+  assert.ok(scale > 0.3);
+  assert.ok(scale < 1);
 });

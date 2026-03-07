@@ -48,6 +48,12 @@ jobs:
           fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
           console.log('Synced package version to', version);"
 
+      - name: Run typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
       - name: Build app
         run: npm run build
 

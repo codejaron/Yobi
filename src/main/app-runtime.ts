@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BrowserWindow, shell } from "electron";
 import {
-  DEFAULT_KERNEL_STATE,
   type AppConfig,
   type AppStatus,
   type ClawEvent,
@@ -9,14 +7,13 @@ import {
   type CommandApprovalDecision,
   type ConsoleRunEventV2,
   type MindSnapshot,
+  type UserProfile,
   type HistoryMessage,
   type KernelStateDocument,
-  type UserProfile
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
 import { ReminderStore } from "@main/storage/reminder-store";
-import { readTextFile, writeTextFileAtomic } from "@main/storage/fs";
 import {
   RuntimeContextStore,
   type RuntimeInboundChannel
@@ -27,11 +24,9 @@ import { YobiMemory } from "@main/memory/setup";
 import { ConversationEngine } from "@main/core/conversation";
 import { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
 import { TelegramChannel } from "@main/channels/telegram";
-import type { InboundMessage } from "@main/channels/types";
 import { ChannelRouter } from "@main/channels/router";
 import { ConsoleChannel } from "@main/channels/console";
 import { QQChannel } from "@main/channels/qq";
-import type { QQChannelConfig } from "@main/channels/qq-types";
 import { VoiceService } from "@main/services/voice";
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { KeepAwakeService } from "@main/services/keep-awake";
@@ -53,12 +48,17 @@ import { TokenStatsStore } from "@main/services/token/token-stats-store";
 import { TokenStatsService } from "@main/services/token/token-stats-service";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
-  DEFAULT_PERSONA_TEXT,
-  DEFAULT_SOUL_TEXT,
   ensureKernelBootstrap
 } from "@main/kernel/init";
 import { StateStore } from "@main/kernel/state-store";
 import { KernelEngine } from "@main/kernel/engine";
+import { AppLogger } from "@main/services/logger";
+import { RuntimeActivityCoordinator } from "@main/runtime/activity-coordinator";
+import { ChannelCoordinator } from "@main/runtime/channel-coordinator";
+import { ClawCoordinator } from "@main/runtime/claw-coordinator";
+import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
+import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
+import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
 
 interface HistoryQuery {
   query?: string;
@@ -74,6 +74,7 @@ export class CompanionRuntime {
 
   private readonly bootedAt = new Date().toISOString();
   private readonly paths = new CompanionPaths();
+  private readonly logger = new AppLogger(this.paths);
   private readonly tokenStatsStore = new TokenStatsStore(this.paths);
   private readonly tokenStatsService = new TokenStatsService(this.tokenStatsStore);
   private readonly configStore = new ConfigStore(this.paths);
@@ -135,7 +136,6 @@ export class CompanionRuntime {
 
   private readonly channelRouter = new ChannelRouter(this.conversation);
   private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
-  private qqChannel: QQChannel | null = null;
   private readonly consoleChannel = new ConsoleChannel();
   private readonly voiceService = new VoiceService();
   private readonly voiceRouter = new VoiceProviderRouter(
@@ -203,16 +203,90 @@ export class CompanionRuntime {
     }
   });
 
+  private readonly activityCoordinator = new RuntimeActivityCoordinator({
+    runtimeContextStore: this.runtimeContextStore,
+    logger: this.logger,
+    getConfig: () => this.getConfig(),
+    onLastUserLoaded: (value) => this.kernel.setLastUserMessageAt(value),
+    onLastProactiveLoaded: (value) => this.kernel.setLastProactiveAt(value),
+    onUserMessage: (input) => this.kernel.onUserMessage(input),
+    onProactiveMessage: (ts) => this.kernel.setLastProactiveAt(ts),
+    sendTelegram: async (text, chatId) => {
+      await this.telegram.send({ kind: "text", text, chatId });
+    },
+    sendQQ: async (text, chatId) => {
+      await this.channelCoordinator.getQQChannel()?.send({ kind: "text", text, chatId });
+    }
+  });
+
+  private readonly channelCoordinator = new ChannelCoordinator({
+    telegram: this.telegram,
+    createQQChannel: (config) => new QQChannel(config),
+    logger: this.logger,
+    pet: this.pet,
+    getQQConfig: () => ({
+      enabled: this.getConfig().qq.enabled,
+      appId: this.getConfig().qq.appId.trim(),
+      appSecret: this.getConfig().qq.appSecret.trim()
+    }),
+    handleTelegram: (payload) => this.channelRouter.handleTelegram(payload),
+    handleQQ: (payload) => this.channelRouter.handleQQ(payload),
+    onRecordUserActivity: (input) => this.recordUserActivity(input),
+    onAssistantMessage: () => this.kernel.onAssistantMessage(),
+    emitStatus: () => this.emitStatus(),
+    withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
+    chatReplyTimeoutMs: CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
+    resourceId: PRIMARY_RESOURCE_ID,
+    threadId: PRIMARY_THREAD_ID
+  });
+
+  private readonly clawCoordinator = new ClawCoordinator({
+    openclawRuntime: this.openclawRuntime,
+    clawClient: this.clawClient,
+    clawChannel: this.clawChannel,
+    getConfig: () => this.getConfig()
+  });
+
+  private readonly lifecycleCoordinator = new LifecycleCoordinator({
+    keepAwake: this.keepAwake,
+    petService: this.petService,
+    reminderService: this.reminderService,
+    getConfig: () => this.getConfig()
+  });
+
+  private readonly dataCoordinator = new RuntimeDataCoordinator({
+    paths: this.paths,
+    memory: this.memory,
+    stateStore: this.stateStore,
+    kernel: this.kernel,
+    bilibiliBrowse: this.bilibiliBrowse,
+    systemPermissionsService: this.systemPermissionsService,
+    resourceId: PRIMARY_RESOURCE_ID,
+    threadId: PRIMARY_THREAD_ID,
+    emitStatus: () => this.emitStatus()
+  });
+
+  private readonly statusCoordinator = new RuntimeStatusCoordinator({
+    bootedAt: this.bootedAt,
+    memory: this.memory,
+    kernel: this.kernel,
+    bilibiliBrowse: this.bilibiliBrowse,
+    tokenStatsService: this.tokenStatsService,
+    systemPermissionsService: this.systemPermissionsService,
+    activityCoordinator: this.activityCoordinator,
+    channelCoordinator: this.channelCoordinator,
+    clawCoordinator: this.clawCoordinator,
+    lifecycleCoordinator: this.lifecycleCoordinator,
+    resourceId: PRIMARY_RESOURCE_ID,
+    threadId: PRIMARY_THREAD_ID
+  });
+
   private statusListeners = new Set<(status: AppStatus) => void>();
-  private clawEventListeners = new Set<(event: ClawEvent) => void>();
-  private openclawWebUiWindow: BrowserWindow | null = null;
-  private lastUserAt: string | null = null;
-  private lastProactiveAt: string | null = null;
-  private lastInboundChannel: RuntimeInboundChannel | null = null;
-  private lastInboundChatId: string | null = null;
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
+    await this.logger.cleanup(14);
+    this.logger.info("runtime", "init:start");
     setTokenRecorder((event) => this.tokenStatsService.record(event));
     await this.configStore.init();
     await ensureKernelBootstrap(this.paths);
@@ -225,52 +299,35 @@ export class CompanionRuntime {
     this.registerBuiltinTools();
     await this.mcpManager.init(this.toolRegistry);
 
-    this.clawChannel.onEvent((event) => {
-      for (const listener of this.clawEventListeners) {
-        listener(event);
-      }
-    });
+    this.logger.info("runtime", "init:ready");
   }
 
   async start(): Promise<void> {
     this.loadRuntimeContext();
-    await this.reminderService.init();
+    await this.lifecycleCoordinator.start();
     await this.startTelegram();
     await this.startQQ();
     this.kernel.start();
 
-    this.keepAwake.apply(this.getConfig().background.keepAwake);
-    this.petService.syncPetWindow();
-    await this.petService.syncGlobalPetPushToTalk();
-    this.petService.syncRealtimeVoice();
-
-    await this.openclawRuntime.start(this.getConfig());
-    const openclawStatus = this.openclawRuntime.getStatus();
-
-    if (this.getConfig().openclaw.enabled && openclawStatus.online) {
-      void this.clawChannel.connect().catch(() => {
-        // 连接失败时由 ClawClient 重连策略继续处理
-      });
-    } else {
-      await this.clawChannel.disconnect();
-    }
+    await this.clawCoordinator.start();
+    const openclawStatus = this.clawCoordinator.getOpenClawStatus();
     await this.emitStatus();
+    this.logger.info("runtime", "start:ready", { openclawOnline: openclawStatus.online });
   }
 
   async stop(): Promise<void> {
     setTokenRecorder(null);
     await this.memory.dumpUnprocessedBuffer();
 
-    this.keepAwake.stop();
-    this.petService.stop();
+    this.lifecycleCoordinator.stop();
     await this.kernel.stop();
-    await this.clawChannel.disconnect();
-    await this.openclawRuntime.stop();
-    this.clawChannel.dispose();
+    await this.clawCoordinator.stop();
+    await this.memory.stop();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
     await this.stopQQ();
     await this.telegram.stop();
+    this.logger.info("runtime", "stop:complete");
   }
 
   onStatus(listener: (status: AppStatus) => void): () => void {
@@ -287,24 +344,15 @@ export class CompanionRuntime {
   }
 
   onClawEvent(listener: (event: ClawEvent) => void): () => void {
-    this.clawEventListeners.add(listener);
-    return () => {
-      this.clawEventListeners.delete(listener);
-    };
+    return this.clawCoordinator.onEvent(listener);
   }
 
   getClawConnectionEvent(): ClawEvent {
-    const status = this.clawClient.getConnectionStatus();
-    return {
-      type: "connection",
-      state: status.state,
-      message: status.message,
-      timestamp: new Date().toISOString()
-    };
+    return this.clawCoordinator.getConnectionEvent();
   }
 
   getClawTaskMonitorEvent(): ClawEvent {
-    return this.clawChannel.getTaskMonitorEvent();
+    return this.clawCoordinator.getTaskMonitorEvent();
   }
 
   getConfig(): AppConfig {
@@ -319,10 +367,7 @@ export class CompanionRuntime {
     const previousConfig = this.configStore.getConfig();
     const saved = await this.configStore.saveConfig(nextConfig);
 
-    this.keepAwake.apply(saved.background.keepAwake);
-    this.petService.syncPetWindow();
-    await this.petService.syncGlobalPetPushToTalk();
-    this.petService.syncRealtimeVoice();
+    this.lifecycleCoordinator.applyConfigEffects();
     await this.kernel.runTickNow();
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
@@ -330,383 +375,95 @@ export class CompanionRuntime {
   }
 
   async getHistory(options: HistoryQuery): Promise<HistoryMessage[]> {
-    return this.memory.listHistory({
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID,
-      query: options.query,
-      limit: options.limit,
-      offset: options.offset
-    });
+    return this.dataCoordinator.getHistory(options);
   }
 
   async clearHistory(): Promise<void> {
-    await this.memory.clearThread({
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID
-    });
-    await this.emitStatus();
+    await this.dataCoordinator.clearHistory();
   }
 
   async getMindSnapshot(): Promise<MindSnapshot> {
-    const [soul, persona, profile, facts, episodes] = await Promise.all([
-      readTextFile(this.paths.soulPath, ""),
-      readTextFile(this.paths.personaPath, ""),
-      this.memory.getProfile(),
-      this.memory.listFacts(),
-      this.memory.listRecentEpisodes(20)
-    ]);
-
-    return {
-      soul,
-      persona,
-      state: this.stateStore.getSnapshot(),
-      profile,
-      recentFacts: facts.slice(-50),
-      recentEpisodes: episodes.slice(0, 20)
-    };
+    return this.dataCoordinator.getMindSnapshot();
   }
 
   async getSoul(): Promise<{ markdown: string; updatedAt: string }> {
-    return {
-      markdown: await readTextFile(this.paths.soulPath, ""),
-      updatedAt: new Date().toISOString()
-    };
+    return this.dataCoordinator.getSoul();
   }
 
   async saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
-    const markdown = input.markdown.trim();
-    await writeTextFileAtomic(this.paths.soulPath, `${markdown}\n`);
-    return {
-      markdown,
-      updatedAt: new Date().toISOString()
-    };
+    return this.dataCoordinator.saveSoul(input);
   }
 
   async getPersona(): Promise<{ markdown: string; updatedAt: string }> {
-    return {
-      markdown: await readTextFile(this.paths.personaPath, ""),
-      updatedAt: new Date().toISOString()
-    };
+    return this.dataCoordinator.getPersona();
   }
 
   async savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
-    const markdown = input.markdown.trim();
-    await writeTextFileAtomic(this.paths.personaPath, `${markdown}\n`);
-    return {
-      markdown,
-      updatedAt: new Date().toISOString()
-    };
+    return this.dataCoordinator.savePersona(input);
   }
 
   async patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument> {
-    const next = this.stateStore.mutate((state) => {
-      const patch = input.patch;
-      if (!patch || typeof patch !== "object") {
-        return;
-      }
-      if (patch.emotional) {
-        state.emotional = {
-          ...state.emotional,
-          ...patch.emotional
-        };
-      }
-      if (patch.relationship) {
-        state.relationship = {
-          ...state.relationship,
-          ...patch.relationship
-        };
-      }
-      if (typeof patch.coldStart === "boolean") {
-        state.coldStart = patch.coldStart;
-      }
-      if (patch.sessionReentry !== undefined) {
-        state.sessionReentry = patch.sessionReentry
-          ? {
-              ...state.sessionReentry,
-              ...patch.sessionReentry
-            }
-          : null;
-      }
-    });
-    await this.stateStore.flushIfDirty();
-    return next;
+    return this.dataCoordinator.patchState(input);
   }
 
   async patchProfile(input: { patch: Partial<UserProfile> }): Promise<UserProfile> {
-    const next = await this.memory.getProfileStore().applySemanticPatch((draft) => {
-      const patch = input.patch;
-      if (!patch || typeof patch !== "object") {
-        return;
-      }
-      if (patch.identity) {
-        draft.identity = {
-          ...draft.identity,
-          ...patch.identity
-        };
-      }
-      if (patch.communication) {
-        draft.communication = {
-          ...draft.communication,
-          ...patch.communication
-        };
-      }
-      if (patch.patterns) {
-        draft.patterns = {
-          ...draft.patterns,
-          ...patch.patterns
-        };
-      }
-      if (patch.interaction_notes) {
-        draft.interaction_notes = {
-          ...draft.interaction_notes,
-          ...patch.interaction_notes,
-          trust_areas: {
-            ...draft.interaction_notes.trust_areas,
-            ...(patch.interaction_notes.trust_areas ?? {})
-          }
-        };
-      }
-    });
-    return next;
+    return this.dataCoordinator.patchProfile(input);
   }
 
   async resetMindSection(input: {
     section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }> {
-    const section = input.section;
-    if (section === "soul") {
-      await writeTextFileAtomic(this.paths.soulPath, `${DEFAULT_SOUL_TEXT.trim()}\n`);
-      return {
-        accepted: true,
-        message: "SOUL 已恢复默认。"
-      };
-    }
-
-    if (section === "persona") {
-      await writeTextFileAtomic(this.paths.personaPath, `${DEFAULT_PERSONA_TEXT.trim()}\n`);
-      return {
-        accepted: true,
-        message: "PERSONA 已恢复默认。"
-      };
-    }
-
-    if (section === "state") {
-      this.stateStore.mutate((state) => {
-        state.emotional = {
-          ...DEFAULT_KERNEL_STATE.emotional
-        };
-        state.relationship = {
-          ...DEFAULT_KERNEL_STATE.relationship
-        };
-        state.coldStart = DEFAULT_KERNEL_STATE.coldStart;
-        state.sessionReentry = DEFAULT_KERNEL_STATE.sessionReentry
-          ? {
-              ...DEFAULT_KERNEL_STATE.sessionReentry
-            }
-          : null;
-      });
-      await this.stateStore.flushIfDirty();
-      return {
-        accepted: true,
-        message: "STATE 已恢复默认。"
-      };
-    }
-
-    if (section === "profile") {
-      await this.memory.getProfileStore().resetToDefault();
-      return {
-        accepted: true,
-        message: "PROFILE 已恢复默认。"
-      };
-    }
-
-    if (section === "facts") {
-      await this.memory.getFactsStore().clearAll();
-      return {
-        accepted: true,
-        message: "FACTS 与归档已清空。"
-      };
-    }
-
-    const removed = await this.memory.getEpisodesStore().clearAll();
-    return {
-      accepted: true,
-      message: `EPISODES 已清空（${removed} 个文件）。`
-    };
+    return this.dataCoordinator.resetMindSection(input);
   }
 
   async triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }> {
-    if (taskType === "daily-now") {
-      await this.kernel.runDailyNow();
-      return {
-        accepted: true,
-        message: "已触发内核日常任务检查。"
-      };
-    }
-    await this.kernel.runTickNow();
-    return {
-      accepted: true,
-      message: "已触发一次内核 tick。"
-    };
+    return this.dataCoordinator.triggerKernelTask(taskType);
   }
 
   async getStatus(): Promise<AppStatus> {
-    return this.collectStatus();
+    return this.statusCoordinator.collectStatus();
   }
 
   async startBilibiliQrAuth() {
-    const result = await this.bilibiliBrowse.startQrAuth();
-    await this.emitStatus();
-    return result;
+    return this.dataCoordinator.startBilibiliQrAuth();
   }
 
   async pollBilibiliQrAuth(input: { qrcodeKey: string }) {
-    const result = await this.bilibiliBrowse.pollQrAuth(input);
-    await this.emitStatus();
-    return {
-      authState: result.authState,
-      status: result.status,
-      detail: result.detail,
-      cookieSaved: result.cookieSaved
-    };
+    return this.dataCoordinator.pollBilibiliQrAuth(input);
   }
 
   async saveBilibiliCookie(input: { cookie: string }) {
-    const result = await this.bilibiliBrowse.saveCookie(input);
-    await this.emitStatus();
-    return result;
+    return this.dataCoordinator.saveBilibiliCookie(input);
   }
 
   async triggerTopicRecall(): Promise<{ accepted: boolean; message: string }> {
-    await this.kernel.runTickNow();
-    const result = {
-      accepted: true,
-      message: "内核已执行一次即时回想检查。"
-    };
-    await this.emitStatus();
-    return result;
+    return this.dataCoordinator.triggerTopicRecall();
   }
 
   async triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }> {
-    const browseResult = await this.bilibiliBrowse.runHeartbeat({
-      forceDigest: true
-    });
-    await this.kernel.runTickNow();
-    const result = {
-      accepted: browseResult.reason !== "error",
-      message:
-        browseResult.reason === "error"
-          ? `浏览任务失败：${browseResult.detail ?? "未知错误"}`
-          : "浏览任务已触发。"
-    };
-    await this.emitStatus();
-    return result;
+    return this.dataCoordinator.triggerTopicBrowse();
   }
 
   async deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {
-    const removed = await this.memory.deleteTopic(topicId);
-    await this.emitStatus();
-    return {
-      accepted: removed,
-      message: removed ? "话题已删除。" : "未找到该话题，可能已被清理。"
-    };
+    return this.dataCoordinator.deleteTopicPoolItem(topicId);
   }
 
   async clearTopicPool(): Promise<{ accepted: boolean; message: string }> {
-    const removedCount = await this.memory.clearTopicPool();
-    await this.emitStatus();
-    return {
-      accepted: true,
-      message: removedCount > 0 ? `已清空话题池，共删除 ${removedCount} 条。` : "话题池已经是空的。"
-    };
+    return this.dataCoordinator.clearTopicPool();
   }
 
   async openSystemPermissionSettings(
     permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }> {
-    return this.systemPermissionsService.openSystemPermissionSettings(permission);
+    return this.dataCoordinator.openSystemPermissionSettings(permission);
   }
 
   async resetSystemPermissions(): Promise<{ reset: boolean; message?: string }> {
-    return this.systemPermissionsService.resetSystemPermissions();
+    return this.dataCoordinator.resetSystemPermissions();
   }
 
   async openOpenClawWebUi(): Promise<{ opened: boolean; message: string }> {
-    const config = this.getConfig();
-
-    if (!config.openclaw.enabled) {
-      return {
-        opened: false,
-        message: "OpenClaw 未启用，请先开启并保存配置。"
-      };
-    }
-
-    const status = this.openclawRuntime.getStatus();
-    if (!status.online) {
-      return {
-        opened: false,
-        message: `OpenClaw Gateway 尚未就绪：${status.message}`
-      };
-    }
-
-    try {
-      const dashboardUrl = await this.openclawRuntime.getDashboardUrl();
-      if (this.openclawWebUiWindow && !this.openclawWebUiWindow.isDestroyed()) {
-        if (this.openclawWebUiWindow.isMinimized()) {
-          this.openclawWebUiWindow.restore();
-        }
-        if (!this.openclawWebUiWindow.isVisible()) {
-          this.openclawWebUiWindow.show();
-        }
-
-        void this.openclawWebUiWindow.loadURL(dashboardUrl);
-        this.openclawWebUiWindow.focus();
-        return {
-          opened: true,
-          message: "已在应用内打开 OpenClaw Web UI。"
-        };
-      }
-
-      const window = new BrowserWindow({
-        width: 1280,
-        height: 840,
-        minWidth: 960,
-        minHeight: 640,
-        title: "OpenClaw Web UI",
-        autoHideMenuBar: true,
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true
-        }
-      });
-
-      window.webContents.setWindowOpenHandler(({ url }) => {
-        void shell.openExternal(url);
-        return {
-          action: "deny"
-        };
-      });
-
-      this.openclawWebUiWindow = window;
-      window.on("closed", () => {
-        if (this.openclawWebUiWindow === window) {
-          this.openclawWebUiWindow = null;
-        }
-      });
-
-      await window.loadURL(dashboardUrl);
-      return {
-        opened: true,
-        message: "已在应用内打开 OpenClaw Web UI。"
-      };
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "未知错误";
-      return {
-        opened: false,
-        message: `打开失败：${detail}`
-      };
-    }
+    return this.clawCoordinator.openWebUi();
   }
 
   async getConsoleChatHistory(input?: {
@@ -717,12 +474,7 @@ export class CompanionRuntime {
     hasMore: boolean;
     nextCursor: string | null;
   }> {
-    return this.memory.listHistoryByCursor({
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID,
-      beforeId: input?.cursor,
-      limit: input?.limit ?? 20
-    });
+    return this.dataCoordinator.getConsoleChatHistory(input);
   }
 
   async startConsoleChat(text: string): Promise<{ requestId: string }> {
@@ -749,118 +501,30 @@ export class CompanionRuntime {
   }
 
   async clawConnect(): Promise<{ connected: boolean; message: string }> {
-    const gatewayReadyReason = this.getClawGatewayReadyError();
-    if (gatewayReadyReason) {
-      return {
-        connected: false,
-        message: gatewayReadyReason
-      };
-    }
-
-    try {
-      await this.clawChannel.connect();
-      return {
-        connected: true,
-        message: "Claw 已连接"
-      };
-    } catch (error) {
-      return {
-        connected: false,
-        message: error instanceof Error ? error.message : "Claw 连接失败"
-      };
-    }
+    return this.clawCoordinator.connect();
   }
 
   async clawDisconnect(): Promise<{ connected: boolean; message: string }> {
-    await this.clawChannel.disconnect();
-    return {
-      connected: false,
-      message: "Claw 已断开"
-    };
+    return this.clawCoordinator.disconnect();
   }
 
   async clawSend(message: string): Promise<{ accepted: boolean; message: string }> {
-    const normalized = message.trim();
-    if (!normalized) {
-      throw new Error("消息不能为空");
-    }
-
-    const gatewayReadyReason = this.getClawGatewayReadyError();
-    if (gatewayReadyReason) {
-      return {
-        accepted: false,
-        message: gatewayReadyReason
-      };
-    }
-
-    try {
-      await this.clawChannel.sendFromClaw("main", normalized);
-      return {
-        accepted: true,
-        message: "消息已发送到 Claw"
-      };
-    } catch (error) {
-      return {
-        accepted: false,
-        message: error instanceof Error ? error.message : "发送失败"
-      };
-    }
+    return this.clawCoordinator.send(message);
   }
 
   async clawHistory(limit = 50): Promise<{ items: ClawHistoryItem[] }> {
-    const gatewayReadyReason = this.getClawGatewayReadyError();
-    if (gatewayReadyReason) {
-      return {
-        items: []
-      };
-    }
-
-    const items = await this.clawChannel.getHistory("main", limit);
-    return {
-      items
-    };
+    return this.clawCoordinator.history(limit);
   }
 
   async clawAbort(): Promise<{ accepted: boolean; message: string }> {
-    const gatewayReadyReason = this.getClawGatewayReadyError();
-    if (gatewayReadyReason) {
-      return {
-        accepted: false,
-        message: gatewayReadyReason
-      };
-    }
-
-    try {
-      await this.clawChannel.abort("main");
-      return {
-        accepted: true,
-        message: "已发送中止请求"
-      };
-    } catch (error) {
-      return {
-        accepted: false,
-        message: error instanceof Error ? error.message : "中止失败"
-      };
-    }
+    return this.clawCoordinator.abort();
   }
 
-  private getClawGatewayReadyError(): string | null {
-    const config = this.getConfig();
-    if (!config.openclaw.enabled) {
-      return "OpenClaw 未启用";
-    }
-
-    const status = this.openclawRuntime.getStatus();
-    if (!status.online) {
-      return "OpenClaw Gateway 尚未就绪，请稍后再试。";
-    }
-
-    return null;
-  }
 
   async chatFromPet(text: string): Promise<{ replyText: string }> {
     await this.recordUserActivity({
-      channel: "console"
+      channel: "console",
+      text
     });
     const result = await this.petService.chatFromPet(text);
     if (result.replyText.trim()) {
@@ -911,7 +575,8 @@ export class CompanionRuntime {
     });
 
     await this.recordUserActivity({
-      channel: "console"
+      channel: "console",
+      text
     });
 
     try {
@@ -1014,193 +679,39 @@ export class CompanionRuntime {
   }
 
   private async startTelegram(): Promise<void> {
-    await this.telegram.start(async (inbound) => {
-      try {
-        await this.handleTelegramInbound(inbound);
-      } catch (error) {
-        console.error("[runtime] telegram inbound failed:", error);
-        const message =
-          error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
-        await this.telegram.send({
-          kind: "text",
-          text: message,
-          chatId: inbound.chatId
-        });
-      }
-      await this.emitStatus();
-    });
+    await this.channelCoordinator.startTelegram();
   }
 
   private async startQQ(): Promise<void> {
-    const config = this.getConfig().qq;
-    if (!config.enabled || !config.appId.trim() || !config.appSecret.trim()) {
-      await this.stopQQ();
-      return;
-    }
-
-    await this.stopQQ();
-
-    this.qqChannel = new QQChannel({
-      enabled: config.enabled,
-      appId: config.appId.trim(),
-      appSecret: config.appSecret.trim()
-    } satisfies QQChannelConfig);
-
-    await this.qqChannel.start(async (inbound) => {
-      try {
-        await this.handleQQInbound(inbound);
-      } catch (error) {
-        console.error("[runtime] qq inbound failed:", error);
-        const message =
-          error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
-        await this.qqChannel?.send({
-          kind: "text",
-          text: message,
-          chatId: inbound.chatId
-        });
-      }
-      await this.emitStatus();
-    });
+    await this.channelCoordinator.startQQ();
   }
 
   private async restartTelegram(): Promise<void> {
-    await this.telegram.stop();
-    await this.startTelegram();
+    await this.channelCoordinator.restartTelegram();
   }
 
   private async restartQQ(): Promise<void> {
-    await this.stopQQ();
-    await this.startQQ();
+    await this.channelCoordinator.restartQQ();
   }
 
   private async stopQQ(): Promise<void> {
-    if (!this.qqChannel) {
-      return;
-    }
-
-    await this.qqChannel.stop();
-    this.qqChannel = null;
-  }
-
-  private async handleTelegramInbound(inbound: InboundMessage): Promise<void> {
-    this.pet.emitEvent({
-      type: "thinking",
-      value: "start"
-    });
-    await this.recordUserActivity({
-      channel: "telegram",
-      chatId: inbound.chatId
-    });
-
-    try {
-      const reply = await this.withTimeout(
-        this.channelRouter.handleTelegram({
-          text: inbound.text,
-          photoUrl: inbound.photoUrl,
-          resourceId: PRIMARY_RESOURCE_ID,
-          threadId: PRIMARY_THREAD_ID
-        }),
-        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
-        "LLM 回复超时"
-      );
-      const parsedReply = extractEmotionTag(reply);
-      const visibleReply = parsedReply.cleanedText.trim();
-
-      if (parsedReply.emotion) {
-        this.pet.emitEvent({
-          type: "emotion",
-          value: parsedReply.emotion
-        });
-      }
-
-      if (visibleReply) {
-        await this.telegram.send({
-          kind: "text",
-          text: visibleReply,
-          chatId: inbound.chatId
-        });
-        await this.kernel.onAssistantMessage();
-      }
-    } finally {
-      this.pet.emitEvent({
-        type: "thinking",
-        value: "stop"
-      });
-    }
-  }
-
-  private async handleQQInbound(inbound: InboundMessage): Promise<void> {
-    this.pet.emitEvent({
-      type: "thinking",
-      value: "start"
-    });
-    await this.recordUserActivity({
-      channel: "qq",
-      chatId: inbound.chatId
-    });
-
-    try {
-      const reply = await this.withTimeout(
-        this.channelRouter.handleQQ({
-          text: inbound.text,
-          photoUrl: inbound.photoUrl,
-          resourceId: PRIMARY_RESOURCE_ID,
-          threadId: PRIMARY_THREAD_ID
-        }),
-        CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
-        "LLM 回复超时"
-      );
-      const parsedReply = extractEmotionTag(reply);
-      const visibleReply = parsedReply.cleanedText.trim();
-
-      if (parsedReply.emotion) {
-        this.pet.emitEvent({
-          type: "emotion",
-          value: parsedReply.emotion
-        });
-      }
-
-      if (visibleReply) {
-        await this.qqChannel?.send({
-          kind: "text",
-          text: visibleReply,
-          chatId: inbound.chatId
-        });
-        await this.kernel.onAssistantMessage();
-      }
-    } finally {
-      this.pet.emitEvent({
-        type: "thinking",
-        value: "stop"
-      });
-    }
+    await this.channelCoordinator.stopQQ();
   }
 
   private loadRuntimeContext(): void {
-    const context = this.runtimeContextStore.getContext();
-    this.lastUserAt = context.lastUserAt;
-    this.lastProactiveAt = context.lastProactiveAt;
-    this.lastInboundChannel = context.lastInboundChannel;
-    this.lastInboundChatId = context.lastInboundChatId;
-    this.kernel.setLastUserMessageAt(this.lastUserAt);
-    this.kernel.setLastProactiveAt(this.lastProactiveAt);
+    this.activityCoordinator.load();
   }
 
   private async recordUserActivity(input: {
     channel: RuntimeInboundChannel;
     chatId?: string;
+    text?: string;
   }): Promise<void> {
-    this.lastUserAt = new Date().toISOString();
-    this.lastInboundChannel = input.channel;
-    this.lastInboundChatId = input.chatId?.trim() ? input.chatId.trim() : null;
-    await this.persistRuntimeContext();
-    await this.kernel.onUserMessage(this.lastUserAt);
+    await this.activityCoordinator.recordUserActivity(input);
   }
 
   private async recordProactiveActivity(): Promise<void> {
-    this.lastProactiveAt = new Date().toISOString();
-    await this.persistRuntimeContext();
-    this.kernel.setLastProactiveAt(this.lastProactiveAt);
+    await this.activityCoordinator.recordProactiveActivity();
   }
 
   private async handleKernelProactive(message: string, topicId?: string): Promise<void> {
@@ -1259,7 +770,7 @@ export class CompanionRuntime {
         mimeType: "audio/mpeg"
       });
     } catch (error) {
-      console.warn("[kernel] proactive speech failed:", error);
+      this.logger.warn("kernel", "proactive:speech-failed", undefined, error);
     }
 
     this.pet.emitEvent({
@@ -1271,91 +782,16 @@ export class CompanionRuntime {
   }
 
   private async pushToRecentInboundChannel(text: string): Promise<void> {
-    if (this.lastInboundChannel === "telegram") {
-      const configuredChatId = this.getConfig().telegram.chatId.trim();
-      const targetChatId = this.lastInboundChatId ?? configuredChatId;
-      if (!targetChatId) {
-        return;
-      }
-
-      try {
-        await this.telegram.send({
-          kind: "text",
-          text,
-          chatId: targetChatId
-        });
-      } catch (error) {
-        console.warn("[kernel] proactive telegram push failed:", error);
-      }
-      return;
-    }
-
-    if (this.lastInboundChannel !== "qq") {
-      return;
-    }
-
-    const targetChatId = this.lastInboundChatId?.trim();
-    if (!targetChatId) {
-      return;
-    }
-
-    try {
-      await this.qqChannel?.send({
-        kind: "text",
-        text,
-        chatId: targetChatId
-      });
-    } catch (error) {
-      console.warn("[kernel] proactive qq push failed:", error);
-    }
+    await this.activityCoordinator.pushToRecentInboundChannel(text);
   }
 
-  private async persistRuntimeContext(): Promise<void> {
-    try {
-      await this.runtimeContextStore.saveContext({
-        lastProactiveAt: this.lastProactiveAt,
-        lastUserAt: this.lastUserAt,
-        lastInboundChannel: this.lastInboundChannel,
-        lastInboundChatId: this.lastInboundChatId
-      });
-    } catch (error) {
-      console.warn("[runtime] runtime context save failed:", error);
-    }
-  }
-
-  private async collectStatus(): Promise<AppStatus> {
-    this.systemPermissionsService.refreshSystemPermissions();
-    const openclawStatus = this.openclawRuntime.getStatus();
-    const browseStatus = await this.bilibiliBrowse.getStatus();
-    const tokenStats = await this.tokenStatsService.getStatus();
-    return {
-      bootedAt: this.bootedAt,
-      telegramConnected: this.telegram.isConnected(),
-      qqConnected: this.qqChannel?.isConnected() ?? false,
-      lastUserAt: this.lastUserAt,
-      lastProactiveAt: this.lastProactiveAt,
-      historyCount: await this.memory.countHistory({
-        resourceId: PRIMARY_RESOURCE_ID,
-        threadId: PRIMARY_THREAD_ID
-      }),
-      keepAwakeActive: this.keepAwake.isActive(),
-      topicPool: await this.memory.listTopicPool(50),
-      petOnline: this.petService.isPetOnline(),
-      openclawOnline: openclawStatus.online,
-      openclawStatus: openclawStatus.message,
-      browseStatus,
-      tokenStats,
-      systemPermissions: this.systemPermissionsService.getSnapshot(),
-      kernel: this.kernel.getStatus()
-    };
-  }
 
   private async emitStatus(): Promise<void> {
     if (this.statusListeners.size === 0) {
       return;
     }
 
-    const status = await this.collectStatus();
+    const status = await this.statusCoordinator.collectStatus();
     for (const listener of this.statusListeners) {
       listener(status);
     }
@@ -1392,11 +828,7 @@ export class CompanionRuntime {
 
     if (openclawChanged) {
       await this.runConfigSideEffect("重启 OpenClaw", 20_000, async () => {
-        await this.clawChannel.disconnect();
-        await this.openclawRuntime.start(nextConfig);
-        if (nextConfig.openclaw.enabled && this.openclawRuntime.getStatus().online) {
-          await this.clawChannel.connect();
-        }
+        await this.clawCoordinator.restartForConfig(nextConfig);
       });
     }
 
@@ -1439,7 +871,7 @@ export class CompanionRuntime {
     try {
       await this.withTimeout(Promise.resolve().then(task), timeoutMs, label);
     } catch (error) {
-      console.warn(`[runtime] ${label} 失败:`, error);
+      this.logger.warn("runtime", "config-side-effect-failed", { label }, error);
     }
   }
 
@@ -1457,4 +889,6 @@ export class CompanionRuntime {
   }
 }
 
-export const runtime = new CompanionRuntime();
+export function createRuntime(): CompanionRuntime {
+  return new CompanionRuntime();
+}

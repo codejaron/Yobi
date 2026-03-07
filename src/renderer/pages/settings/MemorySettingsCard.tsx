@@ -99,6 +99,113 @@ export function MemorySettingsCard({
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
+            <Label>记忆块保底预算(tokens)</Label>
+            <Input
+              type="number"
+              min={200}
+              max={8000}
+              value={String(config.memory.context.memoryFloorTokens)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    context: {
+                      ...config.memory.context,
+                      memoryFloorTokens: toInt(event.target.value, config.memory.context.memoryFloorTokens, 200, 8000)
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>最近消息上限</Label>
+            <Input
+              type="number"
+              min={10}
+              max={400}
+              value={String(config.memory.recentMessages)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    recentMessages: toInt(event.target.value, config.memory.recentMessages, 10, 400)
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+          <Label>启用本地语义检索</Label>
+          <Switch
+            checked={config.memory.embedding.enabled}
+            onChange={(checked) =>
+              setConfig({
+                ...config,
+                memory: {
+                  ...config.memory,
+                  embedding: {
+                    ...config.memory.embedding,
+                    enabled: checked
+                  }
+                }
+              })
+            }
+          />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Embedding 模型标识 / 文件名</Label>
+            <Input
+              value={config.memory.embedding.modelId}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    embedding: {
+                      ...config.memory.embedding,
+                      modelId: event.target.value || config.memory.embedding.modelId
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>语义相似度阈值</Label>
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step="0.01"
+              value={String(config.memory.embedding.similarityThreshold)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    embedding: {
+                      ...config.memory.embedding,
+                      similarityThreshold: Math.max(
+                        0,
+                        Math.min(1, Number(event.target.value) || config.memory.embedding.similarityThreshold)
+                      )
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
             <Label>活跃 Tick(ms)</Label>
             <Input
               type="number"

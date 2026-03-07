@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppConfig,
   AppStatus,
@@ -7,14 +7,36 @@ import type {
 import { SideNav } from "@renderer/components/layout/SideNav";
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
-import { DashboardPage } from "@renderer/pages/Dashboard";
-import { TopicPoolPage } from "@renderer/pages/TopicPool";
-import { ConsoleChatPage } from "@renderer/pages/ConsoleChat";
-import { ProvidersPage } from "@renderer/pages/Providers";
-import { MemoryPage } from "@renderer/pages/Memory";
-import { McpPage } from "@renderer/pages/Mcp";
-import { SettingsPage } from "@renderer/pages/Settings";
 import type { PageId } from "./types";
+
+const DashboardPage = lazy(async () => {
+  const module = await import("@renderer/pages/Dashboard");
+  return { default: module.DashboardPage };
+});
+const TopicPoolPage = lazy(async () => {
+  const module = await import("@renderer/pages/TopicPool");
+  return { default: module.TopicPoolPage };
+});
+const ConsoleChatPage = lazy(async () => {
+  const module = await import("@renderer/pages/ConsoleChat");
+  return { default: module.ConsoleChatPage };
+});
+const ProvidersPage = lazy(async () => {
+  const module = await import("@renderer/pages/Providers");
+  return { default: module.ProvidersPage };
+});
+const MemoryPage = lazy(async () => {
+  const module = await import("@renderer/pages/Memory");
+  return { default: module.MemoryPage };
+});
+const McpPage = lazy(async () => {
+  const module = await import("@renderer/pages/Mcp");
+  return { default: module.McpPage };
+});
+const SettingsPage = lazy(async () => {
+  const module = await import("@renderer/pages/Settings");
+  return { default: module.SettingsPage };
+});
 
 function pageTitle(page: PageId): string {
   switch (page) {
@@ -45,31 +67,82 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
 
-  const refreshStatus = useCallback(async (): Promise<void> => {
-    const next = await window.companion.getStatus();
-    setStatus(next);
+  const loadWithTimeout = useCallback(async <T,>(promise: Promise<T>, label: string, timeoutMs = 5000): Promise<T> => {
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        reject(new Error(`${label} 超时`));
+      }, timeoutMs);
+
+      promise
+        .then((value) => resolve(value))
+        .catch((error) => reject(error))
+        .finally(() => {
+          window.clearTimeout(timer);
+        });
+    });
   }, []);
 
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    try {
+      const next = await loadWithTimeout(window.companion.getStatus(), "状态加载");
+      setStatus(next);
+    } catch (error) {
+      console.error("[app] refreshStatus failed:", error);
+    }
+  }, [loadWithTimeout]);
+
   const refreshMindSnapshot = useCallback(async (): Promise<void> => {
-    const doc = await window.companion.getMindSnapshot();
-    setMindSnapshot(doc);
-  }, []);
+    try {
+      const doc = await loadWithTimeout(window.companion.getMindSnapshot(), "Mind 快照加载");
+      setMindSnapshot(doc);
+    } catch (error) {
+      console.error("[app] refreshMindSnapshot failed:", error);
+    }
+  }, [loadWithTimeout]);
 
   useEffect(() => {
     let unsubStatus: (() => void) | null = null;
     let unsubPetEnabled: (() => void) | null = null;
 
     const load = async (): Promise<void> => {
-      const [nextConfig, nextStatus, nextMindSnapshot] = await Promise.all([
-        window.companion.getConfig(),
-        window.companion.getStatus(),
-        window.companion.getMindSnapshot()
+      if (!window.companion) {
+        setNotice("预加载失败：window.companion 不存在");
+        return;
+      }
+
+      try {
+        const nextConfig = await loadWithTimeout(window.companion.getConfig(), "配置加载");
+        setConfig(nextConfig);
+      } catch (error) {
+        console.error("[app] initial config load failed:", error);
+        setNotice(error instanceof Error ? `配置加载失败：${error.message}` : "配置加载失败");
+        return;
+      }
+
+      setNotice("配置已加载，正在同步状态...");
+
+      const [statusResult, mindSnapshotResult] = await Promise.allSettled([
+        loadWithTimeout(window.companion.getStatus(), "状态加载"),
+        loadWithTimeout(window.companion.getMindSnapshot(), "Mind 快照加载")
       ]);
 
-      setConfig(nextConfig);
-      setStatus(nextStatus);
-      setMindSnapshot(nextMindSnapshot);
-      setNotice("就绪");
+      if (statusResult.status === "fulfilled") {
+        setStatus(statusResult.value);
+      } else {
+        console.error("[app] initial status load failed:", statusResult.reason);
+      }
+
+      if (mindSnapshotResult.status === "fulfilled") {
+        setMindSnapshot(mindSnapshotResult.value);
+      } else {
+        console.error("[app] initial mind snapshot load failed:", mindSnapshotResult.reason);
+      }
+
+      if (statusResult.status === "rejected" || mindSnapshotResult.status === "rejected") {
+        setNotice("部分状态加载失败，界面已降级显示");
+      } else {
+        setNotice("就绪");
+      }
 
       unsubStatus = window.companion.onStatus((update) => {
         setStatus(update);
@@ -95,13 +168,16 @@ export default function App() {
       });
     };
 
-    void load();
+    void load().catch((error) => {
+      console.error("[app] initial load failed:", error);
+      setNotice(error instanceof Error ? error.message : "初始化失败");
+    });
 
     return () => {
       unsubStatus?.();
       unsubPetEnabled?.();
     };
-  }, []);
+  }, [loadWithTimeout]);
 
   useEffect(() => {
     const onFocus = () => {
@@ -135,86 +211,125 @@ export default function App() {
       return <div className="text-sm text-muted-foreground">正在加载配置...</div>;
     }
 
+    if (!status && activePage === "dashboard") {
+      return (
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <div>配置已加载，但运行状态暂时不可用。</div>
+          <div>可以先切到“设置 / Provider / 记忆”等页面继续查看配置。</div>
+        </div>
+      );
+    }
+
+    const loading = <div className="text-sm text-muted-foreground">页面加载中...</div>;
+
     if (activePage === "dashboard") {
-      return <DashboardPage status={status} refreshStatus={refreshStatus} />;
+      return (
+        <Suspense fallback={loading}>
+          <DashboardPage status={status} refreshStatus={refreshStatus} />
+        </Suspense>
+      );
     }
 
     if (activePage === "console") {
-      return <ConsoleChatPage />;
+      return (
+        <Suspense fallback={loading}>
+          <ConsoleChatPage />
+        </Suspense>
+      );
     }
 
     if (activePage === "topics") {
-      return <TopicPoolPage status={status} refreshStatus={refreshStatus} />;
+      return (
+        <Suspense fallback={loading}>
+          <TopicPoolPage status={status} refreshStatus={refreshStatus} />
+        </Suspense>
+      );
     }
 
     if (activePage === "providers") {
-      return <ProvidersPage config={config} setConfig={setConfig} />;
+      return (
+        <Suspense fallback={loading}>
+          <ProvidersPage config={config} setConfig={setConfig} />
+        </Suspense>
+      );
     }
 
     if (activePage === "memory") {
       return (
-        <MemoryPage
-          snapshot={mindSnapshot}
-          onSaveSoul={async (markdown) => {
-            await window.companion.saveSoul({
-              markdown
-            });
-            await refreshMindSnapshot();
-            setNotice("SOUL 已更新");
-          }}
-          onSavePersona={async (markdown) => {
-            await window.companion.savePersona({
-              markdown
-            });
-            await refreshMindSnapshot();
-            setNotice("PERSONA 已更新");
-          }}
-          onResetMindSection={async (input) => {
-            const result = await window.companion.resetMindSection(input);
-            await refreshMindSnapshot();
-            return result;
-          }}
-          onTriggerKernelTask={async (taskType) => {
-            const result = await window.companion.triggerKernelTask(taskType);
-            await refreshMindSnapshot();
-            return result;
-          }}
-          onRefresh={async () => {
-            await refreshMindSnapshot();
-            setNotice("已刷新 Mind 快照");
-          }}
-        />
+        <Suspense fallback={loading}>
+          <MemoryPage
+            snapshot={mindSnapshot}
+            onSaveSoul={async (markdown) => {
+              await window.companion.saveSoul({ markdown });
+              await refreshMindSnapshot();
+              setNotice("SOUL 已更新");
+            }}
+            onSavePersona={async (markdown) => {
+              await window.companion.savePersona({ markdown });
+              await refreshMindSnapshot();
+              setNotice("PERSONA 已更新");
+            }}
+            onResetMindSection={async (input) => {
+              const result = await window.companion.resetMindSection(input);
+              await refreshMindSnapshot();
+              return result;
+            }}
+            onTriggerKernelTask={async (taskType) => {
+              const result = await window.companion.triggerKernelTask(taskType);
+              await refreshMindSnapshot();
+              return result;
+            }}
+            onRefresh={async () => {
+              await refreshMindSnapshot();
+              setNotice("已刷新 Mind 快照");
+            }}
+          />
+        </Suspense>
       );
     }
 
     if (activePage === "mcp") {
-      return <McpPage config={config} setConfig={setConfig} />;
+      return (
+        <Suspense fallback={loading}>
+          <McpPage config={config} setConfig={setConfig} />
+        </Suspense>
+      );
     }
 
-    return <SettingsPage config={config} status={status} setConfig={setConfig} />;
+    return (
+      <Suspense fallback={loading}>
+        <SettingsPage config={config} status={status} setConfig={setConfig} />
+      </Suspense>
+    );
   }, [activePage, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">
       <SideNav active={activePage} onSelect={setActivePage} />
 
-      <main className="space-y-4">
-        {activePage === "console" ? null : (
-          <header className="glass-panel flex items-center justify-between p-4">
-            <div>
-              <h1 className="font-display text-2xl tracking-wide">{pageTitle(activePage)}</h1>
-              <p className="text-sm text-muted-foreground">{notice}</p>
-            </div>
+      <main className="space-y-6">
+        <section className="flex flex-wrap items-center justify-between gap-4 rounded-[32px] border border-white/60 bg-white/70 px-8 py-6 shadow-[0_24px_60px_rgba(53,38,21,0.08)] backdrop-blur">
+          <div>
+            <h1 className="font-display text-3xl tracking-tight text-foreground">
+              {pageTitle(activePage)}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">{notice}</p>
+          </div>
 
-            <div className="flex items-center gap-3">
-              <Badge>{status?.telegramConnected ? "Telegram Online" : "Telegram Offline"}</Badge>
-              <Badge>{status?.qqConnected ? "QQ Online" : "QQ Offline"}</Badge>
-              <Button onClick={() => void saveConfig()} disabled={saving || !config}>
+          <div className="flex items-center gap-3">
+            <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
+              Telegram {status?.telegramConnected ? "Online" : "Offline"}
+            </Badge>
+            <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
+              QQ {status?.qqConnected ? "Online" : "Offline"}
+            </Badge>
+            {config ? (
+              <Button onClick={saveConfig} disabled={saving}>
                 {saving ? "保存中..." : "保存配置"}
               </Button>
-            </div>
-          </header>
-        )}
+            ) : null}
+          </div>
+        </section>
 
         {content}
       </main>

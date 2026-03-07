@@ -1,8 +1,12 @@
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { desktopCapturer, shell, systemPreferences } from "electron";
+import { desktopCapturer, systemPreferences } from "electron";
+import { openSafeSystemSettingsUrl } from "@main/utils/external-links";
 import type { PermissionState, SystemPermissionStatus } from "@shared/types";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 const execFileAsync = promisify(execFile);
 
@@ -57,7 +61,7 @@ export class SystemPermissionsService {
           prompted = true;
           systemPreferences.isTrustedAccessibilityClient(true);
         } catch (error) {
-          console.warn("[runtime] request accessibility permission failed:", error);
+          logger.warn("system-permissions", "request-accessibility-failed", undefined, error);
         }
         this.systemPermissions.accessibility = this.getAccessibilityPermissionState();
       }
@@ -71,7 +75,7 @@ export class SystemPermissionsService {
             this.systemPermissions.microphone = granted ? "granted" : "denied";
           }
         } catch (error) {
-          console.warn("[runtime] request microphone permission failed:", error);
+          logger.warn("system-permissions", "request-microphone-failed", undefined, error);
         }
       }
 
@@ -111,13 +115,19 @@ export class SystemPermissionsService {
     }
 
     try {
-      await shell.openExternal(target);
+      const opened = await openSafeSystemSettingsUrl(target);
+      if (!opened) {
+        return {
+          opened: false,
+          prompted: false
+        };
+      }
       return {
         opened: true,
         prompted: false
       };
     } catch (error) {
-      console.warn("[runtime] open system permission settings failed:", error);
+      logger.warn("system-permissions", "open-settings-failed", undefined, error);
       return {
         opened: false,
         prompted: false
@@ -148,7 +158,7 @@ export class SystemPermissionsService {
         message: `已重置 ${bundleId} 的系统权限。`
       };
     } catch (error) {
-      console.warn("[runtime] reset system permissions failed:", error);
+      logger.warn("system-permissions", "reset-permissions-failed", undefined, error);
       return {
         reset: false,
         message: "重置权限失败，请稍后重试。"
@@ -236,7 +246,7 @@ export class SystemPermissionsService {
         }
       });
     } catch (error) {
-      console.warn("[runtime] request screen capture permission failed:", error);
+      logger.warn("system-permissions", "request-screen-capture-failed", undefined, error);
     }
   }
 

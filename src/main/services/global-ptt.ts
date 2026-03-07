@@ -1,4 +1,7 @@
 import { createRequire } from "node:module";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 export type GlobalPttPhase = "down" | "up";
 
@@ -296,7 +299,7 @@ export class GlobalPetPushToTalkService {
       }
       hook.stop();
     } catch (error) {
-      console.warn("[global-ptt] failed to stop uiohook:", error);
+      logger.warn("global-ptt", "stop-uiohook-failed", undefined, error);
     }
   }
 
@@ -352,7 +355,7 @@ export class GlobalPetPushToTalkService {
     try {
       this.onPhase?.(phase);
     } catch (error) {
-      console.warn("[global-ptt] phase listener failed:", error);
+      logger.warn("global-ptt", "phase-listener-failed", undefined, error);
     }
   }
 }

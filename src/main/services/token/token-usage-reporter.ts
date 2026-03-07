@@ -1,4 +1,7 @@
 import type { TokenUsageSource } from "@shared/types";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 export interface TokenUsageReportEvent {
   source: TokenUsageSource;
@@ -25,7 +28,7 @@ export function reportTokenUsage(event: TokenUsageReportEvent): void {
   if (!recorder) {
     if (!hasWarnedNoRecorder) {
       hasWarnedNoRecorder = true;
-      console.debug("[token] recorder not configured; usage event skipped");
+      logger.info("token", "recorder-missing");
     }
     return;
   }
@@ -37,6 +40,6 @@ export function reportTokenUsage(event: TokenUsageReportEvent): void {
   void Promise.resolve()
     .then(() => recorder?.(payload))
     .catch((error) => {
-      console.warn("[token] failed to record usage:", error);
+      logger.warn("[token] failed to record usage:", error);
     });
 }

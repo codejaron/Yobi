@@ -1,4 +1,7 @@
 import type { QQAccessTokenResponse } from "./qq-types";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 const TOKEN_ENDPOINT = "https://bots.qq.com/app/getAppAccessToken";
 const REFRESH_BUFFER_MS = 120_000;
@@ -84,7 +87,7 @@ export class QQAuthManager {
     const delayMs = Math.max((expiresInSeconds - 120) * 1000, 60_000);
     this.refreshTimer = setTimeout(() => {
       void this.refresh().catch((error) => {
-        console.warn("[qq-auth] token auto refresh failed:", error);
+        logger.warn("qq-auth", "token-auto-refresh-failed", undefined, error);
       });
     }, delayMs);
     this.refreshTimer.unref?.();

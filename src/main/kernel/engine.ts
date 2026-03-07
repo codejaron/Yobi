@@ -1,13 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { generateObject } from "ai";
 import { z } from "zod";
-import type {
-  AppConfig,
-  BufferMessage,
-  EmotionalState,
-  KernelStatus,
-  ReflectionProposal
-} from "@shared/types";
+import type { AppConfig, BufferMessage, KernelStatus, ReflectionProposal } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
@@ -24,6 +18,15 @@ import {
   readJsonFile,
   writeJsonFileAtomic
 } from "@main/storage/fs";
+import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
+import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import { applyElapsedEmotionalDecay, applyEmotionalSignalsToState, applyRealtimeEmotionHeuristics, computeMessageCadenceScale, computeSignalAgeScale, clamp01 } from "./emotion-utils";
+import { selectBestProactiveTopic } from "./proactive-utils";
+import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, isWithinQuietHours, shorten, toDayKey } from "./relationship-utils";
+import { normalizeBufferRow } from "./message-utils";
+
+export { computeMessageCadenceScale, applyElapsedEmotionalDecay, applyRealtimeEmotionHeuristics, computeSignalAgeScale, applyEmotionalSignalsToState } from "./emotion-utils";
+export { selectBestProactiveTopic } from "./proactive-utils";
 
 const semanticProfileSchema = z.object({
   preferredComfortStyle: z.string().min(1).max(30).optional(),
@@ -43,6 +46,16 @@ const reflectionSchema = z.object({
     novelty: z.number().min(0).max(1),
     usefulness: z.number().min(0).max(1)
   })
+});
+
+const proactiveRewriteSchema = z.object({
+  rewrittenMessage: z.string().min(1).max(160)
+});
+
+const dailyEpisodeSummarySchema = z.object({
+  summary: z.string().min(1).max(240),
+  unresolved: z.array(z.string().min(1).max(120)).max(5).default([]),
+  significance: z.number().min(0).max(1).default(0.4)
 });
 
 interface KernelEngineInput {
@@ -66,6 +79,9 @@ export class KernelEngine {
   private lastProactiveAt: string | null = null;
   private dailyRanDayKey: string | null = null;
   private currentTickIntervalMs = 30_000;
+  private readonly startedAtMs = Date.now();
+  private reflectionLane: Promise<void> = Promise.resolve();
+  private readonly backgroundWorker = new BackgroundTaskWorkerService();
 
   constructor(private readonly input: KernelEngineInput) {
     const config = input.getConfig().kernel;
@@ -78,6 +94,7 @@ export class KernelEngine {
 
   async init(): Promise<void> {
     await this.taskQueue.init();
+    await this.backgroundWorker.init();
     this.taskQueue.register("fact-extraction", async (task) => {
       await this.runFactExtractionTask(task.payload);
     });
@@ -122,6 +139,10 @@ export class KernelEngine {
     };
   }
 
+  getBackgroundWorkerStatus(): { available: boolean; message: string } {
+    return this.backgroundWorker.getStatus();
+  }
+
   setLastUserMessageAt(value: string | null): void {
     if (!value || !Number.isFinite(new Date(value).getTime())) {
       this.lastUserMessageAt = null;
@@ -138,13 +159,14 @@ export class KernelEngine {
     this.lastProactiveAt = new Date(value).toISOString();
   }
 
-  async onUserMessage(ts = new Date().toISOString()): Promise<void> {
+  async onUserMessage(input: { ts?: string; text?: string } = {}): Promise<void> {
     this.events.enqueue({
       id: randomUUID(),
       type: "user-message",
       priority: "P0",
       payload: {
-        ts
+        ts: input.ts ?? new Date().toISOString(),
+        text: typeof input.text === "string" ? input.text : ""
       }
     });
     await this.processUrgentEvents();
@@ -166,6 +188,7 @@ export class KernelEngine {
   async runDailyNow(): Promise<void> {
     await this.scheduleDailyTasks(true);
     await this.taskQueue.processAvailable();
+    await this.taskQueue.drainUntilIdle();
     await this.taskQueue.compactCompleted();
     await this.input.stateStore.flushIfDirty();
   }
@@ -193,6 +216,7 @@ export class KernelEngine {
     await this.processQueuedEvents();
     await this.maybeScheduleDailyTasks();
     await this.taskQueue.processAvailable();
+    await this.input.memory.backfillFactEmbeddings(10);
     await this.maybeEmitProactiveMessage();
     await this.input.stateStore.flushIfDirty();
 
@@ -228,23 +252,27 @@ export class KernelEngine {
 
       if (next.type === "user-message") {
         const ts = typeof next.payload?.ts === "string" ? next.payload.ts : new Date().toISOString();
-        this.handleUserMessageEvent(ts);
+        const text = typeof next.payload?.text === "string" ? next.payload.text : "";
+        this.handleUserMessageEvent(ts, text);
       }
     }
   }
 
-  private handleUserMessageEvent(ts: string): void {
+  private handleUserMessageEvent(ts: string, text: string): void {
     const currentTs = new Date(ts).getTime();
     const lastTs = this.lastUserMessageAt ? new Date(this.lastUserMessageAt).getTime() : 0;
-    const gapHours = lastTs > 0 ? (currentTs - lastTs) / (3600 * 1000) : 0;
+    const gapMs = lastTs > 0 ? Math.max(0, currentTs - lastTs) : null;
+    const gapHours = typeof gapMs === "number" ? gapMs / (3600 * 1000) : 0;
+    const cadenceScale = computeMessageCadenceScale(gapMs);
     this.lastUserMessageAt = ts;
 
     this.input.stateStore.mutate((state) => {
-      state.emotional.connection = clamp01(state.emotional.connection + 0.08);
-      state.emotional.energy = clamp01(state.emotional.energy + 0.03);
+      state.emotional.connection = clamp01(state.emotional.connection + 0.08 * cadenceScale);
+      state.emotional.energy = clamp01(state.emotional.energy + 0.03 * cadenceScale);
+      state.emotional = applyRealtimeEmotionHeuristics(state.emotional, text, this.input.getConfig().kernel.emotionSignals);
       state.coldStart = false;
       const reentryThreshold = this.input.getConfig().kernel.sessionReentryGapHours;
-      if (gapHours >= reentryThreshold) {
+      if (typeof gapMs === "number" && gapHours >= reentryThreshold) {
         state.sessionReentry = {
           active: true,
           gapHours: Math.floor(gapHours),
@@ -258,19 +286,20 @@ export class KernelEngine {
   }
 
   private applyStateDecay(): void {
+    const now = new Date();
     this.input.stateStore.mutate((state) => {
-      state.emotional.mood += (0 - state.emotional.mood) * 0.06;
-      state.emotional.energy = clamp01(state.emotional.energy - 0.005);
-      state.emotional.connection = clamp01(state.emotional.connection - 0.0025);
-      state.emotional.curiosity = clamp01(state.emotional.curiosity - 0.001);
-      state.emotional.irritation = clamp01(state.emotional.irritation - 0.004);
+      const lastDecayAt = state.lastDecayAt ? new Date(state.lastDecayAt).getTime() : NaN;
+      state.lastDecayAt = now.toISOString();
+      if (!Number.isFinite(lastDecayAt)) {
+        return;
+      }
 
-      if (state.emotional.energy < 0.25) {
-        state.emotional.curiosity = clamp01(state.emotional.curiosity - 0.003);
+      const deltaSeconds = Math.max(0, (now.getTime() - lastDecayAt) / 1000);
+      if (deltaSeconds <= 0) {
+        return;
       }
-      if (state.emotional.connection < 0.2) {
-        state.emotional.mood = clampRange(state.emotional.mood - 0.01, -1, 1);
-      }
+
+      state.emotional = applyElapsedEmotionalDecay(state.emotional, deltaSeconds);
     });
   }
 
@@ -359,14 +388,31 @@ export class KernelEngine {
 
     const existingFacts = this.input.memory.getFactsStore().listAll();
     const profileHint = this.input.memory.getProfileStore().getProfile();
-    const extractionResult = await runFactExtraction({
-      messages,
-      existingFacts,
-      profileHint,
-      modelFactory: this.input.modelFactory,
-      config: this.input.getConfig(),
-      maxOutputTokens: this.input.getConfig().kernel.factExtraction.maxOutputTokens
-    });
+    const config = this.input.getConfig();
+    const extractionResult = this.backgroundWorker.getStatus().available
+      ? await this.backgroundWorker.runFactExtraction({
+          messages,
+          existingFacts,
+          profileHint,
+          config,
+          maxOutputTokens: config.kernel.factExtraction.maxOutputTokens
+        })
+      : await runFactExtraction({
+          messages,
+          existingFacts,
+          profileHint,
+          modelFactory: this.input.modelFactory,
+          config,
+          maxOutputTokens: config.kernel.factExtraction.maxOutputTokens
+        });
+    if (extractionResult.tokenUsage) {
+      reportTokenUsage({
+        source: "background:fact-extraction",
+        usage: extractionResult.tokenUsage,
+        inputText: JSON.stringify(messages),
+        outputText: JSON.stringify(extractionResult.operations)
+      });
+    }
     const normalizedOperations = extractionResult.operations.map((operation) => ({
       ...operation,
       fact: {
@@ -374,7 +420,8 @@ export class KernelEngine {
         source_range: sourceRange
       }
     }));
-    await this.input.memory.getFactsStore().applyOperations(normalizedOperations);
+    const changedFacts = await this.input.memory.getFactsStore().applyOperations(normalizedOperations);
+    await this.input.memory.syncFactEmbeddings(changedFacts);
     this.applyEmotionalSignals(extractionResult.emotionalSignals, messages);
     await this.input.memory.markExtractedByRange(sourceRange);
   }
@@ -419,19 +466,77 @@ export class KernelEngine {
     const first = todayItems[0];
     const last = todayItems[todayItems.length - 1];
     const userMessages = todayItems.filter((item) => item.role === "user");
-    const summary = [
+    const fallbackSummary = [
       `今天共对话 ${todayItems.length} 条，用户消息 ${userMessages.length} 条。`,
       first ? `开场：${shorten(first.text, 40)}` : "",
       last ? `收尾：${shorten(last.text, 40)}` : ""
     ]
       .filter(Boolean)
       .join(" ");
+
+    let summary = fallbackSummary;
+    let unresolved: string[] = [];
+    let significance = Math.min(0.6, userMessages.length / 20);
+
+    try {
+      if (this.backgroundWorker.getStatus().available) {
+        const result = await this.backgroundWorker.runDailyEpisode({
+          date: today,
+          todayItems: todayItems.map((item) => ({ role: item.role, text: item.text })),
+          userMessageCount: userMessages.length,
+          fallbackSummary,
+          config: this.input.getConfig()
+        });
+        if (result.tokenUsage) {
+          reportTokenUsage({
+            source: "background:reflection",
+            usage: result.tokenUsage,
+            inputText: JSON.stringify(todayItems.slice(-80)),
+            outputText: JSON.stringify(result)
+          });
+        }
+        summary = result.summary.trim() || fallbackSummary;
+        unresolved = result.unresolved;
+        significance = result.significance;
+      } else {
+        const system = "你负责把当天对话整理成一条简短 episode，总结当天对话、未解事项和重要性。";
+        const prompt = JSON.stringify({
+          date: today,
+          message_window: todayItems.slice(-80).map((item) => ({
+            role: item.role,
+            text: item.text
+          }))
+        });
+        const result = await this.runOnReflectionLane(() =>
+          generateObject({
+            model: this.input.modelFactory.getReflectionModel(),
+            providerOptions: resolveOpenAIStoreOption(this.input.getConfig()),
+            schema: dailyEpisodeSummarySchema,
+            system,
+            prompt,
+            maxOutputTokens: 240
+          })
+        );
+        reportTokenUsage({
+          source: "background:reflection",
+          usage: result.usage,
+          systemText: system,
+          inputText: prompt,
+          outputText: JSON.stringify(result.object ?? {})
+        });
+        const parsed = dailyEpisodeSummarySchema.parse(result.object ?? {});
+        summary = parsed.summary.trim() || fallbackSummary;
+        unresolved = parsed.unresolved;
+        significance = parsed.significance;
+      }
+    } catch {}
+
     const episode = this.input.memory.getEpisodesStore().buildEpisode({
       date: today,
       summary,
-      significance: userMessages.length >= 10 ? 0.7 : 0.45,
+      significance,
       sourceRanges: [],
-      unresolved: []
+      unresolved
     });
     await this.input.memory.getEpisodesStore().saveDailyEpisodes(today, [episode]);
   }
@@ -453,16 +558,43 @@ export class KernelEngine {
       null,
       2
     );
-    const result = await generateObject({
-      model: this.input.modelFactory.getReflectionModel(),
-      providerOptions: resolveOpenAIStoreOption(this.input.getConfig()),
-      schema: semanticProfileSchema,
-      system:
-        "你根据最近对话模式更新用户画像，保持小幅变化，不要发散猜测。只输出 schema 字段。",
-      prompt,
-      maxOutputTokens: 400
-    });
-    const parsed = semanticProfileSchema.parse(result.object ?? {});
+    let parsed;
+    if (this.backgroundWorker.getStatus().available) {
+      const result = await this.backgroundWorker.runProfileSemantic({
+        profile,
+        episodes: episodes.map((episode) => ({ date: episode.date, summary: episode.summary })),
+        config: this.input.getConfig()
+      });
+      if (result.tokenUsage) {
+        reportTokenUsage({
+          source: "background:reflection",
+          usage: result.tokenUsage,
+          inputText: prompt,
+          outputText: JSON.stringify(result.result ?? {})
+        });
+      }
+      parsed = semanticProfileSchema.parse(result.result ?? {});
+    } else {
+      const semanticSystem = "你根据最近对话模式更新用户画像，保持小幅变化，不要发散猜测。只输出 schema 字段。";
+      const result = await this.runOnReflectionLane(() =>
+        generateObject({
+          model: this.input.modelFactory.getReflectionModel(),
+          providerOptions: resolveOpenAIStoreOption(this.input.getConfig()),
+          schema: semanticProfileSchema,
+          system: semanticSystem,
+          prompt,
+          maxOutputTokens: 400
+        })
+      );
+      reportTokenUsage({
+        source: "background:reflection",
+        usage: result.usage,
+        systemText: semanticSystem,
+        inputText: prompt,
+        outputText: JSON.stringify(result.object ?? {})
+      });
+      parsed = semanticProfileSchema.parse(result.object ?? {});
+    }
     await this.input.memory.getProfileStore().applySemanticPatch((draft) => {
       if (parsed.preferredComfortStyle) {
         draft.communication.preferred_comfort_style = parsed.preferredComfortStyle;
@@ -507,16 +639,42 @@ export class KernelEngine {
       null,
       2
     );
-    const result = await generateObject({
-      model: this.input.modelFactory.getReflectionModel(),
-      providerOptions: resolveOpenAIStoreOption(this.input.getConfig()),
-      schema: reflectionSchema,
-      system:
-        "你是 Yobi 的反思模块，请给出一个可执行的微调建议和评分。分数越高表示证据越充分。",
-      prompt,
-      maxOutputTokens: 400
-    });
-    const parsed = reflectionSchema.parse(result.object);
+    let parsed;
+    if (this.backgroundWorker.getStatus().available) {
+      const result = await this.backgroundWorker.runDailyReflection({
+        episodes: episodes.map((episode) => ({ date: episode.date, summary: episode.summary, significance: episode.significance })),
+        config: this.input.getConfig()
+      });
+      if (result.tokenUsage) {
+        reportTokenUsage({
+          source: "background:reflection",
+          usage: result.tokenUsage,
+          inputText: prompt,
+          outputText: JSON.stringify(result.result ?? {})
+        });
+      }
+      parsed = reflectionSchema.parse(result.result);
+    } else {
+      const reflectionSystem = "你是 Yobi 的反思模块，请给出一个可执行的微调建议和评分。分数越高表示证据越充分。";
+      const result = await this.runOnReflectionLane(() =>
+        generateObject({
+          model: this.input.modelFactory.getReflectionModel(),
+          providerOptions: resolveOpenAIStoreOption(this.input.getConfig()),
+          schema: reflectionSchema,
+          system: reflectionSystem,
+          prompt,
+          maxOutputTokens: 400
+        })
+      );
+      reportTokenUsage({
+        source: "background:reflection",
+        usage: result.usage,
+        systemText: reflectionSystem,
+        inputText: prompt,
+        outputText: JSON.stringify(result.object ?? {})
+      });
+      parsed = reflectionSchema.parse(result.object);
+    }
     const average =
       (parsed.scores.specificity + parsed.scores.evidence + parsed.scores.novelty + parsed.scores.usefulness) /
       4;
@@ -550,6 +708,62 @@ export class KernelEngine {
     await writeJsonFileAtomic(this.input.paths.reflectionLogPath, log.slice(-500));
   }
 
+  private async runOnReflectionLane<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.reflectionLane.catch(() => undefined).then(task);
+    this.reflectionLane = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(label));
+      }, timeoutMs);
+      timer.unref?.();
+      promise.then(resolve).catch(reject).finally(() => clearTimeout(timer));
+    });
+  }
+
+  private async maybeRewriteProactiveMessage(baseMessage: string): Promise<string> {
+    const trimmed = baseMessage.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+
+    try {
+      const system = "你负责把 Yobi 的主动消息改写得更自然、更像陪伴式搭话。保持原意，输出 rewrittenMessage。";
+      const prompt = JSON.stringify({
+        message: trimmed,
+        stage: this.input.stateStore.getSnapshot().relationship.stage,
+        emotional: this.input.stateStore.getSnapshot().emotional
+      });
+      const result = await this.withTimeout(
+        this.runOnReflectionLane(() =>
+          generateObject({
+            model: this.input.modelFactory.getReflectionModel(),
+            providerOptions: resolveOpenAIStoreOption(this.input.getConfig()),
+            schema: proactiveRewriteSchema,
+            system,
+            prompt,
+            maxOutputTokens: 160
+          })
+        ),
+        10_000,
+        "proactive-rewrite-timeout"
+      );
+      reportTokenUsage({
+        source: "background:reflection",
+        usage: result.usage,
+        systemText: system,
+        inputText: prompt,
+        outputText: JSON.stringify(result.object ?? {})
+      });
+      return proactiveRewriteSchema.parse(result.object ?? {}).rewrittenMessage.trim() || trimmed;
+    } catch {
+      return trimmed;
+    }
+  }
+
   private resolveTickIntervalMs(): number {
     const kernel = this.input.getConfig().kernel;
     const now = Date.now();
@@ -575,15 +789,8 @@ export class KernelEngine {
     if (!callback || !config.proactive.enabled) {
       return;
     }
-    if (!this.lastUserMessageAt) {
-      return;
-    }
 
     const now = Date.now();
-    const silenceMs = now - new Date(this.lastUserMessageAt).getTime();
-    if (silenceMs < config.proactive.silenceThresholdMs) {
-      return;
-    }
     if (this.lastProactiveAt) {
       const elapsed = now - new Date(this.lastProactiveAt).getTime();
       if (elapsed < config.proactive.cooldownMs) {
@@ -594,9 +801,32 @@ export class KernelEngine {
       return;
     }
 
+    const snapshot = this.input.stateStore.getSnapshot();
+    if (!this.lastUserMessageAt) {
+      if (!snapshot.coldStart || now - this.startedAtMs < config.proactive.coldStartDelayMs) {
+        return;
+      }
+
+      await callback({
+        message: await this.maybeRewriteProactiveMessage("嗨，我是 Yobi。今天想让我陪你做点什么吗？")
+      });
+      this.lastProactiveAt = new Date().toISOString();
+      return;
+    }
+
+    const silenceMs = now - new Date(this.lastUserMessageAt).getTime();
+    if (silenceMs < config.proactive.silenceThresholdMs) {
+      return;
+    }
+
     const activeTopics = await this.input.memory.listActive(5);
-    const topic = activeTopics[0];
+    const interestProfile = await this.input.memory.getInterestProfile();
+    const topic = selectBestProactiveTopic(activeTopics, interestProfile, snapshot.emotional.curiosity);
     if (!topic) {
+      await callback({
+        message: await this.maybeRewriteProactiveMessage("我刚刚想到你了，要不要和我聊两句？")
+      });
+      this.lastProactiveAt = new Date().toISOString();
       return;
     }
 
@@ -604,19 +834,29 @@ export class KernelEngine {
       ? `我刚刷到个东西，感觉你会有兴趣：${topic.text}`
       : `突然想起一件事：${topic.text}`;
     await callback({
-      message,
+      message: await this.maybeRewriteProactiveMessage(message),
       topicId: topic.id
     });
     this.lastProactiveAt = new Date().toISOString();
   }
 
   private async evaluateRelationshipTransition(): Promise<void> {
-    const historyCount = await this.input.memory.countHistory({
-      threadId: this.input.threadId,
-      resourceId: this.input.resourceId
-    });
+    const [historyCount, recentEpisodes] = await Promise.all([
+      this.input.memory.countHistory({
+        threadId: this.input.threadId,
+        resourceId: this.input.resourceId
+      }),
+      this.input.memory.listRecentEpisodes(7)
+    ]);
     const snapshot = this.input.stateStore.getSnapshot();
-    const targetStage = computeTargetStage(historyCount, snapshot.emotional.connection);
+    const meaningfulDays7d = countMeaningfulDays(recentEpisodes);
+    const recentEpisodeQuality7d = computeAverageEpisodeQuality(recentEpisodes);
+    const targetStage = computeTargetStage(
+      historyCount,
+      snapshot.emotional.connection,
+      meaningfulDays7d,
+      recentEpisodeQuality7d
+    );
     const stages = ["stranger", "acquaintance", "familiar", "close", "intimate"] as const;
     const currentIndex = stages.indexOf(snapshot.relationship.stage);
     const targetIndex = stages.indexOf(targetStage);
@@ -628,7 +868,7 @@ export class KernelEngine {
         state.relationship.upgradeStreak += 1;
         state.relationship.downgradeStreak = 0;
         if (state.relationship.upgradeStreak >= upgradeWindow) {
-          state.relationship.stage = targetStage;
+          state.relationship.stage = stages[Math.min(stages.length - 1, currentIndex + 1)] ?? targetStage;
           state.relationship.upgradeStreak = 0;
         }
         return;
@@ -638,7 +878,7 @@ export class KernelEngine {
         state.relationship.downgradeStreak += 1;
         state.relationship.upgradeStreak = 0;
         if (state.relationship.downgradeStreak >= downgradeWindow) {
-          state.relationship.stage = targetStage;
+          state.relationship.stage = stages[Math.max(0, currentIndex - 1)] ?? targetStage;
           state.relationship.downgradeStreak = 0;
         }
         return;
@@ -669,157 +909,4 @@ export class KernelEngine {
       });
     }
   }
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampRange(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function clampAbsDelta(value: number, maxAbs: number): number {
-  return clampRange(value, -Math.abs(maxAbs), Math.abs(maxAbs));
-}
-
-function normalizeBufferRow(raw: unknown): BufferMessage | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const row = raw as Record<string, unknown>;
-  const id = typeof row.id === "string" ? row.id : "";
-  const ts = typeof row.ts === "string" ? row.ts : "";
-  const role =
-    row.role === "system" || row.role === "assistant" || row.role === "user" ? row.role : null;
-  const channel = row.channel === "telegram" || row.channel === "qq" ? row.channel : "console";
-  const text = typeof row.text === "string" ? row.text.trim() : "";
-  if (!id || !ts || !role || !text) {
-    return null;
-  }
-  return {
-    id,
-    ts,
-    role,
-    channel,
-    text,
-    meta: row.meta && typeof row.meta === "object" ? (row.meta as Record<string, unknown>) : undefined,
-    extracted: Boolean(row.extracted)
-  };
-}
-
-function toDayKey(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function shorten(value: string, max: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= max) {
-    return normalized;
-  }
-  return `${normalized.slice(0, max - 1)}…`;
-}
-
-function isWithinQuietHours(
-  now: Date,
-  quietHours: {
-    enabled: boolean;
-    startMinuteOfDay: number;
-    endMinuteOfDay: number;
-  }
-): boolean {
-  if (!quietHours.enabled) {
-    return false;
-  }
-  const currentMinute = now.getHours() * 60 + now.getMinutes();
-  const start = quietHours.startMinuteOfDay;
-  const end = quietHours.endMinuteOfDay;
-  if (start < end) {
-    return currentMinute >= start && currentMinute < end;
-  }
-  return currentMinute >= start || currentMinute < end;
-}
-
-function computeTargetStage(historyCount: number, connection: number): "stranger" | "acquaintance" | "familiar" | "close" | "intimate" {
-  if (historyCount >= 400 || connection >= 0.9) {
-    return "intimate";
-  }
-  if (historyCount >= 220 || connection >= 0.78) {
-    return "close";
-  }
-  if (historyCount >= 120 || connection >= 0.62) {
-    return "familiar";
-  }
-  if (historyCount >= 30 || connection >= 0.4) {
-    return "acquaintance";
-  }
-  return "stranger";
-}
-
-export function computeSignalAgeScale(
-  latestMessageTs: string,
-  now: Date,
-  config: AppConfig["kernel"]["emotionSignals"]
-): number {
-  const latestTs = Number.isFinite(new Date(latestMessageTs).getTime())
-    ? new Date(latestMessageTs).getTime()
-    : now.getTime();
-  const ageMinutes = Math.max(0, (now.getTime() - latestTs) / 60_000);
-  const fullEffect = config.stalenessFullEffectMinutes;
-  const maxAgeMinutes = config.stalenessMaxAgeHours * 60;
-
-  if (ageMinutes <= fullEffect) {
-    return 1;
-  }
-  if (ageMinutes >= maxAgeMinutes) {
-    return 0;
-  }
-  const ratio = (ageMinutes - fullEffect) / Math.max(1, maxAgeMinutes - fullEffect);
-  const scaled = 1 - ratio * (1 - config.stalenessMinScale);
-  return clampRange(scaled, config.stalenessMinScale, 1);
-}
-
-export function applyEmotionalSignalsToState(input: {
-  emotional: EmotionalState;
-  signals: EmotionalSignals;
-  config: AppConfig["kernel"]["emotionSignals"];
-  ageScale: number;
-}): EmotionalState {
-  const scaledDelta = (raw: number): number =>
-    clampAbsDelta(raw * input.ageScale, input.config.windowMaxAbsDelta);
-  const next: EmotionalState = {
-    ...input.emotional
-  };
-
-  const moodDelta =
-    input.signals.user_mood === "positive"
-      ? input.config.moodPositiveStep
-      : input.signals.user_mood === "negative"
-        ? -input.config.moodNegativeStep
-        : 0;
-  next.mood = clampRange(next.mood + scaledDelta(moodDelta), -1, 1);
-
-  const energyDelta = (input.signals.engagement - 0.5) * input.config.energyEngagementScale;
-  next.energy = clamp01(next.energy + scaledDelta(energyDelta));
-
-  next.connection = clamp01(next.connection + scaledDelta(input.signals.trust_delta));
-
-  const curiosityDelta = input.signals.curiosity_trigger ? input.config.curiosityBoost : 0;
-  next.curiosity = clamp01(next.curiosity + scaledDelta(curiosityDelta));
-
-  const confidenceDelta = input.signals.friction
-    ? -input.config.confidenceDropOnFriction
-    : input.signals.engagement >= input.config.minPositiveEngagement &&
-        input.signals.trust_delta >= input.config.minPositiveTrustDelta
-      ? input.config.confidenceGain
-      : 0;
-  next.confidence = clamp01(next.confidence + scaledDelta(confidenceDelta));
-
-  const irritationDelta = input.signals.friction ? input.config.irritationBoostOnFriction : 0;
-  next.irritation = clamp01(next.irritation + scaledDelta(irritationDelta));
-
-  return next;
 }

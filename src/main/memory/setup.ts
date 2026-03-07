@@ -4,6 +4,7 @@ import type {
   AppConfig,
   BufferMessage,
   BrowseTopicMaterial,
+  EmbedderRuntimeStatus,
   Episode,
   Fact,
   HistoryMessage,
@@ -21,6 +22,9 @@ import { FactsStore } from "@main/memory-v2/facts-store";
 import { ProfileStore } from "@main/memory-v2/profile-store";
 import { EpisodesStore } from "@main/memory-v2/episodes-store";
 import { TopicStore } from "@main/memory-v2/topic-store";
+import { FactEmbeddingStore, type SemanticFactMatch } from "@main/memory-v2/fact-embeddings-store";
+import { EmbedderService } from "@main/memory-v2/embedder";
+import { extractQueryTerms, matchFacts } from "@main/memory-v2/retrieval";
 
 interface MemoryResourceContext {
   threadId: string;
@@ -43,6 +47,12 @@ interface PendingTopic extends TopicPoolItem {}
 interface BufferCompactionSignal {
   removed: BufferMessage[];
   sourceRanges: string[];
+}
+
+export interface RelevantFactMatch extends SemanticFactMatch {
+  lexicalHit: boolean;
+  lexicalScore: number;
+  semanticHit: boolean;
 }
 
 function normalizeTopicText(raw: string): string {
@@ -74,6 +84,8 @@ export class YobiMemory {
   private readonly profileStore: ProfileStore;
   private readonly episodesStore: EpisodesStore;
   private readonly topicStore: TopicStore;
+  private readonly factEmbeddingStore: FactEmbeddingStore;
+  private readonly embedder: EmbedderService;
   private initialized = false;
   private compactionSignals: BufferCompactionSignal[] = [];
 
@@ -86,6 +98,8 @@ export class YobiMemory {
     this.profileStore = new ProfileStore(paths);
     this.episodesStore = new EpisodesStore(paths);
     this.topicStore = new TopicStore(paths);
+    this.factEmbeddingStore = new FactEmbeddingStore(paths);
+    this.embedder = new EmbedderService(paths, getConfig);
   }
 
   async init(): Promise<void> {
@@ -96,6 +110,8 @@ export class YobiMemory {
     await this.factsStore.init();
     await this.profileStore.init();
     await this.topicStore.init();
+    await this.factEmbeddingStore.init();
+    this.embedder.init();
     this.initialized = true;
   }
 
@@ -277,16 +293,18 @@ export class YobiMemory {
   }
 
   async mapRecentToModelMessages(
-    _input: MemoryResourceContext
+    _input: MemoryResourceContext,
+    limit = Math.max(10, this.getConfig().memory.recentMessages)
   ): Promise<Array<{ role: "system" | "user" | "assistant"; content: string }>> {
     await this.init();
+    const boundedLimit = Math.max(1, limit);
     return this.bufferStore
-      .listRecent(Math.max(10, this.getConfig().memory.recentMessages))
+      .listRecent(boundedLimit)
       .map((message) => ({
         role: message.role,
         content: message.text
       }))
-      .slice(-Math.max(10, this.getConfig().memory.recentMessages));
+      .slice(-boundedLimit);
   }
 
   async listRecentBufferMessages(limit = 60): Promise<BufferMessage[]> {
@@ -332,6 +350,144 @@ export class YobiMemory {
   async listRecentEpisodes(limit = 30): Promise<Episode[]> {
     await this.init();
     return this.episodesStore.listRecent(limit);
+  }
+
+
+  async touchFacts(ids: string[]): Promise<void> {
+    await this.init();
+    await this.factsStore.touch(ids);
+  }
+
+  async stop(): Promise<void> {
+    await this.init();
+    await this.bufferStore.dumpUnprocessed();
+    await this.factEmbeddingStore.forceFlush();
+  }
+
+
+  async syncFactEmbeddings(facts: Fact[]): Promise<void> {
+    await this.init();
+    if (facts.length === 0 || !this.getConfig().memory.embedding.enabled) {
+      return;
+    }
+
+    const rows = [];
+    for (const fact of facts) {
+      const embedded = await this.embedder.embed(`${fact.entity} ${fact.key}: ${fact.value}`);
+      if (!embedded) {
+        continue;
+      }
+      rows.push({
+        fact_id: fact.id,
+        model_id: embedded.modelId,
+        vector: embedded.vector,
+        updated_at: new Date().toISOString()
+      });
+    }
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    await this.factEmbeddingStore.upsert(rows);
+    await this.factEmbeddingStore.flushIfDirty();
+  }
+
+  async backfillFactEmbeddings(limit = 10): Promise<void> {
+    await this.init();
+    if (!this.getConfig().memory.embedding.enabled) {
+      return;
+    }
+
+    const activeFacts = this.factsStore.listActive();
+    const pendingFacts = await this.factEmbeddingStore.findPendingFacts(
+      activeFacts,
+      this.embedder.getCurrentModelId(),
+      limit
+    );
+    if (pendingFacts.length === 0) {
+      return;
+    }
+
+    await this.syncFactEmbeddings(pendingFacts);
+  }
+
+  async searchRelevantFacts(input: {
+    queryTexts: string[];
+    facts?: Fact[];
+    limit?: number;
+  }): Promise<RelevantFactMatch[]> {
+    await this.init();
+    const limit = Math.max(1, input.limit ?? 20);
+    const facts = input.facts ?? this.factsStore.listActive();
+    if (facts.length === 0) {
+      return [];
+    }
+
+    const lexicalTerms = extractQueryTerms(input.queryTexts);
+    const lexicalMatches = matchFacts(facts, lexicalTerms, limit);
+    const merged = new Map<string, RelevantFactMatch>();
+
+    for (const row of lexicalMatches) {
+      merged.set(row.fact.id, {
+        fact: row.fact,
+        semanticHit: false,
+        semanticScore: 0,
+        lexicalHit: true,
+        lexicalScore: row.score
+      });
+    }
+
+    const embeddedQuery = await this.embedder.embed(input.queryTexts.join("\n"));
+    if (embeddedQuery) {
+      const semanticMatches = await this.factEmbeddingStore.search(
+        facts,
+        embeddedQuery.modelId,
+        embeddedQuery.vector,
+        this.getConfig().memory.embedding.similarityThreshold,
+        limit
+      );
+
+      for (const row of semanticMatches) {
+        const existing = merged.get(row.fact.id);
+        merged.set(row.fact.id, {
+          fact: row.fact,
+          semanticHit: true,
+          semanticScore: row.semanticScore,
+          lexicalHit: existing?.lexicalHit ?? false,
+          lexicalScore: existing?.lexicalScore ?? 0
+        });
+      }
+    }
+
+    return [...merged.values()]
+      .sort((left, right) => {
+        if (left.semanticHit !== right.semanticHit) {
+          return left.semanticHit ? -1 : 1;
+        }
+        if (left.semanticScore !== right.semanticScore) {
+          return right.semanticScore - left.semanticScore;
+        }
+        if (left.lexicalHit !== right.lexicalHit) {
+          return left.lexicalHit ? -1 : 1;
+        }
+        if (left.lexicalScore !== right.lexicalScore) {
+          return right.lexicalScore - left.lexicalScore;
+        }
+        if (left.fact.confidence !== right.fact.confidence) {
+          return right.fact.confidence - left.fact.confidence;
+        }
+        return new Date(right.fact.updated_at).getTime() - new Date(left.fact.updated_at).getTime();
+      })
+      .slice(0, limit);
+  }
+
+  getFactEmbeddingStore(): FactEmbeddingStore {
+    return this.factEmbeddingStore;
+  }
+
+  getEmbedderStatus(): EmbedderRuntimeStatus {
+    return this.embedder.getStatus();
   }
 
   getFactsStore(): FactsStore {

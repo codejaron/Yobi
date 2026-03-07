@@ -5,9 +5,20 @@ import { readJsonlFile, writeJsonlFileAtomic } from "@main/storage/fs";
 
 export type TaskHandler = (task: PendingTask) => Promise<void>;
 
+const MAX_BACKOFF_MS = 60_000;
+const BASE_BACKOFF_MS = 2_000;
+const DRAIN_POLL_INTERVAL_MS = 25;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export class KernelTaskQueue {
   private loaded = false;
   private tasks: PendingTask[] = [];
+  private deadLetters: PendingTask[] = [];
   private handlers = new Map<PendingTaskType, TaskHandler>();
   private runningIds = new Set<string>();
   private persistChain: Promise<void> = Promise.resolve();
@@ -22,8 +33,14 @@ export class KernelTaskQueue {
     if (this.loaded) {
       return;
     }
-    const rows = await readJsonlFile<PendingTask>(this.paths.pendingTasksPath);
+    const [rows, deadLetterRows] = await Promise.all([
+      readJsonlFile<PendingTask>(this.paths.pendingTasksPath),
+      readJsonlFile<PendingTask>(this.paths.deadLetterTasksPath)
+    ]);
     this.tasks = rows
+      .map((task) => normalizeTask(task))
+      .filter((task): task is PendingTask => task !== null);
+    this.deadLetters = deadLetterRows
       .map((task) => normalizeTask(task))
       .filter((task): task is PendingTask => task !== null);
     this.loaded = true;
@@ -53,15 +70,7 @@ export class KernelTaskQueue {
     sourceRange?: string;
   }): Promise<PendingTask> {
     await this.init();
-    if (
-      input.sourceRange &&
-      this.tasks.some(
-        (task) =>
-          task.type === input.type &&
-          task.source_range === input.sourceRange &&
-          (task.status === "pending" || task.status === "running" || task.status === "completed")
-      )
-    ) {
+    if (input.sourceRange) {
       const existing = this.tasks.find(
         (task) =>
           task.type === input.type &&
@@ -80,6 +89,7 @@ export class KernelTaskQueue {
       status: "pending",
       payload: input.payload,
       source_range: input.sourceRange,
+      available_at: now,
       attempts: 0,
       created_at: now,
       updated_at: now
@@ -91,12 +101,38 @@ export class KernelTaskQueue {
 
   async processAvailable(): Promise<void> {
     await this.init();
+    const now = Date.now();
     while (this.runningIds.size < this.maxConcurrent) {
-      const next = this.tasks.find((task) => task.status === "pending");
+      const next = this.tasks.find((task) => {
+        if (task.status !== "pending") {
+          return false;
+        }
+        const availableAt = new Date(task.available_at).getTime();
+        return !Number.isFinite(availableAt) || availableAt <= now;
+      });
       if (!next) {
         break;
       }
       void this.runTask(next);
+    }
+  }
+
+  async drainUntilIdle(timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await this.processAvailable();
+      const now = Date.now();
+      const hasDuePending = this.tasks.some((task) => {
+        if (task.status !== "pending") {
+          return false;
+        }
+        const availableAt = new Date(task.available_at).getTime();
+        return !Number.isFinite(availableAt) || availableAt <= now;
+      });
+      if (this.runningIds.size === 0 && !hasDuePending) {
+        return;
+      }
+      await sleep(DRAIN_POLL_INTERVAL_MS);
     }
   }
 
@@ -125,11 +161,21 @@ export class KernelTaskQueue {
       task.status = "completed";
       task.updated_at = new Date().toISOString();
       task.last_error = undefined;
+      task.available_at = task.updated_at;
     } catch (error) {
       task.attempts += 1;
       task.updated_at = new Date().toISOString();
       task.last_error = error instanceof Error ? error.message : "unknown";
-      task.status = task.attempts > this.retryLimit ? "failed" : "pending";
+      if (task.attempts > this.retryLimit) {
+        task.status = "failed";
+        task.available_at = task.updated_at;
+        this.deadLetters.push({ ...task });
+        this.tasks = this.tasks.filter((candidate) => candidate.id !== task.id);
+      } else {
+        task.status = "pending";
+        const backoffMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.max(0, task.attempts - 1));
+        task.available_at = new Date(Date.now() + backoffMs).toISOString();
+      }
     } finally {
       this.runningIds.delete(task.id);
       await this.persist();
@@ -146,14 +192,19 @@ export class KernelTaskQueue {
         ...task.payload
       }
     }));
+    const deadLetterSnapshot = this.deadLetters.map((task) => ({
+      ...task,
+      payload: {
+        ...task.payload
+      }
+    }));
 
     const writeTask = async () => {
       await writeJsonlFileAtomic(this.paths.pendingTasksPath, snapshot);
+      await writeJsonlFileAtomic(this.paths.deadLetterTasksPath, deadLetterSnapshot);
     };
 
-    const next = this.persistChain
-      .catch(() => undefined)
-      .then(writeTask);
+    const next = this.persistChain.catch(() => undefined).then(writeTask);
     this.persistChain = next;
     await next;
   }
@@ -182,15 +233,26 @@ function normalizeTask(raw: PendingTask): PendingTask | null {
     return null;
   }
 
+  const now = new Date().toISOString();
   return {
     id: typeof raw.id === "string" ? raw.id : randomUUID(),
     type: raw.type,
     status: raw.status,
     payload: raw.payload && typeof raw.payload === "object" ? raw.payload : {},
     source_range: typeof raw.source_range === "string" ? raw.source_range : undefined,
+    available_at:
+      typeof raw.available_at === "string" && Number.isFinite(new Date(raw.available_at).getTime())
+        ? new Date(raw.available_at).toISOString()
+        : now,
     attempts: Number.isFinite(raw.attempts) ? Math.max(0, Math.floor(raw.attempts)) : 0,
-    created_at: typeof raw.created_at === "string" ? raw.created_at : new Date().toISOString(),
-    updated_at: typeof raw.updated_at === "string" ? raw.updated_at : new Date().toISOString(),
+    created_at:
+      typeof raw.created_at === "string" && Number.isFinite(new Date(raw.created_at).getTime())
+        ? new Date(raw.created_at).toISOString()
+        : now,
+    updated_at:
+      typeof raw.updated_at === "string" && Number.isFinite(new Date(raw.updated_at).getTime())
+        ? new Date(raw.updated_at).toISOString()
+        : now,
     last_error: typeof raw.last_error === "string" ? raw.last_error : undefined
   };
 }

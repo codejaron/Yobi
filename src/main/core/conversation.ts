@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { streamText, stepCountIs, type ToolSet } from "ai";
-import type { AppConfig, EmotionalState, TokenUsageSource } from "@shared/types";
+import type { AppConfig, TokenUsageSource } from "@shared/types";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { stripEmotionTags } from "./emotion-tags";
@@ -8,8 +8,11 @@ import type { YobiMemory } from "@main/memory/setup";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { assembleContext } from "@main/memory-v2/context-assembler";
+import { extractQueryTerms, matchEpisodes } from "@main/memory-v2/retrieval";
 import type { StateStore } from "@main/kernel/state-store";
 import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 export interface ChatReplyStreamListener {
   onThinkingChange?: (state: "start" | "stop") => void;
@@ -39,88 +42,6 @@ function tokenSourceFromChannel(channel: "telegram" | "console" | "qq"): TokenUs
   }
 
   return "chat:console";
-}
-
-function parseDeltaTag(text: string): {
-  cleanedText: string;
-  delta: Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>>;
-} {
-  const pattern = /<delta\s+([^>]+?)\s*\/>/gi;
-  const matches = Array.from(text.matchAll(pattern));
-  if (matches.length === 0) {
-    return {
-      cleanedText: text,
-      delta: {}
-    };
-  }
-
-  const latest = matches[matches.length - 1]?.[1] ?? "";
-  const attrs = parseDeltaAttributes(latest);
-  return {
-    cleanedText: text.replace(pattern, ""),
-    delta: attrs
-  };
-}
-
-function parseDeltaAttributes(raw: string): Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>> {
-  const output: Partial<Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>> = {};
-  const keys: Array<keyof typeof output> = [
-    "mood",
-    "energy",
-    "connection",
-    "curiosity",
-    "confidence",
-    "irritation"
-  ];
-  for (const key of keys) {
-    const matched = new RegExp(`${key}\\s*=\\s*"([+-]?\\d+(?:\\.\\d+)?)"`).exec(raw);
-    if (!matched) {
-      continue;
-    }
-    const value = Number(matched[1]);
-    if (!Number.isFinite(value)) {
-      continue;
-    }
-    output[key] = Math.max(-0.2, Math.min(0.2, value));
-  }
-  return output;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-export type DeltaSuggestion = Partial<
-  Record<"mood" | "energy" | "connection" | "curiosity" | "confidence" | "irritation", number>
->;
-
-export function applyScaledDeltaToState(input: {
-  emotional: EmotionalState;
-  delta: DeltaSuggestion;
-  scale: number;
-}): EmotionalState {
-  const next: EmotionalState = {
-    ...input.emotional
-  };
-  if (typeof input.delta.mood === "number") {
-    next.mood = clamp(next.mood + input.delta.mood * input.scale, -1, 1);
-  }
-  if (typeof input.delta.energy === "number") {
-    next.energy = clamp(next.energy + input.delta.energy * input.scale, 0, 1);
-  }
-  if (typeof input.delta.connection === "number") {
-    next.connection = clamp(next.connection + input.delta.connection * input.scale, 0, 1);
-  }
-  if (typeof input.delta.curiosity === "number") {
-    next.curiosity = clamp(next.curiosity + input.delta.curiosity * input.scale, 0, 1);
-  }
-  if (typeof input.delta.confidence === "number") {
-    next.confidence = clamp(next.confidence + input.delta.confidence * input.scale, 0, 1);
-  }
-  if (typeof input.delta.irritation === "number") {
-    next.irritation = clamp(next.irritation + input.delta.irritation * input.scale, 0, 1);
-  }
-  return next;
 }
 
 export class ConversationEngine {
@@ -169,6 +90,18 @@ export class ConversationEngine {
     ]);
     const stateSnapshot = this.stateStore.getSnapshot();
     const buffer = await this.memory.listRecentBufferMessages(config.memory.recentMessages);
+    const queryTexts = buffer
+      .filter((item) => item.role === "user")
+      .slice(-3)
+      .map((item) => item.text);
+    const [factCandidates, episodeCandidates] = await Promise.all([
+      this.memory.searchRelevantFacts({
+        queryTexts,
+        facts,
+        limit: 20
+      }),
+      Promise.resolve(matchEpisodes(episodes, extractQueryTerms(queryTexts), 8))
+    ]);
     const assembled = assembleContext({
       soul: soul.trim(),
       persona: persona.trim(),
@@ -176,23 +109,27 @@ export class ConversationEngine {
       state: stateSnapshot,
       profile,
       buffer,
-      facts,
-      episodes,
-      maxTokens: Math.min(24_000, Math.max(4_000, config.openclaw.contextTokens || 8_000))
+      facts: factCandidates.map((row) => row.fact),
+      episodes: episodeCandidates.map((row) => row.episode),
+      maxTokens: Math.min(24_000, Math.max(4_000, config.openclaw.contextTokens || 8_000)),
+      memoryFloorTokens: config.memory.context.memoryFloorTokens
     });
 
-    const system = [
-      assembled.system,
-      input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : "",
-      "回复可选在末尾附带 <delta mood=\"+0.05\" energy=\"-0.02\" connection=\"+0.10\"/> 作为状态变化建议。"
-    ]
+    if (assembled.selectedFacts.length > 0) {
+      await this.memory.touchFacts(assembled.selectedFacts.map((fact) => fact.id));
+    }
+
+    const system = [assembled.system, input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""]
       .filter(Boolean)
       .join("\n\n");
 
-    const messages = await this.memory.mapRecentToModelMessages({
-      threadId: input.threadId,
-      resourceId: input.resourceId
-    });
+    const messages = await this.memory.mapRecentToModelMessages(
+      {
+        threadId: input.threadId,
+        resourceId: input.resourceId
+      },
+      assembled.maxRecentMessages
+    );
 
     const tools: ToolSet = this.toolRegistry.getToolSet({
       channel: input.channel,
@@ -285,9 +222,7 @@ export class ConversationEngine {
 
     const fallbackReply = "我这次没有生成有效回复，请重试一次。";
     const rawFinalText = trimmedText || fallbackReply;
-    const parsedDelta = parseDeltaTag(rawFinalText);
-    const textWithoutDelta = parsedDelta.cleanedText.trim() || fallbackReply;
-    const finalText = stripEmotionTags(textWithoutDelta).trim() || fallbackReply;
+    const finalText = stripEmotionTags(rawFinalText).trim() || fallbackReply;
 
     await this.memory.rememberMessage({
       threadId: input.threadId,
@@ -299,8 +234,6 @@ export class ConversationEngine {
       }
     });
 
-    this.applyDeltaSuggestion(parsedDelta.delta);
-
     try {
       const totalUsage = await result.totalUsage;
       reportTokenUsage({
@@ -308,13 +241,13 @@ export class ConversationEngine {
         usage: totalUsage,
         systemText: system,
         inputText: normalizedText,
-        outputText: textWithoutDelta
+        outputText: finalText
       });
     } catch (error) {
-      console.warn("[conversation] token usage capture failed:", error);
+      logger.warn("conversation", "token-usage-capture-failed", undefined, error);
     }
 
-    return textWithoutDelta;
+    return finalText;
   }
 
   async rememberAssistantMessage(input: {
@@ -338,20 +271,6 @@ export class ConversationEngine {
         channel: input.channel,
         ...(input.metadata ?? {})
       }
-    });
-  }
-
-  private applyDeltaSuggestion(delta: DeltaSuggestion): void {
-    if (Object.keys(delta).length === 0) {
-      return;
-    }
-    const scale = clamp(this.getConfig().kernel.emotionSignals.deltaScale, 0, 1);
-    this.stateStore.mutate((state) => {
-      state.emotional = applyScaledDeltaToState({
-        emotional: state.emotional,
-        delta,
-        scale
-      });
     });
   }
 }

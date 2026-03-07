@@ -49,6 +49,10 @@ export class CompanionPaths {
     return path.join(this.memoryDir, "facts-archive.json");
   }
 
+  get factEmbeddingsPath(): string {
+    return path.join(this.memoryDir, "fact-embeddings.json");
+  }
+
   get profilePath(): string {
     return path.join(this.memoryDir, "profile.json");
   }
@@ -67,6 +71,10 @@ export class CompanionPaths {
 
   get pendingTasksPath(): string {
     return path.join(this.memoryDir, "pending-tasks.jsonl");
+  }
+
+  get deadLetterTasksPath(): string {
+    return path.join(this.memoryDir, "dead-letter.jsonl");
   }
 
   get sessionsDir(): string {
@@ -103,6 +111,10 @@ export class CompanionPaths {
 
   get modelsDir(): string {
     return path.join(this.baseDir, "models");
+  }
+
+  get embeddingModelsDir(): string {
+    return path.join(this.modelsDir, "embedding");
   }
 
   get openclawStateDir(): string {
@@ -163,6 +175,7 @@ export class CompanionPaths {
     mkdirSync(this.topicsDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
+    mkdirSync(this.embeddingModelsDir, { recursive: true });
     mkdirSync(this.openclawStateDir, { recursive: true });
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });

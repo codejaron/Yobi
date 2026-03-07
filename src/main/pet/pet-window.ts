@@ -205,8 +205,10 @@ export class PetWindowController {
       alwaysOnTop: input.alwaysOnTop,
       skipTaskbar: process.platform !== "darwin",
       webPreferences: {
-        contextIsolation: false,
-        nodeIntegration: true
+        preload: path.join(app.getAppPath(), "src", "preload", "pet.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
       }
     });
     this.lastAlwaysOnTop = input.alwaysOnTop;

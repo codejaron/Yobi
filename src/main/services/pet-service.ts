@@ -4,6 +4,8 @@ import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { app } from "electron";
 import type { AppConfig } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 import { ChannelRouter } from "@main/channels/router";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
@@ -393,7 +395,7 @@ export class PetService {
         mimeType: "audio/mpeg"
       });
     } catch (error) {
-      console.warn("[pet] speech synthesis failed:", error);
+      logger.warn("pet", "speech-synthesis-failed", undefined, error);
     }
   }
 

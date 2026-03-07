@@ -1,5 +1,7 @@
 import { appConfigSchema, DEFAULT_CONFIG, type AppConfig } from "@shared/types";
 import { CompanionPaths } from "./paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 
 type McpServerList = AppConfig["tools"]["mcp"]["servers"];
@@ -152,10 +154,7 @@ export class ConfigStore {
       try {
         assertRouteProvidersExist(prepared);
       } catch (error) {
-        console.warn(
-          "[config] model route provider validation failed during init, keep runtime alive:",
-          error
-        );
+        logger.warn("config", "route-provider-validation-failed", undefined, error);
       }
       this.cached = prepared;
       await writeJsonFile(this.paths.configPath, this.cached);

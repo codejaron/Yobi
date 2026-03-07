@@ -1,13 +1,20 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu } from "electron";
 import { registerIpcHandlers } from "./ipc";
-import { runtime } from "./app-runtime";
+import { createRuntime } from "./app-runtime";
+import { openSafeWebUrl } from "./utils/external-links";
+import { CompanionPaths } from "@main/storage/paths";
+import { AppLogger } from "@main/services/logger";
+const logger = new AppLogger(new CompanionPaths());
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PET_ENABLED_CHANNEL = "runtime:pet-enabled";
+const runtime = createRuntime();
 
 let mainWindow: BrowserWindow | null = null;
+let shutdownRequested = false;
+let shutdownPromise: Promise<void> | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -18,15 +25,15 @@ function createWindow(): void {
     title: "Yobi Companion",
     backgroundColor: "#f5efe7",
     webPreferences: {
-      preload: path.join(__dirname, "../preload/index.mjs"),
+      preload: path.join(app.getAppPath(), "src", "preload", "index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    void openSafeWebUrl(url);
     return { action: "deny" };
   });
 
@@ -88,7 +95,7 @@ async function disablePetWindowFromMenu(sourceWindow: BrowserWindow): Promise<vo
     });
     emitPetEnabled(false);
   } catch (error) {
-    console.warn("Failed to disable pet from menu:", error);
+    logger.warn("index", "disable-pet-from-menu-failed", undefined, error);
     if (!sourceWindow.isDestroyed()) {
       sourceWindow.close();
     }
@@ -132,12 +139,12 @@ function registerShellMenuIpc(): void {
 
 app.whenReady().then(async () => {
   registerShellMenuIpc();
-  registerIpcHandlers();
+  registerIpcHandlers(runtime);
 
   await runtime.init();
   createWindow();
   void runtime.start().catch((error) => {
-    console.error("Failed to start runtime services:", error);
+    logger.error("index", "runtime-start-failed", undefined, error);
   });
 
   app.on("activate", () => {
@@ -146,7 +153,7 @@ app.whenReady().then(async () => {
     }
   });
 }).catch((error) => {
-  console.error("Failed to start Yobi runtime:", error);
+  logger.error("index", "app-start-failed", undefined, error);
   app.quit();
 });
 
@@ -156,8 +163,24 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
-  void runtime.stop().catch((error) => {
-    console.error("Failed to stop runtime services:", error);
+app.on("before-quit", (event) => {
+  if (shutdownRequested) {
+    return;
+  }
+
+  shutdownRequested = true;
+  event.preventDefault();
+  const timer = setTimeout(() => {
+    app.exit(0);
+  }, 5000);
+  timer.unref?.();
+
+  shutdownPromise ??= runtime.stop().catch((error) => {
+    logger.error("index", "runtime-stop-failed", undefined, error);
+  });
+
+  void shutdownPromise.finally(() => {
+    clearTimeout(timer);
+    app.exit(0);
   });
 });

@@ -5,7 +5,7 @@ import type {
   ClawEvent,
   CommandApprovalDecision
 } from "@shared/types";
-import { runtime } from "./app-runtime";
+import type { CompanionRuntime } from "./app-runtime";
 
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
@@ -31,7 +31,7 @@ function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSu
   subscriptions.delete(target.id);
 }
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
   ipcMain.handle("config:save", (_, config: AppConfig) => runtime.saveConfig(config));
 
@@ -181,15 +181,15 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("claw:abort", () => runtime.clawAbort());
 
   ipcMain.on("status:subscribe", (event) => {
-    subscribeToStatus(event.sender);
+    subscribeToStatus(runtime, event.sender);
   });
 
   ipcMain.on("console:chat:subscribe", (event) => {
-    subscribeToConsoleRun(event.sender);
+    subscribeToConsoleRun(runtime, event.sender);
   });
 
   ipcMain.on("claw:subscribe", (event) => {
-    subscribeToClawEvents(event.sender);
+    subscribeToClawEvents(runtime, event.sender);
   });
 
   ipcMain.handle("open:path", (_, location: string) => {
@@ -200,7 +200,7 @@ export function registerIpcHandlers(): void {
   });
 }
 
-function subscribeToStatus(target: WebContents): void {
+function subscribeToStatus(runtime: CompanionRuntime, target: WebContents): void {
   clearSubscription(target, statusSubscriptions);
 
   const unsubscribe = runtime.onStatus((status) => {
@@ -223,7 +223,7 @@ function subscribeToStatus(target: WebContents): void {
   target.on("destroyed", onDestroyed);
 }
 
-function subscribeToConsoleRun(target: WebContents): void {
+function subscribeToConsoleRun(runtime: CompanionRuntime, target: WebContents): void {
   clearSubscription(target, consoleRunSubscriptions);
 
   const unsubscribe = runtime.onConsoleRunEvent((event) => {
@@ -246,7 +246,7 @@ function subscribeToConsoleRun(target: WebContents): void {
   target.on("destroyed", onDestroyed);
 }
 
-function subscribeToClawEvents(target: WebContents): void {
+function subscribeToClawEvents(runtime: CompanionRuntime, target: WebContents): void {
   clearSubscription(target, clawEventSubscriptions);
 
   const unsubscribe = runtime.onClawEvent((event: ClawEvent) => {

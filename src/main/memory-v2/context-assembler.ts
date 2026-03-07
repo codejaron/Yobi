@@ -18,47 +18,34 @@ export interface ContextAssemblerInput {
   facts: Fact[];
   episodes: Episode[];
   maxTokens: number;
+  memoryFloorTokens: number;
 }
 
 export interface ContextAssemblerOutput {
   system: string;
   selectedFacts: Fact[];
   selectedEpisodes: Episode[];
+  maxRecentMessages: number;
 }
 
-const TARGET_STATE_BLOCK_TOKENS = 500;
+const RESERVED_RESPONSE_TOKENS = 500;
 
 export function assembleContext(input: ContextAssemblerInput): ContextAssemblerOutput {
   const maxTokens = Math.max(2000, input.maxTokens);
   const block1 = buildIdentityBlock(input.soul, input.persona, input.stage);
   const block1Tokens = estimateTokens(block1);
-
-  const bufferMessages = input.buffer.slice().reverse();
-  const selectedBuffer: BufferMessage[] = [];
-  let bufferTokens = 0;
-  const bufferBudget = Math.max(400, maxTokens - block1Tokens - TARGET_STATE_BLOCK_TOKENS);
-  for (const message of bufferMessages) {
-    const line = `${message.role === "user" ? "用户" : "Yobi"}: ${message.text}`;
-    const nextTokens = estimateTokens(line) + 8;
-    if (bufferTokens + nextTokens > bufferBudget) {
-      break;
-    }
-    selectedBuffer.push(message);
-    bufferTokens += nextTokens;
-  }
-  selectedBuffer.reverse();
-
   const stateBlock = buildStateBlock(input.state, input.profile);
   const stateTokens = estimateTokens(stateBlock);
 
   const queryTerms = extractQueryTerms(
-    selectedBuffer
+    input.buffer
       .filter((item) => item.role === "user")
       .slice(-3)
       .map((item) => item.text)
   );
 
-  const remainingForMemory = Math.max(0, maxTokens - block1Tokens - bufferTokens - stateTokens);
+  const rawRemaining = Math.max(0, maxTokens - block1Tokens - stateTokens - RESERVED_RESPONSE_TOKENS);
+  const memoryBudget = Math.min(rawRemaining, Math.max(200, input.memoryFloorTokens));
   const factsMatched = matchFacts(input.facts, queryTerms, 20);
   const episodesMatched = matchEpisodes(input.episodes, queryTerms, 8);
 
@@ -68,7 +55,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   for (const row of factsMatched) {
     const line = `- ${row.fact.entity}/${row.fact.key}: ${row.fact.value}`;
     const tokens = estimateTokens(line) + 6;
-    if (memoryTokens + tokens > remainingForMemory) {
+    if (memoryTokens + tokens > memoryBudget) {
       break;
     }
     selectedFacts.push(row.fact);
@@ -77,7 +64,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   for (const row of episodesMatched) {
     const line = `- ${row.episode.date}: ${row.episode.summary}`;
     const tokens = estimateTokens(line) + 6;
-    if (memoryTokens + tokens > remainingForMemory) {
+    if (memoryTokens + tokens > memoryBudget) {
       break;
     }
     selectedEpisodes.push(row.episode);
@@ -85,18 +72,32 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   }
 
   const memoryBlock = buildMemoryBlock(selectedFacts, selectedEpisodes);
-  const conversationBlock = selectedBuffer
-    .map((message) => `${message.role === "user" ? "用户" : "Yobi"}: ${message.text}`)
-    .join("\n");
+  const memoryBlockTokens = estimateTokens(memoryBlock);
+  const remainingForMessages = Math.max(
+    0,
+    maxTokens - block1Tokens - stateTokens - memoryBlockTokens - RESERVED_RESPONSE_TOKENS
+  );
 
-  const system = [block1, stateBlock, memoryBlock, `最近对话:\n${conversationBlock || "(空)"}`]
-    .filter(Boolean)
-    .join("\n\n");
+  const recentMessages = input.buffer.slice().reverse();
+  let recentMessageTokens = 0;
+  let maxRecentMessages = 0;
+  for (const message of recentMessages) {
+    const line = `${message.role === "user" ? "用户" : "Yobi"}: ${message.text}`;
+    const nextTokens = estimateTokens(line) + 8;
+    if (recentMessageTokens + nextTokens > remainingForMessages) {
+      break;
+    }
+    recentMessageTokens += nextTokens;
+    maxRecentMessages += 1;
+  }
+
+  const system = [block1, stateBlock, memoryBlock].filter(Boolean).join("\n\n");
 
   return {
     system,
     selectedFacts,
-    selectedEpisodes
+    selectedEpisodes,
+    maxRecentMessages: Math.max(1, maxRecentMessages)
   };
 }
 
@@ -139,7 +140,14 @@ function buildMemoryBlock(facts: Fact[], episodes: Episode[]): string {
 }
 
 function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil(text.length / 2));
+  const normalized = text.trim();
+  if (!normalized) {
+    return 0;
+  }
+  const cjkChars = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
+  const latinWords = normalized.match(/[A-Za-z0-9_]+/g)?.length ?? 0;
+  const punctuation = (normalized.match(/[，。！？、,.!?;:()[\]{}"“”‘’`~]/g) ?? []).length;
+  return Math.max(1, Math.ceil(cjkChars * 1.2 + latinWords * 0.35 + punctuation * 0.2));
 }
 
 function round2(value: number): number {
