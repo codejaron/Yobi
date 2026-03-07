@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AppConfig, BufferMessage } from "@shared/types";
+import type { AppConfig, BufferMessage, EmotionalState, RelationshipStage } from "@shared/types";
 
 interface WorkerMessage {
   id: string;
@@ -27,6 +27,11 @@ export interface FactExtractionWorkerResult {
       source_range?: string;
     };
   }>;
+  tokenUsage?: unknown;
+}
+
+export interface ProactiveRewriteWorkerResult {
+  rewrittenMessage: string;
   tokenUsage?: unknown;
 }
 
@@ -118,6 +123,15 @@ export class BackgroundTaskWorkerService {
     config: AppConfig;
   }): Promise<{ result: unknown; tokenUsage?: unknown }> {
     return this.call("daily-reflection", input) as Promise<{ result: unknown; tokenUsage?: unknown }>;
+  }
+
+  async runProactiveRewrite(input: {
+    message: string;
+    stage: RelationshipStage;
+    emotional: EmotionalState;
+    config: AppConfig;
+  }): Promise<ProactiveRewriteWorkerResult> {
+    return this.call("proactive-rewrite", input) as Promise<ProactiveRewriteWorkerResult>;
   }
 
   private async call(type: string, payload: Record<string, unknown>): Promise<unknown> {

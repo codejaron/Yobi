@@ -35,6 +35,9 @@ const dailyEpisodeSummarySchema = zod.z.object({
   unresolved: zod.z.array(zod.z.string().min(1).max(120)).max(5).default([]),
   significance: zod.z.number().min(0).max(1).default(0.4)
 });
+const proactiveRewriteSchema = zod.z.object({
+  rewrittenMessage: zod.z.string().min(1).max(160)
+});
 
 function isPlainRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -178,6 +181,27 @@ async function runDailyReflection(message) {
   return { result: reflectionSchema.parse(result.object), tokenUsage: result.usage };
 }
 
+async function runProactiveRewrite(message) {
+  const { generateObject } = await import('ai');
+  const model = await createModelForRoute(message.config, 'reflection');
+  const system = '你负责把 Yobi 的主动消息改写得更自然、更像陪伴式搭话。保持原意，输出 rewrittenMessage。';
+  const prompt = JSON.stringify({
+    message: message.message,
+    stage: message.stage,
+    emotional: message.emotional
+  });
+  const result = await generateObject({
+    model,
+    providerOptions: resolveProviderOptions(message.config, 'reflection'),
+    schema: proactiveRewriteSchema,
+    system,
+    prompt,
+    maxOutputTokens: 160
+  });
+  const parsed = proactiveRewriteSchema.parse(result.object ?? {});
+  return { rewrittenMessage: parsed.rewrittenMessage, tokenUsage: result.usage };
+}
+
 process.parentPort.on('message', async (message) => {
   const id = message?.id;
   try {
@@ -186,6 +210,7 @@ process.parentPort.on('message', async (message) => {
     else if (message?.type === 'daily-episode') result = await runDailyEpisode(message);
     else if (message?.type === 'profile-semantic-update') result = await runProfileSemantic(message);
     else if (message?.type === 'daily-reflection') result = await runDailyReflection(message);
+    else if (message?.type === 'proactive-rewrite') result = await runProactiveRewrite(message);
     else throw new Error(`unknown-background-task:${String(message?.type || '')}`);
     process.parentPort.postMessage({ id, ok: true, result });
   } catch (error) {

@@ -11,54 +11,17 @@ import {
   type HistoryMessage,
   type KernelStateDocument,
 } from "@shared/types";
-import { CompanionPaths } from "@main/storage/paths";
-import { ConfigStore } from "@main/storage/config";
-import { ReminderStore } from "@main/storage/reminder-store";
 import {
-  RuntimeContextStore,
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
-import { ModelFactory } from "@main/core/model-factory";
-import { YobiMemory } from "@main/memory/setup";
-import { ConversationEngine } from "@main/core/conversation";
-import { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
-import { TelegramChannel } from "@main/channels/telegram";
-import { ChannelRouter } from "@main/channels/router";
-import { ConsoleChannel } from "@main/channels/console";
-import { QQChannel } from "@main/channels/qq";
-import { VoiceService } from "@main/services/voice";
-import { VoiceProviderRouter } from "@main/services/voice-router";
-import { KeepAwakeService } from "@main/services/keep-awake";
-import { ReminderService } from "@main/services/reminders";
-import { McpManager } from "@main/services/mcp-manager";
-import { PetWindowController } from "@main/pet/pet-window";
-import { RealtimeVoiceService } from "@main/services/realtime-voice";
-import { GlobalPetPushToTalkService } from "@main/services/global-ptt";
-import { SystemPermissionsService } from "@main/services/system-permissions";
-import { PetService } from "@main/services/pet-service";
-import { OpenClawRuntime } from "@main/openclaw/runtime";
-import { ClawClient } from "@main/claw/claw-client";
-import { ClawChannel } from "@main/claw/claw-channel";
 import { createClawToolDefinition } from "@main/claw/tool";
 import { createBuiltinTools } from "@main/tools/builtin";
-import { ApprovalGuard } from "@main/tools/guard/approval";
-import { DefaultToolRegistry } from "@main/tools/registry";
-import { TokenStatsStore } from "@main/services/token/token-stats-store";
-import { TokenStatsService } from "@main/services/token/token-stats-service";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
   ensureKernelBootstrap
 } from "@main/kernel/init";
-import { StateStore } from "@main/kernel/state-store";
-import { KernelEngine } from "@main/kernel/engine";
-import { AppLogger } from "@main/services/logger";
-import { RuntimeActivityCoordinator } from "@main/runtime/activity-coordinator";
-import { ChannelCoordinator } from "@main/runtime/channel-coordinator";
-import { ClawCoordinator } from "@main/runtime/claw-coordinator";
-import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
-import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
-import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
+import { buildRuntimeRegistry, type RuntimeRegistry } from "@main/runtime/runtime-registry";
 
 interface HistoryQuery {
   query?: string;
@@ -72,215 +35,69 @@ const PRIMARY_THREAD_ID = "primary-thread";
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
 
-  private readonly bootedAt = new Date().toISOString();
-  private readonly paths = new CompanionPaths();
-  private readonly logger = new AppLogger(this.paths);
-  private readonly tokenStatsStore = new TokenStatsStore(this.paths);
-  private readonly tokenStatsService = new TokenStatsService(this.tokenStatsStore);
-  private readonly configStore = new ConfigStore(this.paths);
-  private readonly reminderStore = new ReminderStore(this.paths);
-  private readonly runtimeContextStore = new RuntimeContextStore(this.paths);
+  private readonly paths: RuntimeRegistry["paths"];
+  private readonly logger: RuntimeRegistry["logger"];
+  private readonly tokenStatsService: RuntimeRegistry["tokenStatsService"];
+  private readonly configStore: RuntimeRegistry["configStore"];
+  private readonly reminderStore: RuntimeRegistry["reminderStore"];
+  private readonly runtimeContextStore: RuntimeRegistry["runtimeContextStore"];
+  private readonly memory: RuntimeRegistry["memory"];
+  private readonly stateStore: RuntimeRegistry["stateStore"];
+  private readonly toolRegistry: RuntimeRegistry["toolRegistry"];
+  private readonly mcpManager: RuntimeRegistry["mcpManager"];
+  private readonly conversation: RuntimeRegistry["conversation"];
+  private readonly kernel: RuntimeRegistry["kernel"];
+  private readonly channelRouter: RuntimeRegistry["channelRouter"];
+  private readonly telegram: RuntimeRegistry["telegram"];
+  private readonly consoleChannel: RuntimeRegistry["consoleChannel"];
+  private readonly voiceRouter: RuntimeRegistry["voiceRouter"];
+  private readonly pet: RuntimeRegistry["pet"];
+  private readonly petService: RuntimeRegistry["petService"];
+  private readonly clawChannel: RuntimeRegistry["clawChannel"];
+  private readonly reminderService: RuntimeRegistry["reminderService"];
+  private readonly activityCoordinator: RuntimeRegistry["activityCoordinator"];
+  private readonly channelCoordinator: RuntimeRegistry["channelCoordinator"];
+  private readonly clawCoordinator: RuntimeRegistry["clawCoordinator"];
+  private readonly lifecycleCoordinator: RuntimeRegistry["lifecycleCoordinator"];
+  private readonly dataCoordinator: RuntimeRegistry["dataCoordinator"];
+  private readonly statusCoordinator: RuntimeRegistry["statusCoordinator"];
 
-  private readonly memory = new YobiMemory(
-    this.paths,
-    () => this.configStore.getConfig()
-  );
+  constructor(registry: RuntimeRegistry) {
+    this.paths = registry.paths;
+    this.logger = registry.logger;
+    this.tokenStatsService = registry.tokenStatsService;
+    this.configStore = registry.configStore;
+    this.reminderStore = registry.reminderStore;
+    this.runtimeContextStore = registry.runtimeContextStore;
+    this.memory = registry.memory;
+    this.stateStore = registry.stateStore;
+    this.toolRegistry = registry.toolRegistry;
+    this.mcpManager = registry.mcpManager;
+    this.conversation = registry.conversation;
+    this.kernel = registry.kernel;
+    this.channelRouter = registry.channelRouter;
+    this.telegram = registry.telegram;
+    this.consoleChannel = registry.consoleChannel;
+    this.voiceRouter = registry.voiceRouter;
+    this.pet = registry.pet;
+    this.petService = registry.petService;
+    this.clawChannel = registry.clawChannel;
+    this.reminderService = registry.reminderService;
+    this.activityCoordinator = registry.activityCoordinator;
+    this.channelCoordinator = registry.channelCoordinator;
+    this.clawCoordinator = registry.clawCoordinator;
+    this.lifecycleCoordinator = registry.lifecycleCoordinator;
+    this.dataCoordinator = registry.dataCoordinator;
+    this.statusCoordinator = registry.statusCoordinator;
 
-  private readonly modelFactory = new ModelFactory(() => this.configStore.getConfig());
-  private readonly stateStore = new StateStore(this.paths);
-  private readonly approvalGuard = new ApprovalGuard();
-  private readonly toolRegistry = new DefaultToolRegistry(
-    () => this.configStore.getConfig(),
-    this.approvalGuard
-  );
-  private readonly mcpManager = new McpManager(() => this.configStore.getConfig());
-
-  private readonly conversation = new ConversationEngine(
-    this.memory,
-    this.modelFactory,
-    this.toolRegistry,
-    this.stateStore,
-    this.paths,
-    () => this.configStore.getConfig(),
-    (signals) => this.kernel.onRealtimeEmotionalSignals(signals)
-  );
-
-  private readonly bilibiliBrowse = new BilibiliBrowseService(
-    this.paths,
-    this.modelFactory,
-    this.memory,
-    () => this.configStore.getConfig(),
-    async (cookie) => {
-      const current = this.configStore.getConfig();
-      await this.configStore.saveConfig({
-        ...current,
-        browse: {
-          ...current.browse,
-          bilibiliCookie: cookie
-        }
-      });
-      await this.emitStatus();
-    }
-  );
-  private readonly kernel = new KernelEngine({
-    paths: this.paths,
-    memory: this.memory,
-    modelFactory: this.modelFactory,
-    stateStore: this.stateStore,
-    getConfig: () => this.configStore.getConfig(),
-    resourceId: PRIMARY_RESOURCE_ID,
-    threadId: PRIMARY_THREAD_ID,
-    onProactiveMessage: async ({ message, topicId }) => {
-      await this.handleKernelProactive(message, topicId);
-    }
-  });
-
-  private readonly channelRouter = new ChannelRouter(this.conversation);
-  private readonly telegram = new TelegramChannel(() => this.configStore.getConfig());
-  private readonly consoleChannel = new ConsoleChannel();
-  private readonly voiceService = new VoiceService();
-  private readonly voiceRouter = new VoiceProviderRouter(
-    () => this.configStore.getConfig(),
-    this.voiceService
-  );
-  private readonly keepAwake = new KeepAwakeService();
-  private readonly pet = new PetWindowController();
-  private readonly realtimeVoice = new RealtimeVoiceService();
-  private readonly globalPtt = new GlobalPetPushToTalkService();
-  private readonly systemPermissionsService = new SystemPermissionsService({
-    onStatusChange: () => this.emitStatus()
-  });
-  private readonly petService = new PetService({
-    paths: this.paths,
-    getConfig: () => this.configStore.getConfig(),
-    pet: this.pet,
-    voiceRouter: this.voiceRouter,
-    realtimeVoice: this.realtimeVoice,
-    globalPtt: this.globalPtt,
-    systemPermissionsService: this.systemPermissionsService,
-    channelRouter: this.channelRouter,
-    primaryResourceId: PRIMARY_RESOURCE_ID,
-    primaryThreadId: PRIMARY_THREAD_ID,
-    chatReplyTimeoutMs: CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
-    withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
-    onStatusChange: () => this.emitStatus()
-  });
-  private readonly openclawRuntime = new OpenClawRuntime(this.paths, () => {
-    void this.emitStatus();
-  });
-  private readonly clawClient = new ClawClient(
-    () => this.configStore.getConfig(),
-    () => this.openclawRuntime.getGatewayAuthToken()
-  );
-  private readonly clawChannel = new ClawChannel(this.clawClient, {
-    defaultSessionKey: "main",
-    onYobiFinal: async ({ text }) => {
-      await this.memory.rememberMessage({
-        threadId: PRIMARY_THREAD_ID,
-        resourceId: PRIMARY_RESOURCE_ID,
-        role: "assistant",
-        text,
-        metadata: {
-          channel: "console",
-          source: "claw"
-        }
-      });
-
-      this.consoleChannel.emitExternalAssistantMessage({
-        text,
-        source: "claw"
-      });
-      await this.kernel.onAssistantMessage();
-      await this.emitStatus();
-    }
-  });
-
-  private readonly reminderService = new ReminderService(this.reminderStore, {
-    sendReminder: async (item) => {
-      await this.telegram.send({
-        kind: "text",
-        text: `⏰ 提醒：${item.text}`
-      });
-    }
-  });
-
-  private readonly activityCoordinator = new RuntimeActivityCoordinator({
-    runtimeContextStore: this.runtimeContextStore,
-    logger: this.logger,
-    getConfig: () => this.getConfig(),
-    onLastUserLoaded: (value) => this.kernel.setLastUserMessageAt(value),
-    onLastProactiveLoaded: (value) => this.kernel.setLastProactiveAt(value),
-    onUserMessage: (input) => this.kernel.onUserMessage(input),
-    onProactiveMessage: (ts) => this.kernel.setLastProactiveAt(ts),
-    sendTelegram: async (text, chatId) => {
-      await this.telegram.send({ kind: "text", text, chatId });
-    },
-    sendQQ: async (text, chatId) => {
-      await this.channelCoordinator.getQQChannel()?.send({ kind: "text", text, chatId });
-    }
-  });
-
-  private readonly channelCoordinator = new ChannelCoordinator({
-    telegram: this.telegram,
-    createQQChannel: (config) => new QQChannel(config),
-    logger: this.logger,
-    pet: this.pet,
-    getQQConfig: () => ({
-      enabled: this.getConfig().qq.enabled,
-      appId: this.getConfig().qq.appId.trim(),
-      appSecret: this.getConfig().qq.appSecret.trim()
-    }),
-    handleTelegram: (payload) => this.channelRouter.handleTelegram(payload),
-    handleQQ: (payload) => this.channelRouter.handleQQ(payload),
-    onRecordUserActivity: (input) => this.recordUserActivity(input),
-    onAssistantMessage: () => this.kernel.onAssistantMessage(),
-    emitStatus: () => this.emitStatus(),
-    withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
-    chatReplyTimeoutMs: CompanionRuntime.CHAT_REPLY_TIMEOUT_MS,
-    resourceId: PRIMARY_RESOURCE_ID,
-    threadId: PRIMARY_THREAD_ID
-  });
-
-  private readonly clawCoordinator = new ClawCoordinator({
-    openclawRuntime: this.openclawRuntime,
-    clawClient: this.clawClient,
-    clawChannel: this.clawChannel,
-    getConfig: () => this.getConfig()
-  });
-
-  private readonly lifecycleCoordinator = new LifecycleCoordinator({
-    keepAwake: this.keepAwake,
-    petService: this.petService,
-    reminderService: this.reminderService,
-    getConfig: () => this.getConfig()
-  });
-
-  private readonly dataCoordinator = new RuntimeDataCoordinator({
-    paths: this.paths,
-    memory: this.memory,
-    stateStore: this.stateStore,
-    kernel: this.kernel,
-    bilibiliBrowse: this.bilibiliBrowse,
-    systemPermissionsService: this.systemPermissionsService,
-    resourceId: PRIMARY_RESOURCE_ID,
-    threadId: PRIMARY_THREAD_ID,
-    emitStatus: () => this.emitStatus()
-  });
-
-  private readonly statusCoordinator = new RuntimeStatusCoordinator({
-    bootedAt: this.bootedAt,
-    memory: this.memory,
-    kernel: this.kernel,
-    bilibiliBrowse: this.bilibiliBrowse,
-    tokenStatsService: this.tokenStatsService,
-    systemPermissionsService: this.systemPermissionsService,
-    activityCoordinator: this.activityCoordinator,
-    channelCoordinator: this.channelCoordinator,
-    clawCoordinator: this.clawCoordinator,
-    lifecycleCoordinator: this.lifecycleCoordinator,
-    resourceId: PRIMARY_RESOURCE_ID,
-    threadId: PRIMARY_THREAD_ID
-  });
+    registry.bindCallbacks({
+      emitStatus: () => this.emitStatus(),
+      withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
+      handleKernelProactive: (message, topicId) => this.handleKernelProactive(message, topicId),
+      recordUserActivity: (input) => this.recordUserActivity(input),
+      getConfig: () => this.getConfig()
+    });
+  }
 
   private statusListeners = new Set<(status: AppStatus) => void>();
 
@@ -891,5 +708,10 @@ export class CompanionRuntime {
 }
 
 export function createRuntime(): CompanionRuntime {
-  return new CompanionRuntime();
+  const registry = buildRuntimeRegistry({
+    resourceId: PRIMARY_RESOURCE_ID,
+    threadId: PRIMARY_THREAD_ID,
+    chatReplyTimeoutMs: 5 * 60_000
+  });
+  return new CompanionRuntime(registry);
 }

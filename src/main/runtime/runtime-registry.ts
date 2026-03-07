@@ -1,0 +1,401 @@
+import type { AppConfig } from "@shared/types";
+import { CompanionPaths } from "@main/storage/paths";
+import { ConfigStore } from "@main/storage/config";
+import { ReminderStore } from "@main/storage/reminder-store";
+import {
+  RuntimeContextStore,
+  type RuntimeInboundChannel
+} from "@main/storage/runtime-context-store";
+import { ModelFactory } from "@main/core/model-factory";
+import { YobiMemory } from "@main/memory/setup";
+import { ConversationEngine } from "@main/core/conversation";
+import { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
+import { TelegramChannel } from "@main/channels/telegram";
+import { ChannelRouter } from "@main/channels/router";
+import { ConsoleChannel } from "@main/channels/console";
+import { QQChannel } from "@main/channels/qq";
+import { VoiceService } from "@main/services/voice";
+import { VoiceProviderRouter } from "@main/services/voice-router";
+import { KeepAwakeService } from "@main/services/keep-awake";
+import { ReminderService } from "@main/services/reminders";
+import { McpManager } from "@main/services/mcp-manager";
+import { PetWindowController } from "@main/pet/pet-window";
+import { RealtimeVoiceService } from "@main/services/realtime-voice";
+import { GlobalPetPushToTalkService } from "@main/services/global-ptt";
+import { SystemPermissionsService } from "@main/services/system-permissions";
+import { PetService } from "@main/services/pet-service";
+import { OpenClawRuntime } from "@main/openclaw/runtime";
+import { ClawClient } from "@main/claw/claw-client";
+import { ClawChannel } from "@main/claw/claw-channel";
+import { ApprovalGuard } from "@main/tools/guard/approval";
+import { DefaultToolRegistry } from "@main/tools/registry";
+import { TokenStatsStore } from "@main/services/token/token-stats-store";
+import { TokenStatsService } from "@main/services/token/token-stats-service";
+import { StateStore } from "@main/kernel/state-store";
+import { KernelEngine } from "@main/kernel/engine";
+import { AppLogger } from "@main/services/logger";
+import { RuntimeActivityCoordinator } from "@main/runtime/activity-coordinator";
+import { ChannelCoordinator } from "@main/runtime/channel-coordinator";
+import { ClawCoordinator } from "@main/runtime/claw-coordinator";
+import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
+import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
+import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
+import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import {
+  buildKernelQueueTaskHandlers,
+  WorkerProactiveRewriteHandler
+} from "@main/kernel/task-handlers";
+
+export interface RuntimeRegistryBuildInput {
+  resourceId: string;
+  threadId: string;
+  chatReplyTimeoutMs: number;
+}
+
+export interface RuntimeRegistryCallbacks {
+  emitStatus: () => Promise<void>;
+  withTimeout: <T>(promise: Promise<T>, timeoutMs: number, label: string) => Promise<T>;
+  handleKernelProactive: (message: string, topicId?: string) => Promise<void>;
+  recordUserActivity: (input: {
+    channel: RuntimeInboundChannel;
+    chatId?: string;
+    text?: string;
+  }) => Promise<void>;
+  getConfig: () => AppConfig;
+}
+
+export interface RuntimeRegistry {
+  bootedAt: string;
+  paths: CompanionPaths;
+  logger: AppLogger;
+  tokenStatsStore: TokenStatsStore;
+  tokenStatsService: TokenStatsService;
+  configStore: ConfigStore;
+  reminderStore: ReminderStore;
+  runtimeContextStore: RuntimeContextStore;
+  memory: YobiMemory;
+  modelFactory: ModelFactory;
+  stateStore: StateStore;
+  approvalGuard: ApprovalGuard;
+  toolRegistry: DefaultToolRegistry;
+  mcpManager: McpManager;
+  backgroundWorker: BackgroundTaskWorkerService;
+  conversation: ConversationEngine;
+  bilibiliBrowse: BilibiliBrowseService;
+  kernel: KernelEngine;
+  channelRouter: ChannelRouter;
+  telegram: TelegramChannel;
+  consoleChannel: ConsoleChannel;
+  voiceService: VoiceService;
+  voiceRouter: VoiceProviderRouter;
+  keepAwake: KeepAwakeService;
+  pet: PetWindowController;
+  realtimeVoice: RealtimeVoiceService;
+  globalPtt: GlobalPetPushToTalkService;
+  systemPermissionsService: SystemPermissionsService;
+  petService: PetService;
+  openclawRuntime: OpenClawRuntime;
+  clawClient: ClawClient;
+  clawChannel: ClawChannel;
+  reminderService: ReminderService;
+  activityCoordinator: RuntimeActivityCoordinator;
+  channelCoordinator: ChannelCoordinator;
+  clawCoordinator: ClawCoordinator;
+  lifecycleCoordinator: LifecycleCoordinator;
+  dataCoordinator: RuntimeDataCoordinator;
+  statusCoordinator: RuntimeStatusCoordinator;
+  bindCallbacks: (callbacks: RuntimeRegistryCallbacks) => void;
+}
+
+export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeRegistry {
+  const bootedAt = new Date().toISOString();
+  const paths = new CompanionPaths();
+  const logger = new AppLogger(paths);
+  const tokenStatsStore = new TokenStatsStore(paths);
+  const tokenStatsService = new TokenStatsService(tokenStatsStore);
+  const configStore = new ConfigStore(paths);
+  const reminderStore = new ReminderStore(paths);
+  const runtimeContextStore = new RuntimeContextStore(paths);
+
+  const memory = new YobiMemory(
+    paths,
+    () => configStore.getConfig()
+  );
+
+  const modelFactory = new ModelFactory(() => configStore.getConfig());
+  const stateStore = new StateStore(paths);
+  const approvalGuard = new ApprovalGuard();
+  const toolRegistry = new DefaultToolRegistry(
+    () => configStore.getConfig(),
+    approvalGuard
+  );
+  const mcpManager = new McpManager(() => configStore.getConfig());
+  const backgroundWorker = new BackgroundTaskWorkerService();
+
+  const callbackBridge: RuntimeRegistryCallbacks = {
+    emitStatus: async () => undefined,
+    withTimeout: async <T>(promise: Promise<T>) => promise,
+    handleKernelProactive: async () => undefined,
+    recordUserActivity: async () => undefined,
+    getConfig: () => configStore.getConfig()
+  };
+
+  const queueHandlers = buildKernelQueueTaskHandlers({
+    paths,
+    memory,
+    getConfig: () => configStore.getConfig(),
+    backgroundWorker,
+    resourceId: input.resourceId,
+    threadId: input.threadId
+  });
+  const proactiveRewriteHandler = new WorkerProactiveRewriteHandler({
+    getConfig: () => configStore.getConfig(),
+    backgroundWorker,
+    timeoutMs: 10_000
+  });
+
+  const kernel = new KernelEngine({
+    paths,
+    memory,
+    stateStore,
+    getConfig: () => configStore.getConfig(),
+    resourceId: input.resourceId,
+    threadId: input.threadId,
+    backgroundWorker,
+    queueHandlers,
+    proactiveRewriteHandler,
+    onProactiveMessage: async ({ message, topicId }) => {
+      await callbackBridge.handleKernelProactive(message, topicId);
+    }
+  });
+
+  const conversation = new ConversationEngine(
+    memory,
+    modelFactory,
+    toolRegistry,
+    stateStore,
+    paths,
+    () => configStore.getConfig(),
+    (signals) => kernel.onRealtimeEmotionalSignals(signals)
+  );
+
+  const bilibiliBrowse = new BilibiliBrowseService(
+    paths,
+    modelFactory,
+    memory,
+    () => configStore.getConfig(),
+    async (cookie) => {
+      const current = configStore.getConfig();
+      await configStore.saveConfig({
+        ...current,
+        browse: {
+          ...current.browse,
+          bilibiliCookie: cookie
+        }
+      });
+      await callbackBridge.emitStatus();
+    }
+  );
+
+  const channelRouter = new ChannelRouter(conversation);
+  const telegram = new TelegramChannel(() => configStore.getConfig());
+  const consoleChannel = new ConsoleChannel();
+  const voiceService = new VoiceService();
+  const voiceRouter = new VoiceProviderRouter(
+    () => configStore.getConfig(),
+    voiceService
+  );
+  const keepAwake = new KeepAwakeService();
+  const pet = new PetWindowController();
+  const realtimeVoice = new RealtimeVoiceService();
+  const globalPtt = new GlobalPetPushToTalkService();
+  const systemPermissionsService = new SystemPermissionsService({
+    onStatusChange: () => {
+      void callbackBridge.emitStatus();
+    }
+  });
+  const petService = new PetService({
+    paths,
+    getConfig: () => configStore.getConfig(),
+    pet,
+    voiceRouter,
+    realtimeVoice,
+    globalPtt,
+    systemPermissionsService,
+    channelRouter,
+    primaryResourceId: input.resourceId,
+    primaryThreadId: input.threadId,
+    chatReplyTimeoutMs: input.chatReplyTimeoutMs,
+    withTimeout: (promise, timeoutMs, label) => callbackBridge.withTimeout(promise, timeoutMs, label),
+    onStatusChange: () => {
+      void callbackBridge.emitStatus();
+    }
+  });
+  const openclawRuntime = new OpenClawRuntime(paths, () => {
+    void callbackBridge.emitStatus();
+  });
+  const clawClient = new ClawClient(
+    () => configStore.getConfig(),
+    () => openclawRuntime.getGatewayAuthToken()
+  );
+  const clawChannel = new ClawChannel(clawClient, {
+    defaultSessionKey: "main",
+    onYobiFinal: async ({ text }) => {
+      await memory.rememberMessage({
+        threadId: input.threadId,
+        resourceId: input.resourceId,
+        role: "assistant",
+        text,
+        metadata: {
+          channel: "console",
+          source: "claw"
+        }
+      });
+
+      consoleChannel.emitExternalAssistantMessage({
+        text,
+        source: "claw"
+      });
+      await kernel.onAssistantMessage();
+      await callbackBridge.emitStatus();
+    }
+  });
+
+  const reminderService = new ReminderService(reminderStore, {
+    sendReminder: async (item) => {
+      await telegram.send({
+        kind: "text",
+        text: `⏰ 提醒：${item.text}`
+      });
+    }
+  });
+
+  let channelCoordinatorRef: ChannelCoordinator | null = null;
+  const activityCoordinator = new RuntimeActivityCoordinator({
+    runtimeContextStore,
+    logger,
+    getConfig: () => configStore.getConfig(),
+    onLastUserLoaded: (value) => kernel.setLastUserMessageAt(value),
+    onLastProactiveLoaded: (value) => kernel.setLastProactiveAt(value),
+    onUserMessage: (messageInput) => kernel.onUserMessage(messageInput),
+    onProactiveMessage: (ts) => kernel.setLastProactiveAt(ts),
+    sendTelegram: async (text, chatId) => {
+      await telegram.send({ kind: "text", text, chatId });
+    },
+    sendQQ: async (text, chatId) => {
+      await channelCoordinatorRef?.getQQChannel()?.send({ kind: "text", text, chatId });
+    }
+  });
+
+  const channelCoordinator = new ChannelCoordinator({
+    telegram,
+    createQQChannel: (config) => new QQChannel(config),
+    logger,
+    pet,
+    getQQConfig: () => ({
+      enabled: configStore.getConfig().qq.enabled,
+      appId: configStore.getConfig().qq.appId.trim(),
+      appSecret: configStore.getConfig().qq.appSecret.trim()
+    }),
+    handleTelegram: (payload) => channelRouter.handleTelegram(payload),
+    handleQQ: (payload) => channelRouter.handleQQ(payload),
+    onRecordUserActivity: (activityInput) => callbackBridge.recordUserActivity(activityInput),
+    onAssistantMessage: () => kernel.onAssistantMessage(),
+    emitStatus: () => callbackBridge.emitStatus(),
+    withTimeout: (promise, timeoutMs, label) => callbackBridge.withTimeout(promise, timeoutMs, label),
+    chatReplyTimeoutMs: input.chatReplyTimeoutMs,
+    resourceId: input.resourceId,
+    threadId: input.threadId
+  });
+  channelCoordinatorRef = channelCoordinator;
+
+  const clawCoordinator = new ClawCoordinator({
+    openclawRuntime,
+    clawClient,
+    clawChannel,
+    getConfig: () => configStore.getConfig()
+  });
+
+  const lifecycleCoordinator = new LifecycleCoordinator({
+    keepAwake,
+    petService,
+    reminderService,
+    getConfig: () => configStore.getConfig()
+  });
+
+  const dataCoordinator = new RuntimeDataCoordinator({
+    paths,
+    memory,
+    stateStore,
+    kernel,
+    bilibiliBrowse,
+    systemPermissionsService,
+    resourceId: input.resourceId,
+    threadId: input.threadId,
+    emitStatus: () => callbackBridge.emitStatus()
+  });
+
+  const statusCoordinator = new RuntimeStatusCoordinator({
+    bootedAt,
+    memory,
+    kernel,
+    bilibiliBrowse,
+    tokenStatsService,
+    systemPermissionsService,
+    activityCoordinator,
+    channelCoordinator,
+    clawCoordinator,
+    lifecycleCoordinator,
+    resourceId: input.resourceId,
+    threadId: input.threadId
+  });
+
+  return {
+    bootedAt,
+    paths,
+    logger,
+    tokenStatsStore,
+    tokenStatsService,
+    configStore,
+    reminderStore,
+    runtimeContextStore,
+    memory,
+    modelFactory,
+    stateStore,
+    approvalGuard,
+    toolRegistry,
+    mcpManager,
+    backgroundWorker,
+    conversation,
+    bilibiliBrowse,
+    kernel,
+    channelRouter,
+    telegram,
+    consoleChannel,
+    voiceService,
+    voiceRouter,
+    keepAwake,
+    pet,
+    realtimeVoice,
+    globalPtt,
+    systemPermissionsService,
+    petService,
+    openclawRuntime,
+    clawClient,
+    clawChannel,
+    reminderService,
+    activityCoordinator,
+    channelCoordinator,
+    clawCoordinator,
+    lifecycleCoordinator,
+    dataCoordinator,
+    statusCoordinator,
+    bindCallbacks: (callbacks) => {
+      callbackBridge.emitStatus = callbacks.emitStatus;
+      callbackBridge.withTimeout = callbacks.withTimeout;
+      callbackBridge.handleKernelProactive = callbacks.handleKernelProactive;
+      callbackBridge.recordUserActivity = callbacks.recordUserActivity;
+      callbackBridge.getConfig = callbacks.getConfig;
+    }
+  };
+}

@@ -8,6 +8,7 @@ export type TaskHandler = (task: PendingTask) => Promise<void>;
 const MAX_BACKOFF_MS = 60_000;
 const BASE_BACKOFF_MS = 2_000;
 const DRAIN_POLL_INTERVAL_MS = 25;
+const TRANSIENT_BACKOFF_MS = 5_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -70,33 +71,23 @@ export class KernelTaskQueue {
     sourceRange?: string;
   }): Promise<PendingTask> {
     await this.init();
-    if (input.sourceRange) {
-      const existing = this.tasks.find(
-        (task) =>
-          task.type === input.type &&
-          task.source_range === input.sourceRange &&
-          (task.status === "pending" || task.status === "running" || task.status === "completed")
-      );
-      if (existing) {
-        return { ...existing };
-      }
-    }
-
-    const now = new Date().toISOString();
-    const next: PendingTask = {
-      id: randomUUID(),
-      type: input.type,
-      status: "pending",
-      payload: input.payload,
-      source_range: input.sourceRange,
-      available_at: now,
-      attempts: 0,
-      created_at: now,
-      updated_at: now
-    };
-    this.tasks.push(next);
+    const next = this.createTaskIfNeeded(input);
     await this.persist();
     return { ...next };
+  }
+
+  async enqueueMany(inputs: Array<{
+    type: PendingTaskType;
+    payload: Record<string, unknown>;
+    sourceRange?: string;
+  }>): Promise<PendingTask[]> {
+    await this.init();
+    if (inputs.length === 0) {
+      return [];
+    }
+    const created = inputs.map((input) => this.createTaskIfNeeded(input));
+    await this.persist();
+    return created.map((task) => ({ ...task }));
   }
 
   async processAvailable(): Promise<void> {
@@ -163,18 +154,24 @@ export class KernelTaskQueue {
       task.last_error = undefined;
       task.available_at = task.updated_at;
     } catch (error) {
-      task.attempts += 1;
       task.updated_at = new Date().toISOString();
       task.last_error = error instanceof Error ? error.message : "unknown";
-      if (task.attempts > this.retryLimit) {
-        task.status = "failed";
-        task.available_at = task.updated_at;
-        this.deadLetters.push({ ...task });
-        this.tasks = this.tasks.filter((candidate) => candidate.id !== task.id);
-      } else {
+
+      if (isTransientTaskError(error)) {
         task.status = "pending";
-        const backoffMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.max(0, task.attempts - 1));
-        task.available_at = new Date(Date.now() + backoffMs).toISOString();
+        task.available_at = new Date(Date.now() + TRANSIENT_BACKOFF_MS).toISOString();
+      } else {
+        task.attempts += 1;
+        if (task.attempts > this.retryLimit) {
+          task.status = "failed";
+          task.available_at = task.updated_at;
+          this.deadLetters.push({ ...task });
+          this.tasks = this.tasks.filter((candidate) => candidate.id !== task.id);
+        } else {
+          task.status = "pending";
+          const backoffMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.max(0, task.attempts - 1));
+          task.available_at = new Date(Date.now() + backoffMs).toISOString();
+        }
       }
     } finally {
       this.runningIds.delete(task.id);
@@ -208,6 +205,46 @@ export class KernelTaskQueue {
     this.persistChain = next;
     await next;
   }
+
+  private createTaskIfNeeded(input: {
+    type: PendingTaskType;
+    payload: Record<string, unknown>;
+    sourceRange?: string;
+  }): PendingTask {
+    if (input.sourceRange) {
+      const existing = this.tasks.find(
+        (task) =>
+          task.type === input.type &&
+          task.source_range === input.sourceRange &&
+          (task.status === "pending" || task.status === "running" || task.status === "completed")
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const next: PendingTask = {
+      id: randomUUID(),
+      type: input.type,
+      status: "pending",
+      payload: input.payload,
+      source_range: input.sourceRange,
+      available_at: now,
+      attempts: 0,
+      created_at: now,
+      updated_at: now
+    };
+    this.tasks.push(next);
+    return next;
+  }
+}
+
+function isTransientTaskError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message === "background-worker-unavailable" || error.message === "worker-unavailable";
 }
 
 function normalizeTask(raw: PendingTask): PendingTask | null {

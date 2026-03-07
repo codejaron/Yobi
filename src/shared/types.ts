@@ -860,6 +860,9 @@ export interface KernelStatus {
   lastTickAt: string | null;
   stage: RelationshipStage;
   coldStart: boolean;
+  workerAvailable: boolean;
+  workerMessage: string;
+  proactivePausedReason: string | null;
 }
 
 export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
