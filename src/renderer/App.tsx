@@ -303,33 +303,38 @@ export default function App() {
     );
   }, [activePage, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
 
+  const showPageHeader =
+    activePage !== "console" && activePage !== "topics" && activePage !== "dashboard";
+
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">
       <SideNav active={activePage} onSelect={setActivePage} />
 
-      <main className="space-y-6">
-        <section className="flex flex-wrap items-center justify-between gap-4 rounded-[32px] border border-white/60 bg-white/70 px-8 py-6 shadow-[0_24px_60px_rgba(53,38,21,0.08)] backdrop-blur">
-          <div>
-            <h1 className="font-display text-3xl tracking-tight text-foreground">
-              {pageTitle(activePage)}
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">{notice}</p>
-          </div>
+      <main className={showPageHeader ? "space-y-6" : undefined}>
+        {showPageHeader ? (
+          <section className="flex flex-wrap items-center justify-between gap-4 rounded-[32px] border border-white/60 bg-white/70 px-8 py-6 shadow-[0_24px_60px_rgba(53,38,21,0.08)] backdrop-blur">
+            <div>
+              <h1 className="font-display text-3xl tracking-tight text-foreground">
+                {pageTitle(activePage)}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">{notice}</p>
+            </div>
 
-          <div className="flex items-center gap-3">
-            <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
-              Telegram {status?.telegramConnected ? "Online" : "Offline"}
-            </Badge>
-            <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
-              QQ {status?.qqConnected ? "Online" : "Offline"}
-            </Badge>
-            {config ? (
-              <Button onClick={saveConfig} disabled={saving}>
-                {saving ? "保存中..." : "保存配置"}
-              </Button>
-            ) : null}
-          </div>
-        </section>
+            <div className="flex items-center gap-3">
+              <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
+                Telegram {status?.telegramConnected ? "Online" : "Offline"}
+              </Badge>
+              <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
+                QQ {status?.qqConnected ? "Online" : "Offline"}
+              </Badge>
+              {config ? (
+                <Button onClick={saveConfig} disabled={saving}>
+                  {saving ? "保存中..." : "保存配置"}
+                </Button>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
 
         {content}
       </main>

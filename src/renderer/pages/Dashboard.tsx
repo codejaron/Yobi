@@ -359,22 +359,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <Card>
-          <CardHeader>
-            <CardDescription>Telegram</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Bot className="h-4 w-4" />
-              {status?.telegramConnected ? "已连接" : "未连接"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
-              {status?.telegramConnected ? "Bot 在线" : "等待配置"}
-            </Badge>
-          </CardContent>
-        </Card>
-
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Card>
           <CardHeader>
             <CardDescription>QQ</CardDescription>
@@ -392,16 +377,16 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>主动聊天</CardDescription>
+            <CardDescription>Telegram</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Clock3 className="h-4 w-4" />
-              最近主动消息
+              <Bot className="h-4 w-4" />
+              {status?.telegramConnected ? "已连接" : "未连接"}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {formatDateTime(status?.lastProactiveAt ?? null)}
-            </p>
+            <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
+              {status?.telegramConnected ? "Bot 在线" : "等待配置"}
+            </Badge>
           </CardContent>
         </Card>
 
@@ -416,6 +401,21 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           <CardContent>
             <p className="text-sm text-muted-foreground">
               {formatOpenClawStatus(status?.openclawStatus)}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardDescription>主动聊天</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Clock3 className="h-4 w-4" />
+              最近主动消息
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {formatDateTime(status?.lastProactiveAt ?? null)}
             </p>
           </CardContent>
         </Card>
