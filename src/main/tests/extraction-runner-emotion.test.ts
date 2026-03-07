@@ -18,10 +18,9 @@ test("parseExtractionObject: 仅 operations 也可解析", () => {
 
   assert.equal(parsed.operations.length, 1);
   assert.equal(parsed.operations[0]?.fact.entity, "用户");
-  assert.equal(parsed.emotionalSignals, undefined);
 });
 
-test("parseExtractionObject: operations + emotional_signals 一起解析", () => {
+test("parseExtractionObject: 附带 emotional_signals 会被忽略", () => {
   const parsed = parseExtractionObject({
     operations: [],
     emotional_signals: {
@@ -34,13 +33,9 @@ test("parseExtractionObject: operations + emotional_signals 一起解析", () =>
   });
 
   assert.equal(parsed.operations.length, 0);
-  assert.ok(parsed.emotionalSignals);
-  assert.equal(parsed.emotionalSignals?.user_mood, "positive");
-  assert.equal(parsed.emotionalSignals?.engagement, 0.85);
-  assert.equal(parsed.emotionalSignals?.curiosity_trigger, true);
 });
 
-test("parseExtractionObject: 非法 emotional_signals 会被忽略", () => {
+test("parseExtractionObject: 非法 emotional_signals 同样会被忽略", () => {
   const parsed = parseExtractionObject({
     operations: [],
     emotional_signals: {
@@ -53,5 +48,4 @@ test("parseExtractionObject: 非法 emotional_signals 会被忽略", () => {
   });
 
   assert.equal(parsed.operations.length, 0);
-  assert.equal(parsed.emotionalSignals, undefined);
 });

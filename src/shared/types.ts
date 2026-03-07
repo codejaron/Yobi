@@ -647,6 +647,16 @@ export interface EmotionalState {
   irritation: number;
 }
 
+export type RealtimeUserMood = "positive" | "neutral" | "negative" | "mixed";
+
+export interface RealtimeEmotionalSignals {
+  user_mood: RealtimeUserMood;
+  engagement: number;
+  trust_delta: number;
+  friction: boolean;
+  curiosity_trigger: boolean;
+}
+
 export interface RelationshipState {
   stage: RelationshipStage;
   upgradeStreak: number;

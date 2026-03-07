@@ -271,7 +271,10 @@ export class PetWindowController {
       else logger.info("pet-window", message, detail);
     });
     this.window.webContents.on("render-process-gone", (_event, details) => {
-      logger.error("pet-window", "render-process-gone", details);
+      logger.error("pet-window", "render-process-gone", {
+        reason: details.reason,
+        exitCode: details.exitCode
+      });
     });
     this.window.on("unresponsive", () => {
       logger.warn("pet-window", "window-unresponsive");

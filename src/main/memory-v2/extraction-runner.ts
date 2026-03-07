@@ -23,19 +23,8 @@ const factOperationSchema = z.object({
   fact: factDraftSchema
 });
 
-const emotionalSignalsSchema = z
-  .object({
-    user_mood: z.enum(["positive", "neutral", "negative", "mixed"]).default("neutral"),
-    engagement: z.number().min(0).max(1).default(0.5),
-    trust_delta: z.number().min(-0.3).max(0.3).default(0),
-    friction: z.boolean().default(false),
-    curiosity_trigger: z.boolean().default(false)
-  })
-  .strict();
-
 const extractionSchema = z.object({
-  operations: z.array(factOperationSchema).max(60).default([]),
-  emotional_signals: emotionalSignalsSchema.optional()
+  operations: z.array(factOperationSchema).max(60).default([])
 });
 
 const extractionOperationsSchema = z.object({
@@ -61,11 +50,8 @@ export interface ExtractionChunk {
   messages: BufferMessage[];
 }
 
-export type EmotionalSignals = z.infer<typeof emotionalSignalsSchema>;
-
 export interface FactExtractionOutput {
   operations: FactOperationOutput[];
-  emotionalSignals?: EmotionalSignals;
   tokenUsage?: unknown;
 }
 
@@ -131,9 +117,8 @@ export async function runFactExtraction(input: {
   const model = input.modelFactory.getFactExtractionModel();
   const system = [
     "你负责从对话片段中提取结构化事实。",
-    "你输出 JSON，包含 operations，以及可选的 emotional_signals。",
+    "你输出 JSON，仅包含 operations。",
     "action 仅可为 add / update / supersede。",
-    "若无法判断明显情绪信号，emotional_signals 使用 neutral/0.5/0/false/false。",
     "不要复述对话，不要输出解释文本。"
   ].join("\n");
   const prompt = JSON.stringify(
@@ -183,9 +168,6 @@ function makeRange(start?: string, end?: string): string {
 
 export function parseExtractionObject(raw: unknown): FactExtractionOutput {
   const parsedOperations = extractionOperationsSchema.parse(raw);
-  const emotionalSignalsResult = emotionalSignalsSchema.safeParse(
-    (raw as Record<string, unknown>)?.emotional_signals
-  );
   return {
     operations: parsedOperations.operations.map((operation) => ({
       action: operation.action,
@@ -199,7 +181,6 @@ export function parseExtractionObject(raw: unknown): FactExtractionOutput {
         source: operation.fact.source,
         source_range: operation.fact.source_range
       }
-    })),
-    emotionalSignals: emotionalSignalsResult.success ? emotionalSignalsResult.data : undefined
+    }))
   };
 }

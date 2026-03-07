@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyElapsedEmotionalDecay,
   applyEmotionalSignalsToState,
+  applyRealtimeEmotionalSignals,
   computeSignalAgeScale
 } from "../kernel/engine.js";
 import type { AppConfig, EmotionalState } from "@shared/types";
@@ -113,6 +114,35 @@ test("applyEmotionalSignalsToState: 单窗变化受 windowMaxAbsDelta 限幅", (
   assert.equal(next.mood, 0.05);
   assert.equal(next.connection, 0.55);
   assert.equal(next.curiosity, 0.45);
+});
+
+test("applyRealtimeEmotionalSignals: 有信号时按实时窗口更新情绪", () => {
+  const next = applyRealtimeEmotionalSignals({
+    emotional: baseEmotional,
+    signals: {
+      user_mood: "negative",
+      engagement: 0.2,
+      trust_delta: -0.08,
+      friction: true,
+      curiosity_trigger: false
+    },
+    config: emotionSignalConfig
+  });
+
+  assert.ok(next.mood < baseEmotional.mood);
+  assert.ok(next.energy < baseEmotional.energy);
+  assert.ok(next.connection < baseEmotional.connection);
+  assert.ok(next.irritation > baseEmotional.irritation);
+});
+
+test("applyRealtimeEmotionalSignals: 无信号时保持原状态", () => {
+  const next = applyRealtimeEmotionalSignals({
+    emotional: baseEmotional,
+    signals: null,
+    config: emotionSignalConfig
+  });
+
+  assert.deepEqual(next, baseEmotional);
 });
 
 

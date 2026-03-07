@@ -1,5 +1,9 @@
-import { DEFAULT_EMOTIONAL_STATE, type AppConfig, type EmotionalState } from "@shared/types";
-import type { EmotionalSignals } from "@main/memory-v2/extraction-runner";
+import {
+  DEFAULT_EMOTIONAL_STATE,
+  type AppConfig,
+  type EmotionalState,
+  type RealtimeEmotionalSignals
+} from "@shared/types";
 
 const EMOTIONAL_HALF_LIFE_SECONDS = {
   mood: 12 * 3600,
@@ -55,51 +59,6 @@ export function applyElapsedEmotionalDecay(emotional: EmotionalState, deltaSecon
   };
 }
 
-export function applyRealtimeEmotionHeuristics(
-  emotional: EmotionalState,
-  text: string,
-  config: AppConfig["kernel"]["emotionSignals"]
-): EmotionalState {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) {
-    return emotional;
-  }
-
-  const next: EmotionalState = { ...emotional };
-  const positiveTerms = ["开心", "高兴", "快乐", "期待", "喜欢", "兴奋"];
-  const negativeTerms = ["累", "疲惫", "难过", "烦", "焦虑", "崩溃", "无语", "压力", "加班", "困"];
-  const curiosityTerms = ["想知道", "为什么", "好奇", "想试试", "感兴趣"];
-  const frictionTerms = ["烦死了", "气死", "破防", "无语", "烦"];
-
-  const positiveHit = positiveTerms.some((term) => normalized.includes(term));
-  const negativeHit = negativeTerms.some((term) => normalized.includes(term));
-  const curiosityHit = curiosityTerms.some((term) => normalized.includes(term));
-  const frictionHit = frictionTerms.some((term) => normalized.includes(term));
-
-  const moodStep = Math.max(config.moodPositiveStep, config.moodNegativeStep) * 0.25;
-  const connectionStep = config.minPositiveTrustDelta * 0.25;
-  const curiosityStep = config.curiosityBoost * 0.25;
-  const irritationStep = config.irritationBoostOnFriction * 0.25;
-
-  if (positiveHit) {
-    next.mood = clampRange(next.mood + moodStep, -1, 1);
-    next.connection = clamp01(next.connection + connectionStep);
-  }
-  if (negativeHit) {
-    next.mood = clampRange(next.mood - moodStep, -1, 1);
-    next.energy = clamp01(next.energy - config.energyEngagementScale * 0.25);
-  }
-  if (curiosityHit) {
-    next.curiosity = clamp01(next.curiosity + curiosityStep);
-  }
-  if (frictionHit) {
-    next.irritation = clamp01(next.irritation + irritationStep);
-    next.confidence = clamp01(next.confidence - config.confidenceDropOnFriction * 0.25);
-  }
-
-  return next;
-}
-
 export function computeSignalAgeScale(
   latestMessageTs: string,
   now: Date,
@@ -125,7 +84,7 @@ export function computeSignalAgeScale(
 
 export function applyEmotionalSignalsToState(input: {
   emotional: EmotionalState;
-  signals: EmotionalSignals;
+  signals: RealtimeEmotionalSignals;
   config: AppConfig["kernel"]["emotionSignals"];
   ageScale: number;
 }): EmotionalState {
@@ -166,4 +125,21 @@ export function applyEmotionalSignalsToState(input: {
   next.irritation = clamp01(next.irritation + scaledDelta(irritationDelta));
 
   return next;
+}
+
+export function applyRealtimeEmotionalSignals(input: {
+  emotional: EmotionalState;
+  signals: RealtimeEmotionalSignals | null | undefined;
+  config: AppConfig["kernel"]["emotionSignals"];
+}): EmotionalState {
+  if (!input.signals) {
+    return input.emotional;
+  }
+
+  return applyEmotionalSignalsToState({
+    emotional: input.emotional,
+    signals: input.signals,
+    config: input.config,
+    ageScale: 1
+  });
 }

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { EmotionalSignals } from "@main/memory-v2/extraction-runner";
 import type { AppConfig, BufferMessage } from "@shared/types";
 
 interface WorkerMessage {
@@ -28,7 +27,6 @@ export interface FactExtractionWorkerResult {
       source_range?: string;
     };
   }>;
-  emotionalSignals?: EmotionalSignals;
   tokenUsage?: unknown;
 }
 

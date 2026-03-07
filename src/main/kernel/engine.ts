@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { generateObject } from "ai";
 import { z } from "zod";
-import type { AppConfig, BufferMessage, KernelStatus, ReflectionProposal } from "@shared/types";
+import type {
+  AppConfig,
+  BufferMessage,
+  KernelStatus,
+  RealtimeEmotionalSignals,
+  ReflectionProposal
+} from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
@@ -10,7 +16,6 @@ import { KernelEventQueue } from "./event-queue";
 import { KernelTaskQueue } from "./task-queue";
 import { StateStore } from "./state-store";
 import {
-  type EmotionalSignals,
   runFactExtraction,
   splitExtractionWindows
 } from "@main/memory-v2/extraction-runner";
@@ -20,12 +25,23 @@ import {
 } from "@main/storage/fs";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
-import { applyElapsedEmotionalDecay, applyEmotionalSignalsToState, applyRealtimeEmotionHeuristics, computeMessageCadenceScale, computeSignalAgeScale, clamp01 } from "./emotion-utils";
+import {
+  applyElapsedEmotionalDecay,
+  applyRealtimeEmotionalSignals,
+  computeMessageCadenceScale,
+  clamp01
+} from "./emotion-utils";
 import { selectBestProactiveTopic } from "./proactive-utils";
 import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, isWithinQuietHours, shorten, toDayKey } from "./relationship-utils";
 import { normalizeBufferRow } from "./message-utils";
 
-export { computeMessageCadenceScale, applyElapsedEmotionalDecay, applyRealtimeEmotionHeuristics, computeSignalAgeScale, applyEmotionalSignalsToState } from "./emotion-utils";
+export {
+  computeMessageCadenceScale,
+  applyElapsedEmotionalDecay,
+  applyRealtimeEmotionalSignals,
+  computeSignalAgeScale,
+  applyEmotionalSignalsToState
+} from "./emotion-utils";
 export { selectBestProactiveTopic } from "./proactive-utils";
 
 const semanticProfileSchema = z.object({
@@ -181,6 +197,21 @@ export class KernelEngine {
     await this.processUrgentEvents();
   }
 
+  onRealtimeEmotionalSignals(signals: RealtimeEmotionalSignals | null | undefined): void {
+    const config = this.input.getConfig().kernel.emotionSignals;
+    if (!config.enabled || !signals) {
+      return;
+    }
+
+    this.input.stateStore.mutate((state) => {
+      state.emotional = applyRealtimeEmotionalSignals({
+        emotional: state.emotional,
+        signals,
+        config
+      });
+    });
+  }
+
   async runTickNow(): Promise<void> {
     await this.tick();
   }
@@ -252,13 +283,12 @@ export class KernelEngine {
 
       if (next.type === "user-message") {
         const ts = typeof next.payload?.ts === "string" ? next.payload.ts : new Date().toISOString();
-        const text = typeof next.payload?.text === "string" ? next.payload.text : "";
-        this.handleUserMessageEvent(ts, text);
+        this.handleUserMessageEvent(ts);
       }
     }
   }
 
-  private handleUserMessageEvent(ts: string, text: string): void {
+  private handleUserMessageEvent(ts: string): void {
     const currentTs = new Date(ts).getTime();
     const lastTs = this.lastUserMessageAt ? new Date(this.lastUserMessageAt).getTime() : 0;
     const gapMs = lastTs > 0 ? Math.max(0, currentTs - lastTs) : null;
@@ -269,7 +299,6 @@ export class KernelEngine {
     this.input.stateStore.mutate((state) => {
       state.emotional.connection = clamp01(state.emotional.connection + 0.08 * cadenceScale);
       state.emotional.energy = clamp01(state.emotional.energy + 0.03 * cadenceScale);
-      state.emotional = applyRealtimeEmotionHeuristics(state.emotional, text, this.input.getConfig().kernel.emotionSignals);
       state.coldStart = false;
       const reentryThreshold = this.input.getConfig().kernel.sessionReentryGapHours;
       if (typeof gapMs === "number" && gapHours >= reentryThreshold) {
@@ -422,33 +451,7 @@ export class KernelEngine {
     }));
     const changedFacts = await this.input.memory.getFactsStore().applyOperations(normalizedOperations);
     await this.input.memory.syncFactEmbeddings(changedFacts);
-    this.applyEmotionalSignals(extractionResult.emotionalSignals, messages);
     await this.input.memory.markExtractedByRange(sourceRange);
-  }
-
-  private applyEmotionalSignals(
-    signals: EmotionalSignals | undefined,
-    messages: BufferMessage[]
-  ): void {
-    const config = this.input.getConfig().kernel.emotionSignals;
-    if (!config.enabled || !signals) {
-      return;
-    }
-
-    const latestTs = messages[messages.length - 1]?.ts ?? "";
-    const ageScale = computeSignalAgeScale(latestTs, new Date(), config);
-    if (ageScale <= 0) {
-      return;
-    }
-
-    this.input.stateStore.mutate((state) => {
-      state.emotional = applyEmotionalSignalsToState({
-        emotional: state.emotional,
-        signals,
-        config,
-        ageScale
-      });
-    });
   }
 
   private async runDailyEpisodeTask(): Promise<void> {

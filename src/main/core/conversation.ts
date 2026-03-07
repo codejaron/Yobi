@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { streamText, stepCountIs, type ToolSet } from "ai";
-import type { AppConfig, TokenUsageSource } from "@shared/types";
+import type { AppConfig, RealtimeEmotionalSignals, TokenUsageSource } from "@shared/types";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
-import { stripEmotionTags } from "./emotion-tags";
+import { extractEmotionTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
@@ -44,6 +44,16 @@ function tokenSourceFromChannel(channel: "telegram" | "console" | "qq"): TokenUs
   return "chat:console";
 }
 
+function buildRealtimeSignalContractPrompt(): string {
+  return [
+    "[OUTPUT CONTRACT]",
+    "每次最终回复末尾都必须追加一个隐藏标签：",
+    '<signals user_mood="positive|neutral|negative|mixed" engagement="0..1" trust_delta="-0.3..0.3" friction="true|false" curiosity_trigger="true|false" />',
+    '若无法判断，使用中性默认值：<signals user_mood="neutral" engagement="0.5" trust_delta="0" friction="false" curiosity_trigger="false" />。',
+    "该标签必须放在回复最后，不要在可见文本中解释。"
+  ].join("\n");
+}
+
 export class ConversationEngine {
   constructor(
     private readonly memory: YobiMemory,
@@ -51,7 +61,8 @@ export class ConversationEngine {
     private readonly toolRegistry: ToolRegistry,
     private readonly stateStore: StateStore,
     private readonly paths: CompanionPaths,
-    private readonly getConfig: () => AppConfig
+    private readonly getConfig: () => AppConfig,
+    private readonly onRealtimeEmotionalSignals?: (signals: RealtimeEmotionalSignals) => void | Promise<void>
   ) {}
 
   async reply(input: {
@@ -119,7 +130,11 @@ export class ConversationEngine {
       await this.memory.touchFacts(assembled.selectedFacts.map((fact) => fact.id));
     }
 
-    const system = [assembled.system, input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""]
+    const system = [
+      assembled.system,
+      buildRealtimeSignalContractPrompt(),
+      input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""
+    ]
       .filter(Boolean)
       .join("\n\n");
 
@@ -222,7 +237,12 @@ export class ConversationEngine {
 
     const fallbackReply = "我这次没有生成有效回复，请重试一次。";
     const rawFinalText = trimmedText || fallbackReply;
-    const finalText = stripEmotionTags(rawFinalText).trim() || fallbackReply;
+    const parsedReply = extractEmotionTag(rawFinalText);
+    const finalText = parsedReply.cleanedText.trim() || fallbackReply;
+
+    if (parsedReply.signals) {
+      await this.onRealtimeEmotionalSignals?.(parsedReply.signals);
+    }
 
     await this.memory.rememberMessage({
       threadId: input.threadId,

@@ -11,14 +11,7 @@ const factDraftSchema = zod.z.object({
   source_range: zod.z.string().max(120).optional()
 });
 const factOperationSchema = zod.z.object({ action: zod.z.enum(['add', 'update', 'supersede']), fact: factDraftSchema });
-const emotionalSignalsSchema = zod.z.object({
-  user_mood: zod.z.enum(['positive', 'neutral', 'negative', 'mixed']).default('neutral'),
-  engagement: zod.z.number().min(0).max(1).default(0.5),
-  trust_delta: zod.z.number().min(-0.3).max(0.3).default(0),
-  friction: zod.z.boolean().default(false),
-  curiosity_trigger: zod.z.boolean().default(false)
-}).strict();
-const extractionSchema = zod.z.object({ operations: zod.z.array(factOperationSchema).max(60).default([]), emotional_signals: emotionalSignalsSchema.optional() });
+const extractionSchema = zod.z.object({ operations: zod.z.array(factOperationSchema).max(60).default([]) });
 const semanticProfileSchema = zod.z.object({
   preferredComfortStyle: zod.z.string().min(1).max(30).optional(),
   humorReceptivity: zod.z.number().min(0).max(1).optional(),
@@ -120,9 +113,8 @@ async function runFactExtraction(message) {
   const model = await createModelForRoute(message.config, 'factExtraction');
   const system = [
     '你负责从对话片段中提取结构化事实。',
-    '你输出 JSON，包含 operations，以及可选的 emotional_signals。',
+    '你输出 JSON，仅包含 operations。',
     'action 仅可为 add / update / supersede。',
-    '若无法判断明显情绪信号，emotional_signals 使用 neutral/0.5/0/false/false。',
     '不要复述对话，不要输出解释文本。'
   ].join('\n');
   const prompt = JSON.stringify({
@@ -154,7 +146,6 @@ async function runFactExtraction(message) {
         source_range: operation.fact.source_range
       }
     })),
-    emotionalSignals: parsed.emotional_signals,
     tokenUsage: result.usage
   };
 }

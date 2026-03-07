@@ -101,7 +101,8 @@ export class CompanionRuntime {
     this.toolRegistry,
     this.stateStore,
     this.paths,
-    () => this.configStore.getConfig()
+    () => this.configStore.getConfig(),
+    (signals) => this.kernel.onRealtimeEmotionalSignals(signals)
   );
 
   private readonly bilibiliBrowse = new BilibiliBrowseService(
