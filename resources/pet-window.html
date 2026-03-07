@@ -158,12 +158,18 @@
       #fallback {
         width: 220px;
         height: 220px;
-        display: none;
+        display: flex;
         align-items: center;
         justify-content: center;
+        position: absolute;
+        inset: 50% auto auto 50%;
+        transform: translate(-50%, -50%);
         background: transparent;
         color: #2f2014;
         font-weight: 700;
+        z-index: 30;
+        pointer-events: none;
+        text-align: center;
       }
 
       .badge {
@@ -208,7 +214,7 @@
     </div>
 
     <script>
-      const petApi = window.petApi;
+      const petBridge = window.petApi;
 
       const statusEl = document.getElementById("status");
       const fallbackEl = document.getElementById("fallback");
@@ -221,8 +227,11 @@
       const chatCloseEl = document.getElementById("chat-close");
 
       const params = new URLSearchParams(window.location.search);
-      const modelDir = params.get("modelDir") || "";
-      const appPath = params.get("appPath") || "";
+      const presetModelJsonUrl = params.get("modelJsonUrl") || "";
+      const presetFallbackImageUrl = params.get("fallbackImageUrl") || "";
+      const cubismCoreUrl = params.get("cubismCoreUrl") || "";
+      const pixiScriptUrl = params.get("pixiScriptUrl") || "";
+      const live2dScriptUrl = params.get("live2dScriptUrl") || "";
       const PET_SCALE_STORAGE_KEY = "yobi.pet.scale.v1";
       const STATUS_TEXT = {
         idle: "",
@@ -238,6 +247,21 @@
         "speech-error": "语音播放失败",
         "speech-blocked": "浏览器阻止自动播放"
       };
+      const MODEL_LOAD_TIMEOUT_MS = 12000;
+      const BOOT_TIMEOUT_MS = 8000;
+
+      const debugLog = (message, detail) => {
+        try {
+          petBridge.debugLog(String(message || ""), detail);
+        } catch {}
+      };
+
+      window.addEventListener("error", (event) => {
+        debugLog("window-error", { message: event.message, filename: event.filename, lineno: event.lineno });
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        debugLog("unhandledrejection", String(event.reason || ""));
+      });
 
       const updateStatus = (text) => {
         const raw = typeof text === "string" ? text.trim() : "";
@@ -305,48 +329,85 @@
       };
 
       const readMotionDefinitionsFromModelJson = (modelJsonPath) => {
-        if (!modelJsonPath) {
-          return {};
-        }
-
-        try {
-          const raw = petApi.readTextFile(modelJsonPath);
-          const parsed = JSON.parse(raw);
-          const motions = parsed?.FileReferences?.Motions;
-          return normalizeMotionDefinitions(motions);
-        } catch {
-          return {};
-        }
+        return {};
       };
 
       const readHitAreaNamesFromModelJson = (modelJsonPath) => {
-        if (!modelJsonPath) {
-          return [];
-        }
+        return [];
+      };
 
+      const listDirectoryEntries = (baseDir) => {
         try {
-          const raw = petApi.readTextFile(modelJsonPath);
-          const parsed = JSON.parse(raw);
-          const hitAreas = Array.isArray(parsed?.HitAreas) ? parsed.HitAreas : [];
-
-          return hitAreas
-            .map((item) => (item && typeof item.Name === "string" ? item.Name.trim() : ""))
-            .filter((name) => name.length > 0);
+          return petBridge.walkFiles(baseDir);
         } catch {
           return [];
         }
       };
 
-      const walkFiles = (baseDir) => petApi.walkFiles(baseDir);
+      const buildCandidateDirs = (baseDir) => {
+        const candidates = [baseDir, petBridge.joinPath(baseDir, "runtime")];
+        const directChildren = listDirectoryEntries(baseDir)
+          .filter((file) => file.startsWith(`${baseDir}${baseDir.endsWith("/") ? "" : "/"}`))
+          .map((file) => {
+            const relative = file.slice(baseDir.length).replace(/^[/\\]+/, "");
+            const first = relative.split(/[/\\]/)[0];
+            return first ? petBridge.joinPath(baseDir, first) : "";
+          })
+          .filter(Boolean);
 
-      const pickFile = (patternFn) => {
-        const files = walkFiles(modelDir);
-        return files.find(patternFn) || null;
+        for (const childDir of new Set(directChildren)) {
+          candidates.push(childDir);
+          candidates.push(petBridge.joinPath(childDir, "runtime"));
+        }
+
+        return Array.from(new Set(candidates));
       };
 
-      const showFallback = (reason) => {
+      const pickFile = (patternFn) => {
+        const candidateDirs = buildCandidateDirs(modelDir);
+        for (const dir of candidateDirs) {
+          const files = listDirectoryEntries(dir);
+          const matched = files.find(patternFn);
+          if (matched) {
+            return matched;
+          }
+        }
+        return null;
+      };
+
+      const resolveFallbackImage = () => {
+        if (presetFallbackImageUrl) {
+          return presetFallbackImageUrl;
+        }
+        return null;
+      };
+
+      const nextPaint = () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+
+      const withTimeout = (promise, timeoutMs, label) =>
+        new Promise((resolve, reject) => {
+          const timer = window.setTimeout(() => {
+            reject(new Error(label));
+          }, timeoutMs);
+
+          Promise.resolve(promise)
+            .then((value) => resolve(value))
+            .catch((error) => reject(error))
+            .finally(() => {
+              window.clearTimeout(timer);
+            });
+        });
+
+      const showFallback = (reason, imagePath) => {
         fallbackEl.style.display = "flex";
-        fallbackEl.innerHTML = `<div class="badge">Yobi</div>`;
+        fallbackEl.innerHTML = imagePath
+          ? `<div style="display:flex;flex-direction:column;align-items:center;gap:10px;"><img src="${toFileHref(
+              imagePath
+            )}" style="max-width:220px;max-height:220px;object-fit:contain;filter:drop-shadow(0 12px 32px rgba(0,0,0,0.22));" alt="Yobi fallback" /><div class="badge">Yobi</div><div style="font-size:12px;opacity:.8;max-width:220px;">${reason}</div></div>`
+          : `<div style="display:flex;flex-direction:column;align-items:center;gap:10px;"><div class="badge">Yobi</div><div style="font-size:12px;opacity:.8;max-width:220px;">${reason}</div></div>`;
         updateStatus(`fallback · ${reason}`);
       };
 
@@ -359,13 +420,7 @@
           document.head.appendChild(script);
         });
 
-      const toFileHref = (filePath) => {
-        if (!filePath) {
-          return "";
-        }
-
-        return petApi.toFileHref(filePath);
-      };
+      const toFileHref = (value) => value || "";
 
       const mergeFloatChunks = (chunks) => {
         if (!Array.isArray(chunks) || chunks.length === 0) {
@@ -551,31 +606,17 @@
         };
       };
 
-      const resolveCubismCoreCandidates = () => {
-        const candidates = [
-          petApi.joinPath(modelDir, "live2dcubismcore.min.js"),
-          petApi.joinPath(modelDir, "runtime", "live2dcubismcore.min.js"),
-          appPath ? petApi.joinPath(appPath, "resources", "live2dcubismcore.min.js") : "",
-          appPath ? petApi.joinPath(appPath, "resources", "vendor", "live2dcubismcore.min.js") : ""
-        ].filter(Boolean);
-
-        return Array.from(new Set(candidates));
-      };
-
       const loadCubismCore = async () => {
-        const candidates = resolveCubismCoreCandidates();
-        for (const filePath of candidates) {
-          if (!petApi.fileExists(filePath)) {
-            continue;
-          }
-
-          try {
-            await loadScript(toFileHref(filePath));
-            if (window.Live2DCubismCore) {
-              return { ok: true, source: filePath };
-            }
-          } catch {}
+        if (!cubismCoreUrl) {
+          return { ok: false };
         }
+
+        try {
+          await loadScript(cubismCoreUrl);
+          if (window.Live2DCubismCore) {
+            return { ok: true, source: cubismCoreUrl };
+          }
+        } catch {}
 
         return { ok: false };
       };
@@ -589,8 +630,19 @@
             };
           }
 
-          await loadScript("../node_modules/pixi.js/dist/browser/pixi.min.js");
-          await loadScript("../node_modules/pixi-live2d-display/dist/cubism4.min.js");
+          if (!pixiScriptUrl) {
+            return {
+              error: "missing-pixi-script"
+            };
+          }
+          if (!live2dScriptUrl) {
+            return {
+              error: "missing-live2d-script"
+            };
+          }
+
+          await loadScript(pixiScriptUrl);
+          await loadScript(live2dScriptUrl);
 
           const PIXI = window.PIXI;
           const Live2DModel = window.PIXI?.live2d?.Live2DModel || null;
@@ -630,17 +682,39 @@
       };
 
       async function boot() {
-        const modelJsonPath = pickFile((file) => file.endsWith(".model3.json"));
-        if (!modelJsonPath) {
-          showFallback("missing-model3.json");
-          return;
-        }
-
         try {
+          fallbackEl.innerHTML = `<div class="badge">Yobi 加载中</div>`;
+          debugLog("boot:start", { presetModelJsonUrl, presetFallbackImageUrl, cubismCoreUrl, pixiScriptUrl, live2dScriptUrl });
+          updateStatus("初始化桌宠...");
+          const modelJsonPath = presetModelJsonUrl || "";
+          if (!modelJsonPath) {
+            debugLog("boot:missing-model3-path");
+            showFallback("missing-model3-path-from-main", presetFallbackImageUrl || null);
+            return;
+          }
+
+          let bootSettled = false;
+          const settleBootFailure = (reason) => {
+            if (bootSettled) {
+              return false;
+            }
+            bootSettled = true;
+            showFallback(reason, resolveFallbackImage());
+            return true;
+          };
+          const bootTimer = window.setTimeout(() => {
+            settleBootFailure("boot-timeout");
+          }, BOOT_TIMEOUT_MS);
+
+          updateStatus("加载运行时...");
+          debugLog("boot:load-runtime");
+          await nextPaint();
           const runtime = await loadRuntime();
+          debugLog("boot:runtime-result", runtime);
           if (!runtime || !runtime.PIXI || !runtime.Live2DModel) {
             const reason = runtime && runtime.error ? runtime.error : "missing-deps";
-            showFallback(`missing-deps:${reason}`);
+            window.clearTimeout(bootTimer);
+            settleBootFailure(`missing-deps:${reason}`);
             return;
           }
           const { PIXI, Live2DModel, live2dModule } = runtime;
@@ -653,16 +727,26 @@
             autoStart: true,
             antialias: true
           });
-
-          rootEl.appendChild(app.view);
           app.stage.interactive = true;
           const stageHitArea = new PIXI.Rectangle(0, 0, app.renderer.width, app.renderer.height);
           app.stage.hitArea = stageHitArea;
 
-          const model = await Live2DModel.from(toFileHref(modelJsonPath), {
-            autoInteract: false
-          });
+          updateStatus("加载模型...");
+          debugLog("boot:load-model", { modelJsonPath });
+          await nextPaint();
+          const model = await withTimeout(
+            Live2DModel.from(toFileHref(modelJsonPath), {
+              autoInteract: false
+            }),
+            MODEL_LOAD_TIMEOUT_MS,
+            "model-load-timeout"
+          );
           model.interactive = true;
+          bootSettled = true;
+          window.clearTimeout(bootTimer);
+          debugLog("boot:model-loaded");
+          fallbackEl.style.display = "none";
+          updateStatus("idle");
 
           const expressionDefinitionsRaw =
             model?.internalModel?.motionManager?.expressionManager?.definitions || {};
@@ -855,7 +939,7 @@
               return;
             }
             mousePassthrough = ignore;
-            petApi.setIgnoreMouseEvents({
+            petBridge.setIgnoreMouseEvents({
               ignore,
               forward: true
             });
@@ -952,7 +1036,7 @@
                 return;
               }
 
-              const result = await petApi.transcribeAndSendFromPet({
+              const result = await petBridge.transcribeAndSendFromPet({
                 pcm16Base64: recorded.pcm16Base64,
                 sampleRate: recorded.sampleRate
               });
@@ -1532,7 +1616,7 @@
 
             cursorPollInFlight = true;
             try {
-              const point = await petApi.getCursorPosition();
+              const point = await petBridge.getCursorPosition();
               if (!point || typeof point !== "object") {
                 return;
               }
@@ -1698,7 +1782,7 @@
             dragState.moved = true;
             dragState.prevX = event.screenX;
             dragState.prevY = event.screenY;
-            petApi.moveWindowBy({ dx, dy });
+            petBridge.moveWindowBy({ dx, dy });
           });
 
           window.addEventListener("mouseup", (event) => {
@@ -1783,6 +1867,10 @@
 
           fitModel();
           app.stage.addChild(model);
+          rootEl.appendChild(app.view);
+          app.view.style.position = "absolute";
+          app.view.style.inset = "0";
+          app.view.style.zIndex = "10";
 
           window.addEventListener("resize", () => {
             app.renderer.resize(window.innerWidth, window.innerHeight);
@@ -1833,7 +1921,7 @@
               const requestToken = ++chatRequestToken;
 
               try {
-                const response = await petApi.sendChat(text);
+                const response = await petBridge.sendChat(text);
                 if (requestToken !== chatRequestToken) {
                   return;
                 }
@@ -1884,7 +1972,7 @@
             }
 
             event.preventDefault();
-            petApi.showContextMenu({
+            petBridge.showContextMenu({
               x: Math.round(event.x),
               y: Math.round(event.y)
             });
@@ -1892,7 +1980,7 @@
 
           enterIdle(true);
 
-          const unsubscribePetEvents = petApi.onEvent((data) => {
+          const unsubscribePetEvents = petBridge.onEvent((data) => {
             if (!data || typeof data !== "object") {
               return;
             }
@@ -1971,11 +2059,14 @@
         } catch (error) {
           console.error(error);
           const reason = error && error.message ? `load-error:${String(error.message).slice(0, 42)}` : "load-error";
-          showFallback(reason);
+          debugLog("boot:error", reason);
+          showFallback(reason, resolveFallbackImage());
         }
       }
 
-      boot();
+      setTimeout(() => {
+        void boot();
+      }, 0);
     </script>
   </body>
 </html>

@@ -254,6 +254,13 @@ export class PetService {
         });
       }
       this.petPttRecording = false;
+      if (this.input.pet.isOnline() && !this.input.voiceRouter.isAlibabaSttReady()) {
+        this.input.pet.emitEvent({
+          type: "ptt",
+          state: "cancel",
+          reason: "阿里语音识别未启用，已跳过全局按住说话启动"
+        });
+      }
       return;
     }
 
@@ -312,7 +319,12 @@ export class PetService {
 
   private shouldEnableGlobalPetPushToTalk(): boolean {
     const config = this.input.getConfig();
-    return config.pet.enabled && config.ptt.enabled && this.input.pet.isOnline();
+    return (
+      config.pet.enabled &&
+      config.ptt.enabled &&
+      this.input.pet.isOnline() &&
+      this.input.voiceRouter.isAlibabaSttReady()
+    );
   }
 
   private async handleGlobalPetPushToTalkPhase(phase: GlobalPttPhase): Promise<void> {
