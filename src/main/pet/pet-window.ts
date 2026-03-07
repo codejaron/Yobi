@@ -212,8 +212,16 @@ export class PetWindowController {
       path.join(app.getAppPath(), "resources", "live2dcubismcore.min.js"),
       path.join(app.getAppPath(), "resources", "vendor", "live2dcubismcore.min.js")
     ]);
-    const pixiScriptPath = resolveExistingPath([path.join(app.getAppPath(), "resources", "vendor", "pixi.min.js")]);
-    const live2dScriptPath = resolveExistingPath([path.join(app.getAppPath(), "resources", "vendor", "cubism4.min.js")]);
+    const pixiScriptPath = resolveExistingPath([
+      path.join(app.getAppPath(), "node_modules", "pixi.js", "dist", "browser", "pixi.min.js"),
+      path.join(process.cwd(), "node_modules", "pixi.js", "dist", "browser", "pixi.min.js"),
+      path.join(app.getAppPath(), "resources", "vendor", "pixi.min.js")
+    ]);
+    const live2dScriptPath = resolveExistingPath([
+      path.join(app.getAppPath(), "node_modules", "pixi-live2d-display", "dist", "cubism4.min.js"),
+      path.join(process.cwd(), "node_modules", "pixi-live2d-display", "dist", "cubism4.min.js"),
+      path.join(app.getAppPath(), "resources", "vendor", "cubism4.min.js")
+    ]);
     if (modelJsonPath) {
       targetUrl.searchParams.set("modelJsonUrl", pathToFileURL(modelJsonPath).toString());
     }

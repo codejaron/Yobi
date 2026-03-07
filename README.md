@@ -75,6 +75,8 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 
 由于授权原因，仓库不包含完整模型。用户 `clone` 后需自行下载模型并配置目录。
 
+构建时会自动下载 `live2dcubismcore.min.js` 到 `resources/`（默认源：`cubism.live2d.com`），无需让终端用户手动下载。
+
 - 在「设置 -> 后台与桌宠」点击 `导入模型`
 - 目录里至少要有一个 `*.model3.json`
 

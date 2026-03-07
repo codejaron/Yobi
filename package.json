@@ -7,8 +7,9 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "prebuild": "npm run prebuild:openclaw",
+    "prebuild": "npm run prebuild:openclaw && npm run prebuild:live2d-core",
     "prebuild:openclaw": "node build/prebuild-openclaw-runtime.mjs",
+    "prebuild:live2d-core": "node build/prebuild-live2d-core.mjs",
     "build": "electron-vite build",
     "dist:mac": "npm run build && npx electron-builder --mac dmg --publish never",
     "dist:win": "npm run build && npx electron-builder --win nsis --publish never",
