@@ -61,6 +61,7 @@ export class ChannelRouter {
     photoUrl?: string;
     resourceId: string;
     threadId: string;
+    stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
   }): Promise<string> {
     return this.conversation.reply({
@@ -69,6 +70,7 @@ export class ChannelRouter {
       photoUrl: input.photoUrl,
       resourceId: input.resourceId,
       threadId: input.threadId,
+      stream: input.stream,
       requestApproval: input.requestApproval
     });
   }

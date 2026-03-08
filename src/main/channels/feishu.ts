@@ -2,14 +2,17 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import type { AppConfig } from "@shared/types";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import { appLogger as logger } from "@main/runtime/singletons";
+import { FeishuStreamingSession } from "./feishu-streaming";
 
 interface FeishuEventPayload {
+  event_id?: string;
   sender?: {
     sender_id?: {
       open_id?: string;
     };
   };
   message?: {
+    message_id?: string;
     chat_id?: string;
     chat_type?: string;
     message_type?: string;
@@ -17,6 +20,9 @@ interface FeishuEventPayload {
     create_time?: string;
   };
 }
+
+const INBOUND_DEDUP_TTL_MS = 10 * 60_000;
+const CLEANUP_INTERVAL_MS = 60_000;
 
 function parseFeishuTimestamp(raw: string | undefined): string {
   const parsed = Number(raw);
@@ -31,17 +37,38 @@ export class FeishuChannel implements ChatChannel {
   private client: lark.Client | null = null;
   private wsClient: lark.WSClient | null = null;
   private connected = false;
+  private appId = "";
+  private appSecret = "";
+  private streamingSession: FeishuStreamingSession | null = null;
+  private readonly recentInboundIds = new Map<string, number>();
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly getConfig: () => AppConfig) {}
 
   async start(onMessage: (message: InboundMessage) => Promise<void>): Promise<void> {
     const { feishu } = this.getConfig();
     if (!feishu.enabled || !feishu.appId.trim() || !feishu.appSecret.trim()) {
+      this.stopCleanupLoop();
+      this.recentInboundIds.clear();
+      this.streamingSession = null;
+      this.appId = "";
+      this.appSecret = "";
       this.connected = false;
       this.client = null;
       this.wsClient = null;
       return;
     }
+
+    this.connected = false;
+    this.appId = feishu.appId.trim();
+    this.appSecret = feishu.appSecret.trim();
+    try {
+      this.wsClient?.close();
+    } catch (error) {
+      logger.warn("feishu", "ws-close-before-start-failed", undefined, error);
+    }
+    this.wsClient = null;
+    this.startCleanupLoop();
 
     this.client = new lark.Client({
       appId: feishu.appId.trim(),
@@ -146,6 +173,7 @@ export class FeishuChannel implements ChatChannel {
   }
 
   async stop(): Promise<void> {
+    this.stopCleanupLoop();
     try {
       this.wsClient?.close();
     } catch (error) {
@@ -154,6 +182,46 @@ export class FeishuChannel implements ChatChannel {
     this.wsClient = null;
     this.client = null;
     this.connected = false;
+    this.streamingSession = null;
+    this.appId = "";
+    this.appSecret = "";
+    this.recentInboundIds.clear();
+  }
+
+  async startStreaming(chatId: string): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    const resolvedChatId = chatId.trim();
+    if (!resolvedChatId || !this.appId || !this.appSecret) {
+      return;
+    }
+
+    if (this.streamingSession?.isActive()) {
+      await this.streamingSession.close().catch(() => undefined);
+    }
+
+    const session = new FeishuStreamingSession(this.client, {
+      appId: this.appId,
+      appSecret: this.appSecret
+    });
+    await session.start(resolvedChatId);
+    this.streamingSession = session;
+  }
+
+  async pushStreamingDelta(fullText: string): Promise<void> {
+    await this.streamingSession?.update(fullText);
+  }
+
+  async finishStreaming(finalText: string): Promise<void> {
+    if (!this.streamingSession) {
+      return;
+    }
+
+    const session = this.streamingSession;
+    this.streamingSession = null;
+    await session.close(finalText);
   }
 
   private async handleIncomingMessage(
@@ -170,6 +238,11 @@ export class FeishuChannel implements ChatChannel {
     const senderId = data.sender?.sender_id?.open_id?.trim() || "unknown";
     const messageType = message.message_type ?? "";
     if (!chatId) {
+      return;
+    }
+
+    const dedupeKey = message.message_id?.trim() || data.event_id?.trim() || "";
+    if (dedupeKey && this.isDuplicateInbound(dedupeKey)) {
       return;
     }
 
@@ -213,6 +286,37 @@ export class FeishuChannel implements ChatChannel {
       sentAt: parseFeishuTimestamp(message.create_time),
       photoUrl
     });
+  }
+
+  private startCleanupLoop(): void {
+    this.stopCleanupLoop();
+    this.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [id, expiresAt] of this.recentInboundIds.entries()) {
+        if (expiresAt <= now) {
+          this.recentInboundIds.delete(id);
+        }
+      }
+    }, CLEANUP_INTERVAL_MS);
+    this.cleanupTimer.unref?.();
+  }
+
+  private stopCleanupLoop(): void {
+    if (!this.cleanupTimer) {
+      return;
+    }
+    clearInterval(this.cleanupTimer);
+    this.cleanupTimer = null;
+  }
+
+  private isDuplicateInbound(id: string): boolean {
+    const now = Date.now();
+    const expiresAt = this.recentInboundIds.get(id);
+    if (expiresAt && expiresAt > now) {
+      return true;
+    }
+    this.recentInboundIds.set(id, now + INBOUND_DEDUP_TTL_MS);
+    return false;
   }
 
   private extractPostText(rawContent: Record<string, unknown>): string {
