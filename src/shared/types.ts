@@ -248,6 +248,12 @@ export const appConfigSchema = z
         ttsVoice: z.string().default("longxiaochun_v3")
       })
       .strict(),
+    whisperLocal: z
+      .object({
+        enabled: z.boolean().default(false),
+        modelSize: z.enum(["tiny", "base", "small"]).default("base")
+      })
+      .strict(),
     background: z
       .object({
         keepAwake: z.boolean().default(true)
@@ -1072,6 +1078,10 @@ export const DEFAULT_CONFIG: AppConfig = {
     asrModel: "fun-asr-realtime",
     ttsModel: "cosyvoice-v3-flash",
     ttsVoice: "longxiaochun_v3"
+  },
+  whisperLocal: {
+    enabled: false,
+    modelSize: "base"
   },
   background: {
     keepAwake: true

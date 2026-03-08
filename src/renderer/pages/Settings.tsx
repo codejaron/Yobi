@@ -17,6 +17,7 @@ import { ProactiveSettingsCard } from "@renderer/pages/settings/ProactiveSetting
 import { QQChannelCard } from "@renderer/pages/settings/QQChannelCard";
 import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCard";
 import { FeishuChannelCard } from "@renderer/pages/settings/FeishuChannelCard";
+import { WhisperLocalCard } from "@renderer/pages/settings/WhisperLocalCard";
 
 export function SettingsPage({
   config,
@@ -236,6 +237,8 @@ export function SettingsPage({
         onToggleRecordHotkey={toggleRecordPttHotkey}
         onResetHotkey={resetPttHotkey}
       />
+
+      <WhisperLocalCard config={config} setConfig={setConfig} />
 
       <AlibabaVoiceCard config={config} setConfig={setConfig} />
 

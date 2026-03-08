@@ -10,6 +10,7 @@ import type { CompanionRuntime } from "./app-runtime";
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
 const CLAW_EVENT_CHANNEL = "runtime:claw-event";
+const WHISPER_MODEL_PROGRESS_CHANNEL = "runtime:whisper-model-progress";
 
 interface IpcSubscription {
   unsubscribe: () => void;
@@ -34,6 +35,38 @@ function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSu
 export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
   ipcMain.handle("config:save", (_, config: AppConfig) => runtime.saveConfig(config));
+  ipcMain.handle("voice:stt:status", () => runtime.getSpeechRecognitionStatus());
+  ipcMain.handle(
+    "whisper:model:ensure",
+    async (
+      event,
+      payload: {
+        modelSize?: AppConfig["whisperLocal"]["modelSize"];
+      }
+    ) => {
+      const modelSize = payload?.modelSize ?? "base";
+      return runtime.ensureWhisperModel({
+        modelSize,
+        onProgress: (percent) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(WHISPER_MODEL_PROGRESS_CHANNEL, {
+              modelSize,
+              percent
+            });
+          }
+        }
+      });
+    }
+  );
+  ipcMain.handle(
+    "whisper:model:status",
+    (
+      _,
+      payload: {
+        modelSize?: AppConfig["whisperLocal"]["modelSize"];
+      }
+    ) => runtime.getWhisperModelStatus(payload)
+  );
 
   ipcMain.handle("history:list", (_, query: { query?: string; limit?: number; offset?: number }) =>
     runtime.getHistory(query)

@@ -18,9 +18,35 @@ export interface CursorHistoryPage {
   nextCursor: string | null;
 }
 
+export interface SpeechRecognitionStatus {
+  ready: boolean;
+  provider: "whisper-local" | "alibaba" | "none";
+  message: string;
+}
+
+export interface WhisperModelStatus {
+  enabled: boolean;
+  modelSize: AppConfig["whisperLocal"]["modelSize"];
+  downloaded: boolean;
+  ready: boolean;
+}
+
+export interface WhisperModelProgressEvent {
+  modelSize: AppConfig["whisperLocal"]["modelSize"];
+  percent: number;
+}
+
 export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
+  getSpeechRecognitionStatus(): Promise<SpeechRecognitionStatus>;
+  ensureWhisperModel(input?: {
+    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+  }): Promise<{ ready: boolean; path: string }>;
+  getWhisperModelStatus(input?: {
+    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+  }): Promise<WhisperModelStatus>;
+  onWhisperModelDownloadProgress(listener: (event: WhisperModelProgressEvent) => void): () => void;
 
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]>;
   clearHistory(): Promise<void>;

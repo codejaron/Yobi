@@ -200,7 +200,7 @@ export function ConsoleChatPane({
               title={
                 sttReady
                   ? "单击开始录音，再次单击结束识别"
-                  : "请先在设置里启用阿里语音并填写 API Key"
+                  : micHint || "请先在设置里启用本地 Whisper 或阿里语音"
               }
             >
               {transcribing ? (

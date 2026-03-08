@@ -8,8 +8,7 @@ import {
   CONSOLE_HISTORY_PAGE_SIZE,
   LIVE_MESSAGE_LIMIT,
   appendRecognizedText,
-  historyRoleToMessageRole,
-  isAlibabaSttReady
+  historyRoleToMessageRole
 } from "./types";
 import type { ActionItem, ConsoleMessage, PendingApproval } from "./types";
 
@@ -67,6 +66,9 @@ export function useConsoleChatController(): ConsoleChatController {
   const [sttReady, setSttReady] = useState(false);
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [micHint, setMicHint] = useState("");
+  const [sttUnavailableHint, setSttUnavailableHint] = useState(
+    "未启用任何语音识别引擎。请先在设置里开启本地 Whisper 或配置阿里语音。"
+  );
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [approvalIndex, setApprovalIndex] = useState(0);
@@ -264,15 +266,26 @@ export function useConsoleChatController(): ConsoleChatController {
     }
   }, []);
 
-  const refreshSttAvailability = useCallback(async (): Promise<boolean> => {
+  const refreshSttAvailability = useCallback(async (): Promise<{
+    ready: boolean;
+    message: string;
+  }> => {
     try {
-      const config = await window.companion.getConfig();
-      const ready = isAlibabaSttReady(config);
-      setSttReady(ready);
-      return ready;
+      const status = await window.companion.getSpeechRecognitionStatus();
+      setSttReady(status.ready);
+      setSttUnavailableHint(status.message);
+      return {
+        ready: status.ready,
+        message: status.message
+      };
     } catch {
       setSttReady(false);
-      return false;
+      const message = "语音识别状态检查失败，请稍后重试。";
+      setSttUnavailableHint(message);
+      return {
+        ready: false,
+        message
+      };
     }
   }, []);
 
@@ -281,9 +294,9 @@ export function useConsoleChatController(): ConsoleChatController {
       return;
     }
 
-    const ready = await refreshSttAvailability();
-    if (!ready) {
-      setMicHint("阿里语音识别未启用，请先在设置里打开开关并填写 API Key。");
+    const status = await refreshSttAvailability();
+    if (!status.ready) {
+      setMicHint(status.message);
       return;
     }
 
@@ -498,14 +511,14 @@ export function useConsoleChatController(): ConsoleChatController {
 
   useEffect(() => {
     if (!sttReady && micState === "idle") {
-      setMicHint("阿里语音识别未启用，请先到设置页开启并填写 API Key。");
+      setMicHint(sttUnavailableHint);
       return;
     }
 
-    if (sttReady && micState === "idle" && micHint.startsWith("阿里语音识别未启用")) {
+    if (sttReady && micState === "idle" && micHint === sttUnavailableHint) {
       setMicHint("");
     }
-  }, [micHint, micState, sttReady]);
+  }, [micHint, micState, sttReady, sttUnavailableHint]);
 
   useEffect(() => {
     if (!historyLoaded) {

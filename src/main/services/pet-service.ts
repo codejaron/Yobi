@@ -153,8 +153,8 @@ export class PetService {
       throw new Error("录音数据为空。");
     }
 
-    if (!this.input.voiceRouter.isAlibabaSttReady()) {
-      throw new Error("阿里语音识别未启用，请在设置里先打开开关并填写 API Key。");
+    if (!this.input.voiceRouter.isAsrReady()) {
+      throw new Error("语音识别尚未就绪，请在设置里启用本地 Whisper 或阿里语音，并确认模型已下载完成。");
     }
 
     let pcm: Buffer;
@@ -188,11 +188,11 @@ export class PetService {
     replyText?: string;
     message?: string;
   }> {
-    if (!this.input.voiceRouter.isAlibabaSttReady()) {
+    if (!this.input.voiceRouter.isAsrReady()) {
       return {
         sent: false,
         text: "",
-        message: "阿里语音识别未启用"
+        message: "语音识别尚未就绪"
       };
     }
 
@@ -253,11 +253,11 @@ export class PetService {
         });
       }
       this.petPttRecording = false;
-      if (this.input.pet.isOnline() && !this.input.voiceRouter.isAlibabaSttReady()) {
+      if (this.input.pet.isOnline() && !this.input.voiceRouter.isAsrReady()) {
         this.input.pet.emitEvent({
           type: "ptt",
           state: "cancel",
-          reason: "阿里语音识别未启用，已跳过全局按住说话启动"
+          reason: "语音识别尚未就绪，已跳过全局按住说话启动"
         });
       }
       return;
@@ -322,7 +322,7 @@ export class PetService {
       config.pet.enabled &&
       config.ptt.enabled &&
       this.input.pet.isOnline() &&
-      this.input.voiceRouter.isAlibabaSttReady()
+      this.input.voiceRouter.isAsrReady()
     );
   }
 
@@ -345,12 +345,12 @@ export class PetService {
       return;
     }
 
-    if (!this.input.voiceRouter.isAlibabaSttReady()) {
+    if (!this.input.voiceRouter.isAsrReady()) {
       if (phase === "down") {
         this.input.pet.emitEvent({
           type: "ptt",
           state: "cancel",
-          reason: "阿里语音识别未启用"
+          reason: "语音识别尚未就绪"
         });
       }
       this.petPttRecording = false;

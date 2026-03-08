@@ -1,6 +1,8 @@
 import type { AppConfig } from "@shared/types";
 import { AlibabaVoiceService } from "./alibaba-voice";
 import { VoiceService, type VoiceConfig } from "./voice";
+import { WhisperModelManager } from "./whisper-model-manager";
+import { WhisperLocalService } from "./whisper-local";
 
 const DEFAULT_ALIBABA_ASR_MODEL = "fun-asr-realtime";
 const DEFAULT_ALIBABA_TTS_MODEL = "cosyvoice-v3-flash";
@@ -29,11 +31,42 @@ export class VoiceProviderRouter {
   constructor(
     private readonly getConfig: () => AppConfig,
     private readonly edgeVoice: VoiceService = new VoiceService(),
-    private readonly alibabaVoice: AlibabaVoiceService = new AlibabaVoiceService()
+    private readonly alibabaVoice: AlibabaVoiceService = new AlibabaVoiceService(),
+    private readonly whisperLocal: WhisperLocalService = new WhisperLocalService()
   ) {}
+
+  syncLocalAsrState(modelsDir: string): void {
+    const config = this.getConfig();
+    if (!config.whisperLocal.enabled) {
+      this.whisperLocal.reset();
+      return;
+    }
+
+    const manager = new WhisperModelManager(modelsDir);
+    const modelSize = config.whisperLocal.modelSize;
+    if (!manager.isModelDownloaded(modelSize)) {
+      this.whisperLocal.reset();
+      return;
+    }
+
+    this.whisperLocal.configureModel(manager.getModelPath(modelSize));
+  }
 
   isAlibabaSttReady(): boolean {
     return hasAlibabaVoiceCredentials(this.getConfig());
+  }
+
+  getWhisperFailureReason(): string | null {
+    return this.whisperLocal.getLoadErrorMessage();
+  }
+
+  isAsrReady(): boolean {
+    const config = this.getConfig();
+    if (config.whisperLocal.enabled) {
+      return this.whisperLocal.isReady();
+    }
+
+    return this.isAlibabaSttReady();
   }
 
   async transcribePcm16(input: {
@@ -41,8 +74,12 @@ export class VoiceProviderRouter {
     sampleRate: number;
   }): Promise<string> {
     const config = this.getConfig();
+    if (config.whisperLocal.enabled) {
+      return this.whisperLocal.transcribe(input);
+    }
+
     if (!hasAlibabaVoiceCredentials(config)) {
-      throw new Error("阿里语音识别未启用，请先打开开关并填写 API Key。");
+      throw new Error("未启用任何语音识别引擎。请在设置中开启本地 Whisper 或配置阿里语音。");
     }
 
     return this.alibabaVoice.transcribe({

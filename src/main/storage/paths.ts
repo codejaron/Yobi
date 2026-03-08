@@ -117,6 +117,10 @@ export class CompanionPaths {
     return path.join(this.modelsDir, "embedding");
   }
 
+  get whisperModelsDir(): string {
+    return path.join(this.modelsDir, "whisper");
+  }
+
   get openclawStateDir(): string {
     return path.join(this.baseDir, "openclaw");
   }
@@ -176,6 +180,7 @@ export class CompanionPaths {
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
     mkdirSync(this.embeddingModelsDir, { recursive: true });
+    mkdirSync(this.whisperModelsDir, { recursive: true });
     mkdirSync(this.openclawStateDir, { recursive: true });
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });

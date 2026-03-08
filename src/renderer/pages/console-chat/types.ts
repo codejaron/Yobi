@@ -1,4 +1,4 @@
-import type { AppConfig, CommandApprovalDecision, HistoryMessage } from "@shared/types";
+import type { CommandApprovalDecision, HistoryMessage } from "@shared/types";
 
 export type MessageRole = "user" | "assistant";
 export type MessageState = "streaming" | "done" | "error";
@@ -40,14 +40,6 @@ export const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label:
 
 export function historyRoleToMessageRole(role: HistoryMessage["role"]): MessageRole {
   return role === "assistant" ? "assistant" : "user";
-}
-
-export function isAlibabaSttReady(config: AppConfig | null): boolean {
-  if (!config) {
-    return false;
-  }
-
-  return config.alibabaVoice.enabled && config.alibabaVoice.apiKey.trim().length > 0;
 }
 
 export function appendRecognizedText(currentDraft: string, recognizedText: string): string {

@@ -21,6 +21,7 @@ import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
   ensureKernelBootstrap
 } from "@main/kernel/init";
+import { WhisperModelManager } from "@main/services/whisper-model-manager";
 import { buildRuntimeRegistry, type RuntimeRegistry } from "@main/runtime/runtime-registry";
 
 interface HistoryQuery {
@@ -107,6 +108,7 @@ export class CompanionRuntime {
     this.logger.info("runtime", "init:start");
     setTokenRecorder((event) => this.tokenStatsService.record(event));
     await this.configStore.init();
+    this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
     await ensureKernelBootstrap(this.paths);
     await this.reminderStore.init();
     await this.runtimeContextStore.init();
@@ -179,6 +181,93 @@ export class CompanionRuntime {
     return this.configStore.getConfig();
   }
 
+  getSpeechRecognitionStatus(): {
+    ready: boolean;
+    provider: "whisper-local" | "alibaba" | "none";
+    message: string;
+  } {
+    const config = this.getConfig();
+
+    if (config.whisperLocal.enabled) {
+      const manager = new WhisperModelManager(this.paths.whisperModelsDir);
+      if (!manager.isModelDownloaded(config.whisperLocal.modelSize)) {
+        return {
+          ready: false,
+          provider: "whisper-local",
+          message: "本地 Whisper 已启用，但模型尚未下载。请先到设置页下载模型。"
+        };
+      }
+
+      const whisperError = this.voiceRouter.getWhisperFailureReason();
+      return {
+        ready: this.voiceRouter.isAsrReady(),
+        provider: "whisper-local",
+        message: this.voiceRouter.isAsrReady()
+          ? "本地 Whisper 已就绪。"
+          : whisperError
+            ? "本地 Whisper 初始化失败：" + whisperError
+            : "本地 Whisper 正在加载模型，请稍候再试。"
+      };
+    }
+
+    if (this.voiceRouter.isAlibabaSttReady()) {
+      return {
+        ready: true,
+        provider: "alibaba",
+        message: "阿里语音识别已就绪。"
+      };
+    }
+
+    return {
+      ready: false,
+      provider: "none",
+      message: "未启用任何语音识别引擎。请在设置中开启本地 Whisper 或配置阿里语音。"
+    };
+  }
+
+  async ensureWhisperModel(input: {
+    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+    onProgress?: (progress: number) => void;
+  }): Promise<{
+    ready: boolean;
+    path: string;
+  }> {
+    const manager = new WhisperModelManager(this.paths.whisperModelsDir);
+    const modelSize = input.modelSize ?? "base";
+    const path = await manager.ensureModel(modelSize, input.onProgress);
+
+    if (this.getConfig().whisperLocal.enabled && this.getConfig().whisperLocal.modelSize === modelSize) {
+      this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
+      this.lifecycleCoordinator.applyConfigEffects();
+      await this.emitStatus();
+    }
+
+    return {
+      ready: true,
+      path
+    };
+  }
+
+  getWhisperModelStatus(input?: {
+    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+  }): {
+    enabled: boolean;
+    modelSize: AppConfig["whisperLocal"]["modelSize"];
+    downloaded: boolean;
+    ready: boolean;
+  } {
+    const config = this.getConfig();
+    const modelSize = input?.modelSize ?? config.whisperLocal.modelSize;
+    const manager = new WhisperModelManager(this.paths.whisperModelsDir);
+
+    return {
+      enabled: config.whisperLocal.enabled,
+      modelSize,
+      downloaded: manager.isModelDownloaded(modelSize),
+      ready: config.whisperLocal.enabled && config.whisperLocal.modelSize === modelSize && this.voiceRouter.isAsrReady()
+    };
+  }
+
   async importPetModelDirectory(sourceDir: string): Promise<{ modelDir: string }> {
     return this.petService.importPetModelDirectory(sourceDir);
   }
@@ -187,6 +276,7 @@ export class CompanionRuntime {
     const previousConfig = this.configStore.getConfig();
     const saved = await this.configStore.saveConfig(nextConfig);
 
+    this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
     this.lifecycleCoordinator.applyConfigEffects();
     await this.kernel.runTickNow();
 

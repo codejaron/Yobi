@@ -7,6 +7,21 @@ const api = {
   saveConfig(config) {
     return ipcRenderer.invoke('config:save', config);
   },
+  getSpeechRecognitionStatus() {
+    return ipcRenderer.invoke('voice:stt:status');
+  },
+  ensureWhisperModel(input) {
+    return ipcRenderer.invoke('whisper:model:ensure', input ?? {});
+  },
+  getWhisperModelStatus(input) {
+    return ipcRenderer.invoke('whisper:model:status', input ?? {});
+  },
+  onWhisperModelDownloadProgress(listener) {
+    const channel = 'runtime:whisper-model-progress';
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on(channel, wrapped);
+    return () => ipcRenderer.removeListener(channel, wrapped);
+  },
   listHistory(query) {
     return ipcRenderer.invoke('history:list', query ?? {});
   },
