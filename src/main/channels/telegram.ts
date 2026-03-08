@@ -3,12 +3,16 @@ import type { AppConfig } from "@shared/types";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import { appLogger as logger } from "@main/runtime/singletons";
 
+interface TelegramChannelCallbacks {
+  onStatusChange?: () => void;
+}
+
 export class TelegramChannel implements ChatChannel {
   private bot: Bot | null = null;
   private connected = false;
   private targetChatId = "";
 
-  constructor(private readonly getConfig: () => AppConfig) {}
+  constructor(private readonly getConfig: () => AppConfig, private readonly callbacks: TelegramChannelCallbacks = {}) {}
 
   private shouldAcceptInboundChat(chatId: number): boolean {
     const expected = this.targetChatId;
@@ -32,6 +36,7 @@ export class TelegramChannel implements ChatChannel {
     if (!enabled || !botToken) {
       this.connected = false;
       this.bot = null;
+      this.callbacks.onStatusChange?.();
       return;
     }
 
@@ -86,10 +91,12 @@ export class TelegramChannel implements ChatChannel {
     this.bot.start({
       onStart: () => {
         this.connected = true;
+        this.callbacks.onStatusChange?.();
       },
       allowed_updates: ["message"]
     }).catch(() => {
       this.connected = false;
+      this.callbacks.onStatusChange?.();
     });
   }
 
@@ -148,5 +155,6 @@ export class TelegramChannel implements ChatChannel {
     }
     this.bot = null;
     this.connected = false;
+    this.callbacks.onStatusChange?.();
   }
 }

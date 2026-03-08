@@ -4,6 +4,10 @@ import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import { appLogger as logger } from "@main/runtime/singletons";
 import { FeishuStreamingSession } from "./feishu-streaming";
 
+interface FeishuChannelCallbacks {
+  onStatusChange?: () => void;
+}
+
 interface FeishuEventPayload {
   event_id?: string;
   sender?: {
@@ -43,7 +47,7 @@ export class FeishuChannel implements ChatChannel {
   private readonly recentInboundIds = new Map<string, number>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly getConfig: () => AppConfig) {}
+  constructor(private readonly getConfig: () => AppConfig, private readonly callbacks: FeishuChannelCallbacks = {}) {}
 
   async start(onMessage: (message: InboundMessage) => Promise<void>): Promise<void> {
     const { feishu } = this.getConfig();
@@ -56,6 +60,7 @@ export class FeishuChannel implements ChatChannel {
       this.connected = false;
       this.client = null;
       this.wsClient = null;
+      this.callbacks.onStatusChange?.();
       return;
     }
 
@@ -99,10 +104,12 @@ export class FeishuChannel implements ChatChannel {
       this.wsClient = wsClient;
       this.connected = true;
       logger.info("feishu", "ws-connected");
+      this.callbacks.onStatusChange?.();
     } catch (error) {
       this.wsClient = null;
       this.connected = false;
       logger.error("feishu", "ws-connect-failed", undefined, error);
+      this.callbacks.onStatusChange?.();
     }
   }
 

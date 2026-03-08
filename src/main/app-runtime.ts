@@ -188,13 +188,13 @@ export class CompanionRuntime {
   } {
     const config = this.getConfig();
 
-    if (config.whisperLocal.enabled) {
+    if (config.voice.asrProvider === "whisper-local") {
       const manager = new WhisperModelManager(this.paths.whisperModelsDir);
       if (!manager.isModelDownloaded(config.whisperLocal.modelSize)) {
         return {
           ready: false,
           provider: "whisper-local",
-          message: "本地 Whisper 已启用，但模型尚未下载。请先到设置页下载模型。"
+          message: "本地 Whisper 已选中，但模型尚未下载。请先到设置页下载模型。"
         };
       }
 
@@ -210,18 +210,20 @@ export class CompanionRuntime {
       };
     }
 
-    if (this.voiceRouter.isAlibabaSttReady()) {
+    if (config.voice.asrProvider === "alibaba") {
       return {
-        ready: true,
+        ready: this.voiceRouter.isAlibabaSttReady(),
         provider: "alibaba",
-        message: "阿里语音识别已就绪。"
+        message: this.voiceRouter.isAlibabaSttReady()
+          ? "阿里语音识别已就绪。"
+          : "阿里语音识别未就绪，请先填写 API Key。"
       };
     }
 
     return {
       ready: false,
       provider: "none",
-      message: "未启用任何语音识别引擎。请在设置中开启本地 Whisper 或配置阿里语音。"
+      message: "未启用任何语音识别引擎。请先在设置里开启本地 Whisper 或配置阿里语音。"
     };
   }
 
@@ -236,7 +238,7 @@ export class CompanionRuntime {
     const modelSize = input.modelSize ?? "base";
     const path = await manager.ensureModel(modelSize, input.onProgress);
 
-    if (this.getConfig().whisperLocal.enabled && this.getConfig().whisperLocal.modelSize === modelSize) {
+    if (this.getConfig().voice.asrProvider === "whisper-local" && this.getConfig().whisperLocal.modelSize === modelSize) {
       this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
       this.lifecycleCoordinator.applyConfigEffects();
       await this.emitStatus();
@@ -261,10 +263,13 @@ export class CompanionRuntime {
     const manager = new WhisperModelManager(this.paths.whisperModelsDir);
 
     return {
-      enabled: config.whisperLocal.enabled,
+      enabled: config.voice.asrProvider === "whisper-local",
       modelSize,
       downloaded: manager.isModelDownloaded(modelSize),
-      ready: config.whisperLocal.enabled && config.whisperLocal.modelSize === modelSize && this.voiceRouter.isAsrReady()
+      ready:
+        config.voice.asrProvider === "whisper-local" &&
+        config.whisperLocal.modelSize === modelSize &&
+        this.voiceRouter.isAsrReady()
     };
   }
 
@@ -278,7 +283,6 @@ export class CompanionRuntime {
 
     this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
     this.lifecycleCoordinator.applyConfigEffects();
-    await this.kernel.runTickNow();
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
     return saved;
@@ -763,16 +767,6 @@ export class CompanionRuntime {
     if (openclawChanged) {
       await this.runConfigSideEffect("重启 OpenClaw", 20_000, async () => {
         await this.clawCoordinator.restartForConfig(nextConfig);
-      });
-    }
-
-    if (
-      JSON.stringify(previousConfig.proactive) !== JSON.stringify(nextConfig.proactive) ||
-      JSON.stringify(previousConfig.browse) !== JSON.stringify(nextConfig.browse) ||
-      JSON.stringify(previousConfig.kernel) !== JSON.stringify(nextConfig.kernel)
-    ) {
-      await this.runConfigSideEffect("刷新内核节拍", 4_000, async () => {
-        await this.kernel.runTickNow();
       });
     }
 

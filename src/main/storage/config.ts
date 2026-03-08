@@ -14,6 +14,28 @@ const EXA_LOCKED_SERVER: Extract<McpServerList[number], { transport: "remote" }>
   headers: {}
 };
 
+function normalizeVoiceProviders(config: AppConfig): AppConfig {
+  const asrProvider = config.voice.asrProvider;
+  const ttsProvider = config.voice.ttsProvider;
+
+  return {
+    ...config,
+    voice: {
+      ...config.voice,
+      asrProvider,
+      ttsProvider
+    },
+    whisperLocal: {
+      ...config.whisperLocal,
+      enabled: asrProvider === "whisper-local"
+    },
+    alibabaVoice: {
+      ...config.alibabaVoice,
+      enabled: asrProvider === "alibaba" || ttsProvider === "alibaba"
+    }
+  };
+}
+
 function cloneMcpServers(servers: McpServerList): McpServerList {
   return servers.map((server) =>
     server.transport === "stdio"
@@ -129,7 +151,32 @@ function migrateRawConfig(raw: unknown): unknown {
     };
   }
 
+  const voice = isPlainRecord(migratedRaw.voice) ? voiceOrDefault(migratedRaw.voice) : {};
+  const whisperLocal = isPlainRecord(migratedRaw.whisperLocal) ? migratedRaw.whisperLocal : {};
+  const alibabaVoice = isPlainRecord(migratedRaw.alibabaVoice) ? migratedRaw.alibabaVoice : {};
+
+  if (typeof voice.asrProvider !== "string") {
+    if (whisperLocal.enabled === true) {
+      voice.asrProvider = "whisper-local";
+    } else if (alibabaVoice.enabled === true) {
+      voice.asrProvider = "alibaba";
+    } else {
+      voice.asrProvider = "none";
+    }
+  }
+
+  if (typeof voice.ttsProvider !== "string") {
+    voice.ttsProvider = alibabaVoice.enabled === true ? "alibaba" : "edge";
+  }
+
+  migratedRaw.voice = voice;
   return mergeWithDefaults(DEFAULT_CONFIG, migratedRaw);
+}
+
+function voiceOrDefault(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...value
+  };
 }
 
 function assertRouteProvidersExist(config: AppConfig): void {
@@ -194,13 +241,15 @@ export class ConfigStore {
   }
 
   private prepareConfig(config: AppConfig): AppConfig {
+    const normalized = normalizeVoiceProviders(config);
+
     return {
-      ...config,
+      ...normalized,
       tools: {
-        ...config.tools,
+        ...normalized.tools,
         mcp: {
-          ...config.tools.mcp,
-          servers: ensureLockedExaServer(config.tools.mcp.servers)
+          ...normalized.tools.mcp,
+          servers: ensureLockedExaServer(normalized.tools.mcp.servers)
         }
       }
     };

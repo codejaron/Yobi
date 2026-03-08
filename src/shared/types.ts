@@ -215,12 +215,6 @@ export const appConfigSchema = z
         appSecret: z.string().default("")
       })
       .strict(),
-    messaging: z
-      .object({
-        allowVoiceMessages: z.boolean().default(true),
-        allowPhotoInput: z.boolean().default(true)
-      })
-      .strict(),
     providers: z.array(providerSchema),
     modelRouting: z
       .object({
@@ -231,6 +225,8 @@ export const appConfigSchema = z
       .strict(),
     voice: z
       .object({
+        asrProvider: z.enum(["none", "whisper-local", "alibaba"]).default("none"),
+        ttsProvider: z.enum(["edge", "alibaba"]).default("edge"),
         ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
         ttsRate: z.string().default("+0%"),
         ttsPitch: z.string().default("+0Hz"),
@@ -1028,10 +1024,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     appId: "",
     appSecret: ""
   },
-  messaging: {
-    allowVoiceMessages: true,
-    allowPhotoInput: true
-  },
   providers: [
     {
       id: "openai-main",
@@ -1065,6 +1057,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     }
   },
   voice: {
+    asrProvider: "none",
+    ttsProvider: "edge",
     ttsVoice: "zh-CN-XiaoxiaoNeural",
     ttsRate: "+0%",
     ttsPitch: "+0Hz",

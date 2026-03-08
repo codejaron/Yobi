@@ -201,8 +201,16 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   );
 
   const channelRouter = new ChannelRouter(conversation);
-  const telegram = new TelegramChannel(() => configStore.getConfig());
-  const feishu = new FeishuChannel(() => configStore.getConfig());
+  const telegram = new TelegramChannel(() => configStore.getConfig(), {
+    onStatusChange: () => {
+      void callbackBridge.emitStatus();
+    }
+  });
+  const feishu = new FeishuChannel(() => configStore.getConfig(), {
+    onStatusChange: () => {
+      void callbackBridge.emitStatus();
+    }
+  });
   const consoleChannel = new ConsoleChannel();
   const voiceService = new VoiceService();
   const voiceRouter = new VoiceProviderRouter(
@@ -294,7 +302,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   const channelCoordinator = new ChannelCoordinator({
     telegram,
     feishu,
-    createQQChannel: (config) => new QQChannel(config),
+    createQQChannel: (config, callbacks) => new QQChannel(config, callbacks),
     logger,
     pet,
     getQQConfig: () => ({

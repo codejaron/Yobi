@@ -14,6 +14,10 @@ interface ReplyWindow {
   nextSeq: number;
 }
 
+interface QQChannelCallbacks {
+  onStatusChange?: () => void;
+}
+
 export class QQChannel implements ChatChannel {
   private readonly auth: QQAuthManager;
   private readonly gateway: QQGateway;
@@ -24,7 +28,7 @@ export class QQChannel implements ChatChannel {
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private onMessage: ((message: InboundMessage) => Promise<void>) | null = null;
 
-  constructor(config: QQChannelConfig) {
+  constructor(config: QQChannelConfig, callbacks: QQChannelCallbacks = {}) {
     this.auth = new QQAuthManager(config.appId, config.appSecret);
     this.apiBase = API_BASE;
     this.gateway = new QQGateway({
@@ -32,9 +36,11 @@ export class QQChannel implements ChatChannel {
       onC2CMessage: (event) => this.handleC2CMessage(event),
       onConnected: () => {
         logger.info("qq", "gateway-connected");
+        callbacks.onStatusChange?.();
       },
       onDisconnected: (reason) => {
         logger.warn("qq", "gateway-disconnected", { reason });
+        callbacks.onStatusChange?.();
       }
     });
   }

@@ -8,8 +8,8 @@ const DEFAULT_ALIBABA_ASR_MODEL = "fun-asr-realtime";
 const DEFAULT_ALIBABA_TTS_MODEL = "cosyvoice-v3-flash";
 const DEFAULT_ALIBABA_TTS_VOICE = "longxiaochun_v3";
 
-function hasAlibabaVoiceCredentials(config: AppConfig): boolean {
-  return config.alibabaVoice.enabled && config.alibabaVoice.apiKey.trim().length > 0;
+function hasAlibabaCredentials(config: AppConfig): boolean {
+  return config.alibabaVoice.apiKey.trim().length > 0;
 }
 
 function resolveAlibabaAsrModel(config: AppConfig): string {
@@ -37,7 +37,7 @@ export class VoiceProviderRouter {
 
   syncLocalAsrState(modelsDir: string): void {
     const config = this.getConfig();
-    if (!config.whisperLocal.enabled) {
+    if (config.voice.asrProvider !== "whisper-local") {
       this.whisperLocal.reset();
       return;
     }
@@ -53,7 +53,8 @@ export class VoiceProviderRouter {
   }
 
   isAlibabaSttReady(): boolean {
-    return hasAlibabaVoiceCredentials(this.getConfig());
+    const config = this.getConfig();
+    return config.voice.asrProvider === "alibaba" && hasAlibabaCredentials(config);
   }
 
   getWhisperFailureReason(): string | null {
@@ -62,11 +63,15 @@ export class VoiceProviderRouter {
 
   isAsrReady(): boolean {
     const config = this.getConfig();
-    if (config.whisperLocal.enabled) {
+    if (config.voice.asrProvider === "whisper-local") {
       return this.whisperLocal.isReady();
     }
 
-    return this.isAlibabaSttReady();
+    if (config.voice.asrProvider === "alibaba") {
+      return hasAlibabaCredentials(config);
+    }
+
+    return false;
   }
 
   async transcribePcm16(input: {
@@ -74,22 +79,26 @@ export class VoiceProviderRouter {
     sampleRate: number;
   }): Promise<string> {
     const config = this.getConfig();
-    if (config.whisperLocal.enabled) {
+    if (config.voice.asrProvider === "whisper-local") {
       return this.whisperLocal.transcribe(input);
     }
 
-    if (!hasAlibabaVoiceCredentials(config)) {
-      throw new Error("未启用任何语音识别引擎。请在设置中开启本地 Whisper 或配置阿里语音。");
+    if (config.voice.asrProvider === "alibaba") {
+      if (!hasAlibabaCredentials(config)) {
+        throw new Error("阿里语音识别未就绪，请先填写 API Key。");
+      }
+
+      return this.alibabaVoice.transcribe({
+        apiKey: config.alibabaVoice.apiKey.trim(),
+        region: config.alibabaVoice.region,
+        pcm: input.pcm,
+        sampleRate: input.sampleRate,
+        model: resolveAlibabaAsrModel(config),
+        timeoutMs: Math.max(6000, config.voice.requestTimeoutMs)
+      });
     }
 
-    return this.alibabaVoice.transcribe({
-      apiKey: config.alibabaVoice.apiKey.trim(),
-      region: config.alibabaVoice.region,
-      pcm: input.pcm,
-      sampleRate: input.sampleRate,
-      model: resolveAlibabaAsrModel(config),
-      timeoutMs: Math.max(6000, config.voice.requestTimeoutMs)
-    });
+    throw new Error("未启用任何语音识别引擎。请在设置中选择本地 Whisper 或阿里百炼。");
   }
 
   async synthesize(input: {
@@ -97,11 +106,15 @@ export class VoiceProviderRouter {
     edgeConfig: VoiceConfig;
   }): Promise<Buffer> {
     const config = this.getConfig();
-    if (!hasAlibabaVoiceCredentials(config)) {
+    if (config.voice.ttsProvider !== "alibaba") {
       return this.edgeVoice.synthesize({
         text: input.text,
         config: input.edgeConfig
       });
+    }
+
+    if (!hasAlibabaCredentials(config)) {
+      throw new Error("阿里语音合成未就绪，请先填写 API Key。");
     }
 
     return this.alibabaVoice.synthesize({

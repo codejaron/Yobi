@@ -12,7 +12,7 @@ import type { RuntimeInboundChannel } from "@main/storage/runtime-context-store"
 interface ChannelCoordinatorInput {
   telegram: TelegramChannel;
   feishu: FeishuChannel;
-  createQQChannel: (config: QQChannelConfig) => QQChannel;
+  createQQChannel: (config: QQChannelConfig, callbacks?: { onStatusChange?: () => void }) => QQChannel;
   logger: AppLogger;
   pet: PetWindowController;
   getQQConfig: () => QQChannelConfig;
@@ -121,7 +121,11 @@ export class ChannelCoordinator {
     }
 
     await this.stopQQ();
-    this.qqChannel = this.input.createQQChannel(config);
+    this.qqChannel = this.input.createQQChannel(config, {
+      onStatusChange: () => {
+        void this.input.emitStatus();
+      }
+    });
     await this.qqChannel.start(async (inbound) => {
       try {
         await this.handleInboundMessage({

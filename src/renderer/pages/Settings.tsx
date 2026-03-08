@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import type { AppConfig, AppStatus } from "@shared/types";
-import { AlibabaVoiceCard } from "@renderer/pages/settings/AlibabaVoiceCard";
+import { useEffect, useMemo, useState } from "react";
+import type { AppConfig, AppStatus, BrowseAuthState, EmbedderRuntimeStatus } from "@shared/types";
+import { Badge } from "@renderer/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@renderer/components/ui/card";
 import { BilibiliBrowseCard } from "@renderer/pages/settings/BilibiliBrowseCard";
-import { EdgeTtsCard } from "@renderer/pages/settings/EdgeTtsCard";
+import { FeishuChannelCard } from "@renderer/pages/settings/FeishuChannelCard";
 import {
   DEFAULT_PTT_HOTKEY,
   formatHotkeyText,
@@ -10,14 +11,306 @@ import {
   normalizeHotkeyString
 } from "@renderer/pages/settings/hotkey-utils";
 import { MemorySettingsCard } from "@renderer/pages/settings/MemorySettingsCard";
-import { MessagingCard } from "@renderer/pages/settings/MessagingCard";
 import { OpenClawSettingsCard } from "@renderer/pages/settings/OpenClawSettingsCard";
 import { PetRuntimeCard } from "@renderer/pages/settings/PetRuntimeCard";
 import { ProactiveSettingsCard } from "@renderer/pages/settings/ProactiveSettingsCard";
 import { QQChannelCard } from "@renderer/pages/settings/QQChannelCard";
 import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCard";
-import { FeishuChannelCard } from "@renderer/pages/settings/FeishuChannelCard";
-import { WhisperLocalCard } from "@renderer/pages/settings/WhisperLocalCard";
+import { VoiceEnginesCard } from "@renderer/pages/settings/VoiceEnginesCard";
+
+type SettingsSectionId =
+  | "telegram"
+  | "qq"
+  | "feishu"
+  | "voice"
+  | "pet"
+  | "bilibili"
+  | "proactive"
+  | "memory"
+  | "openclaw";
+
+type SectionTone = "good" | "warn" | "neutral" | "info";
+
+type SectionSnapshot = {
+  badge: string;
+  tone: SectionTone;
+  detail: string;
+};
+
+type SettingsSectionMeta = {
+  id: SettingsSectionId;
+  label: string;
+  description: string;
+};
+
+type SettingsNavGroup = {
+  label: string;
+  sections: SettingsSectionMeta[];
+};
+
+const SETTINGS_STORAGE_KEY = "yobi.settings.active-section";
+
+const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
+  {
+    label: "通道",
+    sections: [
+      {
+        id: "telegram",
+        label: "Telegram",
+        description: "Bot Token、Chat ID 与连接状态"
+      },
+      {
+        id: "qq",
+        label: "QQ",
+        description: "私聊通道开关与应用凭证"
+      },
+      {
+        id: "feishu",
+        label: "飞书",
+        description: "长连接通道与 App 凭证"
+      }
+    ]
+  },
+  {
+    label: "交互",
+    sections: [
+      {
+        id: "voice",
+        label: "语音",
+        description: "ASR / TTS provider 与模型状态"
+      },
+      {
+        id: "pet",
+        label: "桌宠",
+        description: "模型导入、置顶和 PTT 热键"
+      }
+    ]
+  },
+  {
+    label: "行为",
+    sections: [
+      {
+        id: "bilibili",
+        label: "Bilibili 浏览",
+        description: "授权、采集与内容发现策略"
+      },
+      {
+        id: "proactive",
+        label: "主动行为",
+        description: "冷启动、冷却和静默时段"
+      }
+    ]
+  },
+  {
+    label: "认知与集成",
+    sections: [
+      {
+        id: "memory",
+        label: "Memory",
+        description: "Embedding、上下文与记忆策略"
+      },
+      {
+        id: "openclaw",
+        label: "OpenClaw",
+        description: "网关、模型和浏览器能力"
+      }
+    ]
+  }
+];
+
+const SETTINGS_SECTION_ORDER = SETTINGS_NAV_GROUPS.flatMap((group) => group.sections.map((section) => section.id));
+
+function isSettingsSectionId(value: string | null): value is SettingsSectionId {
+  return value !== null && SETTINGS_SECTION_ORDER.includes(value as SettingsSectionId);
+}
+
+function toneClassName(tone: SectionTone): string {
+  if (tone === "good") {
+    return "border-emerald-300 bg-emerald-50 text-emerald-700";
+  }
+
+  if (tone === "warn") {
+    return "border-amber-300 bg-amber-50 text-amber-700";
+  }
+
+  if (tone === "info") {
+    return "border-sky-300 bg-sky-50 text-sky-700";
+  }
+
+  return "border-border/70 bg-white/80 text-foreground/80";
+}
+
+function providerLabel(provider: AppConfig["voice"]["asrProvider"] | AppConfig["voice"]["ttsProvider"]): string {
+  if (provider === "whisper-local") {
+    return "Whisper";
+  }
+
+  if (provider === "alibaba") {
+    return "阿里";
+  }
+
+  if (provider === "edge") {
+    return "Edge";
+  }
+
+  return "无";
+}
+
+function authStateLabel(authState: BrowseAuthState): string {
+  if (authState === "active") {
+    return "已授权";
+  }
+
+  if (authState === "pending") {
+    return "等待授权";
+  }
+
+  if (authState === "expired") {
+    return "已过期";
+  }
+
+  if (authState === "error") {
+    return "异常";
+  }
+
+  return "未授权";
+}
+
+function embedderLabel(embedder: EmbedderRuntimeStatus): { badge: string; tone: SectionTone } {
+  if (embedder.status === "ready") {
+    return {
+      badge: "已就绪",
+      tone: "good"
+    };
+  }
+
+  if (embedder.status === "loading") {
+    return {
+      badge: "加载中",
+      tone: "info"
+    };
+  }
+
+  if (embedder.status === "error") {
+    return {
+      badge: "异常",
+      tone: "warn"
+    };
+  }
+
+  return {
+    badge: "已关闭",
+    tone: "neutral"
+  };
+}
+
+function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Record<SettingsSectionId, SectionSnapshot> {
+  const telegramEnabled = config.telegram.enabled;
+  const qqEnabled = config.qq.enabled;
+  const feishuEnabled = config.feishu.enabled;
+  const petEnabled = config.pet.enabled;
+  const browseEnabled = config.browse.enabled;
+  const proactiveEnabled = config.proactive.enabled;
+  const openclawEnabled = config.openclaw.enabled;
+  const embedderState = status?.embedder ?? {
+    status: config.memory.embedding.enabled ? "disabled" : "disabled",
+    message: ""
+  };
+
+  return {
+    telegram: telegramEnabled
+      ? {
+          badge: status?.telegramConnected ? "在线" : "待连接",
+          tone: status?.telegramConnected ? "good" : "warn",
+          detail: telegramEnabled ? "Bot 已启用，等待或保持连接" : "未启用"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用 Telegram 通道"
+        },
+    qq: qqEnabled
+      ? {
+          badge: status?.qqConnected ? "在线" : "待连接",
+          tone: status?.qqConnected ? "good" : "warn",
+          detail: "QQ 私聊通道已启用"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用 QQ 通道"
+        },
+    feishu: feishuEnabled
+      ? {
+          badge: status?.feishuConnected ? "在线" : "待连接",
+          tone: status?.feishuConnected ? "good" : "warn",
+          detail: "飞书长连接通道已启用"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用飞书通道"
+        },
+    voice: {
+      badge: config.voice.asrProvider === "none" ? "部分关闭" : "已配置",
+      tone: config.voice.asrProvider === "none" ? "warn" : "good",
+      detail: `ASR ${providerLabel(config.voice.asrProvider)} · TTS ${providerLabel(config.voice.ttsProvider)}`
+    },
+    pet: petEnabled
+      ? {
+          badge: status?.petOnline ? "运行中" : "待启动",
+          tone: status?.petOnline ? "good" : "warn",
+          detail: config.pet.modelDir.trim() ? "桌宠已启用，模型已指定" : "桌宠已启用，但还未导入模型"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用桌宠"
+        },
+    bilibili: browseEnabled
+      ? {
+          badge: authStateLabel(status?.browseStatus.authState ?? "missing"),
+          tone: status?.browseStatus.authState === "active" ? "good" : "warn",
+          detail: status?.browseStatus.pausedReason
+            ? `当前暂停：${status.browseStatus.pausedReason}`
+            : "内容采集与摘要能力已启用"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用 Bilibili 浏览"
+        },
+    proactive: proactiveEnabled
+      ? {
+          badge: status?.kernel?.proactivePausedReason ? "已暂停" : "已启用",
+          tone: status?.kernel?.proactivePausedReason ? "warn" : "good",
+          detail: status?.kernel?.proactivePausedReason ?? "主动行为引擎已开启"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用主动行为"
+        },
+    memory: {
+      badge: embedderLabel(embedderState).badge,
+      tone: embedderLabel(embedderState).tone,
+      detail: config.memory.embedding.enabled
+        ? status?.embedder.message || "Embedding 与记忆检索已配置"
+        : "向量记忆已关闭"
+    },
+    openclaw: openclawEnabled
+      ? {
+          badge: status?.openclawOnline ? "在线" : "待连接",
+          tone: status?.openclawOnline ? "good" : "warn",
+          detail: status?.openclawStatus || "OpenClaw 网关已启用"
+        }
+      : {
+          badge: "关闭",
+          tone: "neutral",
+          detail: "未启用 OpenClaw"
+        }
+  };
+}
 
 export function SettingsPage({
   config,
@@ -74,6 +367,24 @@ export function SettingsPage({
   } | null>(null);
   const [isRecordingPttHotkey, setIsRecordingPttHotkey] = useState(false);
   const [pttHotkeyNotice, setPttHotkeyNotice] = useState("");
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(() => {
+    if (typeof window === "undefined") {
+      return "voice";
+    }
+
+    try {
+      const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      return isSettingsSectionId(saved) ? saved : "voice";
+    } catch {
+      return "voice";
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, activeSection);
+    } catch {}
+  }, [activeSection]);
 
   useEffect(() => {
     if (!isRecordingPttHotkey) {
@@ -213,51 +524,132 @@ export function SettingsPage({
     }
   };
 
+  const sectionSnapshots = useMemo(() => buildSectionSnapshots(config, status), [config, status]);
+
+  const activeMeta = useMemo(
+    () => SETTINGS_NAV_GROUPS.flatMap((group) => group.sections).find((section) => section.id === activeSection),
+    [activeSection]
+  );
+
+  const activeSnapshot = sectionSnapshots[activeSection];
+
+  const detailPanel = (() => {
+    switch (activeSection) {
+      case "telegram":
+        return <TelegramChannelCard config={config} setConfig={setConfig} />;
+      case "qq":
+        return <QQChannelCard config={config} setConfig={setConfig} />;
+      case "feishu":
+        return <FeishuChannelCard config={config} setConfig={setConfig} />;
+      case "voice":
+        return <VoiceEnginesCard config={config} setConfig={setConfig} />;
+      case "pet":
+        return (
+          <PetRuntimeCard
+            config={config}
+            setConfig={setConfig}
+            importModelDirectory={importModelDirectory}
+            importingModel={importingModel}
+            modelImportNotice={modelImportNotice}
+            isMac={isMac}
+            isRecordingPttHotkey={isRecordingPttHotkey}
+            pttHotkeyNotice={pttHotkeyNotice}
+            onToggleRecordHotkey={toggleRecordPttHotkey}
+            onResetHotkey={resetPttHotkey}
+          />
+        );
+      case "bilibili":
+        return <BilibiliBrowseCard config={config} status={status} setConfig={setConfig} />;
+      case "proactive":
+        return <ProactiveSettingsCard config={config} setConfig={setConfig} />;
+      case "memory":
+        return <MemorySettingsCard config={config} setConfig={setConfig} />;
+      case "openclaw":
+        return (
+          <OpenClawSettingsCard
+            config={config}
+            setConfig={setConfig}
+            clawProviderOptions={clawProviderOptions}
+            clawPrimarySelection={clawPrimarySelection}
+            clawFallbackInput={clawFallbackInput}
+            openClawWebUi={openClawWebUi}
+            openingOpenClawWebUi={openingOpenClawWebUi}
+            openClawWebUiNotice={openClawWebUiNotice}
+          />
+        );
+      default:
+        return null;
+    }
+  })();
+
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <TelegramChannelCard config={config} setConfig={setConfig} />
+    <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)] xl:items-start">
+      <aside className="xl:sticky xl:top-6 xl:self-start">
+        <Card className="border-white/60 bg-white/70 shadow-[0_24px_60px_rgba(53,38,21,0.08)] backdrop-blur">
+          <CardHeader>
+            <CardTitle>设置导航</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {SETTINGS_NAV_GROUPS.map((group) => (
+              <div key={group.label} className="space-y-2">
+                <div className="px-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
+                  {group.label}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                  {group.sections.map((section) => {
+                    const snapshot = sectionSnapshots[section.id];
+                    const active = section.id === activeSection;
+                    return (
+                      <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => setActiveSection(section.id)}
+                        className={`rounded-2xl border px-4 py-3 text-left transition-all ${
+                          active
+                            ? "border-primary/30 bg-primary/10 shadow-[0_12px_30px_rgba(38,106,129,0.12)]"
+                            : "border-border/60 bg-white/55 hover:bg-white/80"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-foreground">{section.label}</div>
+                            <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                              {snapshot.detail}
+                            </div>
+                          </div>
+                          <Badge className={toneClassName(snapshot.tone)}>{snapshot.badge}</Badge>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </aside>
 
-      <QQChannelCard config={config} setConfig={setConfig} />
+      <section className="space-y-4">
+        <Card className="border-white/60 bg-white/70 shadow-[0_24px_60px_rgba(53,38,21,0.08)] backdrop-blur">
+          <CardContent className="flex flex-col gap-4 px-6 py-6 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="text-sm font-medium uppercase tracking-[0.22em] text-muted-foreground/75">
+                {SETTINGS_NAV_GROUPS.find((group) => group.sections.some((section) => section.id === activeSection))?.label}
+              </div>
+              <h2 className="mt-2 text-3xl font-display tracking-tight text-foreground">
+                {activeMeta?.label}
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                {activeMeta?.description}
+              </p>
+              <p className="mt-3 text-sm text-foreground/80">{activeSnapshot.detail}</p>
+            </div>
+            <Badge className={toneClassName(activeSnapshot.tone)}>{activeSnapshot.badge}</Badge>
+          </CardContent>
+        </Card>
 
-      <FeishuChannelCard config={config} setConfig={setConfig} />
-
-      <MessagingCard config={config} setConfig={setConfig} />
-
-      <BilibiliBrowseCard config={config} status={status} setConfig={setConfig} />
-
-      <PetRuntimeCard
-        config={config}
-        setConfig={setConfig}
-        importModelDirectory={importModelDirectory}
-        importingModel={importingModel}
-        modelImportNotice={modelImportNotice}
-        isMac={isMac}
-        isRecordingPttHotkey={isRecordingPttHotkey}
-        pttHotkeyNotice={pttHotkeyNotice}
-        onToggleRecordHotkey={toggleRecordPttHotkey}
-        onResetHotkey={resetPttHotkey}
-      />
-
-      <WhisperLocalCard config={config} setConfig={setConfig} />
-
-      <AlibabaVoiceCard config={config} setConfig={setConfig} />
-
-      <EdgeTtsCard config={config} setConfig={setConfig} />
-
-      <ProactiveSettingsCard config={config} setConfig={setConfig} />
-
-      <MemorySettingsCard config={config} setConfig={setConfig} />
-
-      <OpenClawSettingsCard
-        config={config}
-        setConfig={setConfig}
-        clawProviderOptions={clawProviderOptions}
-        clawPrimarySelection={clawPrimarySelection}
-        clawFallbackInput={clawFallbackInput}
-        openClawWebUi={openClawWebUi}
-        openingOpenClawWebUi={openingOpenClawWebUi}
-        openClawWebUiNotice={openClawWebUiNotice}
-      />
+        {detailPanel}
+      </section>
     </div>
   );
 }
