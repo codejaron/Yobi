@@ -239,6 +239,11 @@ export class KernelEngine {
       if (next.type === "user-message") {
         const ts = typeof next.payload?.ts === "string" ? next.payload.ts : new Date().toISOString();
         this.handleUserMessageEvent(ts);
+        continue;
+      }
+
+      if (next.type === "assistant-message") {
+        this.handleAssistantMessageEvent();
       }
     }
   }
@@ -266,6 +271,15 @@ export class KernelEngine {
       } else {
         state.sessionReentry = null;
       }
+    });
+  }
+
+  private handleAssistantMessageEvent(): void {
+    this.input.stateStore.mutate((state) => {
+      if (!state.sessionReentry?.active) {
+        return;
+      }
+      state.sessionReentry = null;
     });
   }
 

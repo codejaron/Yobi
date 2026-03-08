@@ -7,9 +7,7 @@ import {
   type QQGatewayReadyEvent
 } from "./qq-types";
 import type { QQAuthManager } from "./qq-auth";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 const GATEWAY_ENDPOINT = "https://api.sgroup.qq.com/gateway";
 const RECONNECT_DELAY_MS = 5_000;

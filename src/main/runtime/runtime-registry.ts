@@ -1,5 +1,5 @@
 import type { AppConfig } from "@shared/types";
-import { CompanionPaths } from "@main/storage/paths";
+import type { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
 import { ReminderStore } from "@main/storage/reminder-store";
 import {
@@ -33,7 +33,7 @@ import { TokenStatsStore } from "@main/services/token/token-stats-store";
 import { TokenStatsService } from "@main/services/token/token-stats-service";
 import { StateStore } from "@main/kernel/state-store";
 import { KernelEngine } from "@main/kernel/engine";
-import { AppLogger } from "@main/services/logger";
+import type { AppLogger } from "@main/services/logger";
 import { RuntimeActivityCoordinator } from "@main/runtime/activity-coordinator";
 import { ChannelCoordinator } from "@main/runtime/channel-coordinator";
 import { ClawCoordinator } from "@main/runtime/claw-coordinator";
@@ -41,6 +41,7 @@ import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
 import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
 import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import { appLogger, companionPaths } from "@main/runtime/singletons";
 import {
   buildKernelQueueTaskHandlers,
   WorkerProactiveRewriteHandler
@@ -109,8 +110,8 @@ export interface RuntimeRegistry {
 
 export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeRegistry {
   const bootedAt = new Date().toISOString();
-  const paths = new CompanionPaths();
-  const logger = new AppLogger(paths);
+  const paths = companionPaths;
+  const logger = appLogger;
   const tokenStatsStore = new TokenStatsStore(paths);
   const tokenStatsService = new TokenStatsService(tokenStatsStore);
   const configStore = new ConfigStore(paths);

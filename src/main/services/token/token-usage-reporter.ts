@@ -1,7 +1,5 @@
 import type { TokenUsageSource } from "@shared/types";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 export interface TokenUsageReportEvent {
   source: TokenUsageSource;

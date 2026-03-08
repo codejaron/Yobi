@@ -4,9 +4,7 @@ import { promisify } from "node:util";
 import { desktopCapturer, systemPreferences } from "electron";
 import { openSafeSystemSettingsUrl } from "@main/utils/external-links";
 import type { PermissionState, SystemPermissionStatus } from "@shared/types";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 const execFileAsync = promisify(execFile);
 

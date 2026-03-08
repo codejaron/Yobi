@@ -1,9 +1,7 @@
 import { Bot, InputFile } from "grammy";
 import type { AppConfig } from "@shared/types";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 export class TelegramChannel implements ChatChannel {
   private bot: Bot | null = null;

@@ -11,8 +11,7 @@ import { assembleContext } from "@main/memory-v2/context-assembler";
 import { extractQueryTerms, matchEpisodes } from "@main/memory-v2/retrieval";
 import type { StateStore } from "@main/kernel/state-store";
 import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 export interface ChatReplyStreamListener {
   onThinkingChange?: (state: "start" | "stop") => void;

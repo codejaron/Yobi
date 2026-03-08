@@ -9,10 +9,7 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent
 } from "electron";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;

@@ -7,6 +7,7 @@ import type {
   UserProfile
 } from "@shared/types";
 import { extractQueryTerms, matchEpisodes, matchFacts } from "./retrieval";
+import { estimateTokenCount } from "./token-utils";
 
 export interface ContextAssemblerInput {
   soul: string;
@@ -33,9 +34,9 @@ const RESERVED_RESPONSE_TOKENS = 500;
 export function assembleContext(input: ContextAssemblerInput): ContextAssemblerOutput {
   const maxTokens = Math.max(2000, input.maxTokens);
   const block1 = buildIdentityBlock(input.soul, input.persona, input.stage);
-  const block1Tokens = estimateTokens(block1);
+  const block1Tokens = estimateTokenCount(block1);
   const stateBlock = buildStateBlock(input.state, input.profile);
-  const stateTokens = estimateTokens(stateBlock);
+  const stateTokens = estimateTokenCount(stateBlock);
 
   const queryTerms = extractQueryTerms(
     input.buffer
@@ -54,7 +55,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   let memoryTokens = 0;
   for (const row of factsMatched) {
     const line = `- ${row.fact.entity}/${row.fact.key}: ${row.fact.value}`;
-    const tokens = estimateTokens(line) + 6;
+    const tokens = estimateTokenCount(line) + 6;
     if (memoryTokens + tokens > memoryBudget) {
       break;
     }
@@ -63,7 +64,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   }
   for (const row of episodesMatched) {
     const line = `- ${row.episode.date}: ${row.episode.summary}`;
-    const tokens = estimateTokens(line) + 6;
+    const tokens = estimateTokenCount(line) + 6;
     if (memoryTokens + tokens > memoryBudget) {
       break;
     }
@@ -72,7 +73,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   }
 
   const memoryBlock = buildMemoryBlock(selectedFacts, selectedEpisodes);
-  const memoryBlockTokens = estimateTokens(memoryBlock);
+  const memoryBlockTokens = estimateTokenCount(memoryBlock);
   const remainingForMessages = Math.max(
     0,
     maxTokens - block1Tokens - stateTokens - memoryBlockTokens - RESERVED_RESPONSE_TOKENS
@@ -83,7 +84,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   let maxRecentMessages = 0;
   for (const message of recentMessages) {
     const line = `${message.role === "user" ? "用户" : "Yobi"}: ${message.text}`;
-    const nextTokens = estimateTokens(line) + 8;
+    const nextTokens = estimateTokenCount(line) + 8;
     if (recentMessageTokens + nextTokens > remainingForMessages) {
       break;
     }
@@ -137,17 +138,6 @@ function buildMemoryBlock(facts: Fact[], episodes: Episode[]): string {
     return "[MEMORY]\n(无高相关记忆)";
   }
   return `[MEMORY]\n${lines.join("\n")}`;
-}
-
-function estimateTokens(text: string): number {
-  const normalized = text.trim();
-  if (!normalized) {
-    return 0;
-  }
-  const cjkChars = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
-  const latinWords = normalized.match(/[A-Za-z0-9_]+/g)?.length ?? 0;
-  const punctuation = (normalized.match(/[，。！？、,.!?;:()[\]{}"“”‘’`~]/g) ?? []).length;
-  return Math.max(1, Math.ceil(cjkChars * 1.2 + latinWords * 0.35 + punctuation * 0.2));
 }
 
 function round2(value: number): number {

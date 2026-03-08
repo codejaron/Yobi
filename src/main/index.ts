@@ -4,9 +4,7 @@ import { app, BrowserWindow, ipcMain, Menu } from "electron";
 import { registerIpcHandlers } from "./ipc";
 import { createRuntime } from "./app-runtime";
 import { openSafeWebUrl } from "./utils/external-links";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PET_ENABLED_CHANNEL = "runtime:pet-enabled";

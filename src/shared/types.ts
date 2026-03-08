@@ -928,7 +928,7 @@ export interface ReminderDocument {
 export const DEFAULT_EMOTIONAL_STATE: EmotionalState = {
   mood: 0,
   energy: 0.6,
-  connection: 0.5,
+  connection: 0.25,
   curiosity: 0.5,
   confidence: 0.5,
   irritation: 0.1

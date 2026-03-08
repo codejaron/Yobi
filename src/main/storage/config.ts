@@ -1,7 +1,6 @@
 import { appConfigSchema, DEFAULT_CONFIG, type AppConfig } from "@shared/types";
 import { CompanionPaths } from "./paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 
 type McpServerList = AppConfig["tools"]["mcp"]["servers"];

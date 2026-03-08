@@ -2,9 +2,7 @@ import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import type { QQC2CMessageEvent, QQChannelConfig, QQSendC2CMessageBody } from "./qq-types";
 import { QQAuthManager } from "./qq-auth";
 import { QQGateway } from "./qq-gateway";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const REPLY_WINDOW_TTL_MS = 55 * 60 * 1000;

@@ -1,9 +1,7 @@
 import { z } from "zod";
 import type { AppConfig, McpServerConfig } from "@shared/types";
 import type { ToolDefinition, ToolRegistry } from "@main/tools/types";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 interface McpSdkModules {
   Client: any;

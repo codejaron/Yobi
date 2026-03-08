@@ -20,6 +20,7 @@ import {
 } from "@main/storage/fs";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import { appLogger as logger } from "@main/runtime/singletons";
 
 const semanticProfileSchema = z.object({
   preferredComfortStyle: z.string().min(1).max(30).optional(),
@@ -149,28 +150,48 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
       .filter(Boolean)
       .join(" ");
 
-    const result = await this.context.backgroundWorker.runDailyEpisode({
-      date: today,
-      todayItems: todayItems.map((item) => ({ role: item.role, text: item.text })),
-      userMessageCount: userMessages.length,
-      fallbackSummary,
-      config: this.context.getConfig()
-    });
-    if (result.tokenUsage) {
-      reportTokenUsage({
-        source: "background:reflection",
-        usage: result.tokenUsage,
-        inputText: JSON.stringify(todayItems.slice(-80)),
-        outputText: JSON.stringify(result)
+    let summary = fallbackSummary;
+    let unresolved: string[] = [];
+    let significance = 0.4;
+    try {
+      const result = await this.context.backgroundWorker.runDailyEpisode({
+        date: today,
+        todayItems: todayItems.map((item) => ({ role: item.role, text: item.text })),
+        userMessageCount: userMessages.length,
+        fallbackSummary,
+        config: this.context.getConfig()
       });
+      if (result.tokenUsage) {
+        reportTokenUsage({
+          source: "background:reflection",
+          usage: result.tokenUsage,
+          inputText: JSON.stringify(todayItems.slice(-80)),
+          outputText: JSON.stringify(result)
+        });
+      }
+      const parsed = dailyEpisodeSummarySchema.parse(result);
+      summary = parsed.summary.trim() || fallbackSummary;
+      unresolved = parsed.unresolved;
+      significance = parsed.significance;
+    } catch (error) {
+      logger.warn(
+        "kernel",
+        "daily-episode-fallback",
+        {
+          date: today,
+          historyCount: todayItems.length,
+          userMessageCount: userMessages.length
+        },
+        error
+      );
     }
-    const parsed = dailyEpisodeSummarySchema.parse(result);
+
     const episode = this.context.memory.getEpisodesStore().buildEpisode({
       date: today,
-      summary: parsed.summary.trim() || fallbackSummary,
-      significance: parsed.significance,
+      summary,
+      significance,
       sourceRanges: [],
-      unresolved: parsed.unresolved
+      unresolved
     });
     await this.context.memory.getEpisodesStore().saveDailyEpisodes(today, [episode]);
   }

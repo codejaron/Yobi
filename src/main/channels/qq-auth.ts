@@ -1,7 +1,5 @@
 import type { QQAccessTokenResponse } from "./qq-types";
-import { CompanionPaths } from "@main/storage/paths";
-import { AppLogger } from "@main/services/logger";
-const logger = new AppLogger(new CompanionPaths());
+import { appLogger as logger } from "@main/runtime/singletons";
 
 const TOKEN_ENDPOINT = "https://bots.qq.com/app/getAppAccessToken";
 const REFRESH_BUFFER_MS = 120_000;
