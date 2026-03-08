@@ -14,6 +14,7 @@ import { TelegramChannel } from "@main/channels/telegram";
 import { ChannelRouter } from "@main/channels/router";
 import { ConsoleChannel } from "@main/channels/console";
 import { QQChannel } from "@main/channels/qq";
+import { FeishuChannel } from "@main/channels/feishu";
 import { VoiceService } from "@main/services/voice";
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { KeepAwakeService } from "@main/services/keep-awake";
@@ -86,6 +87,7 @@ export interface RuntimeRegistry {
   kernel: KernelEngine;
   channelRouter: ChannelRouter;
   telegram: TelegramChannel;
+  feishu: FeishuChannel;
   consoleChannel: ConsoleChannel;
   voiceService: VoiceService;
   voiceRouter: VoiceProviderRouter;
@@ -200,6 +202,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
 
   const channelRouter = new ChannelRouter(conversation);
   const telegram = new TelegramChannel(() => configStore.getConfig());
+  const feishu = new FeishuChannel(() => configStore.getConfig());
   const consoleChannel = new ConsoleChannel();
   const voiceService = new VoiceService();
   const voiceRouter = new VoiceProviderRouter(
@@ -283,13 +286,14 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     sendTelegram: async (text, chatId) => {
       await telegram.send({ kind: "text", text, chatId });
     },
-    sendQQ: async (text, chatId) => {
-      await channelCoordinatorRef?.getQQChannel()?.send({ kind: "text", text, chatId });
+    sendFeishu: async (text, chatId) => {
+      await channelCoordinatorRef?.getFeishuChannel().send({ kind: "text", text, chatId });
     }
   });
 
   const channelCoordinator = new ChannelCoordinator({
     telegram,
+    feishu,
     createQQChannel: (config) => new QQChannel(config),
     logger,
     pet,
@@ -300,6 +304,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     }),
     handleTelegram: (payload) => channelRouter.handleTelegram(payload),
     handleQQ: (payload) => channelRouter.handleQQ(payload),
+    handleFeishu: (payload) => channelRouter.handleFeishu(payload),
     onRecordUserActivity: (activityInput) => callbackBridge.recordUserActivity(activityInput),
     onAssistantMessage: () => kernel.onAssistantMessage(),
     emitStatus: () => callbackBridge.emitStatus(),
@@ -372,6 +377,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     kernel,
     channelRouter,
     telegram,
+    feishu,
     consoleChannel,
     voiceService,
     voiceRouter,

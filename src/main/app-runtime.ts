@@ -124,6 +124,7 @@ export class CompanionRuntime {
     this.loadRuntimeContext();
     await this.lifecycleCoordinator.start();
     await this.startTelegram();
+    await this.startFeishu();
     await this.startQQ();
     this.kernel.start();
 
@@ -143,6 +144,7 @@ export class CompanionRuntime {
     await this.memory.stop();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
+    await this.stopFeishu();
     await this.stopQQ();
     await this.telegram.stop();
     this.logger.info("runtime", "stop:complete");
@@ -504,6 +506,10 @@ export class CompanionRuntime {
     await this.channelCoordinator.startQQ();
   }
 
+  private async startFeishu(): Promise<void> {
+    await this.channelCoordinator.startFeishu();
+  }
+
   private async restartTelegram(): Promise<void> {
     await this.channelCoordinator.restartTelegram();
   }
@@ -512,8 +518,16 @@ export class CompanionRuntime {
     await this.channelCoordinator.restartQQ();
   }
 
+  private async restartFeishu(): Promise<void> {
+    await this.channelCoordinator.restartFeishu();
+  }
+
   private async stopQQ(): Promise<void> {
     await this.channelCoordinator.stopQQ();
+  }
+
+  private async stopFeishu(): Promise<void> {
+    await this.channelCoordinator.stopFeishu();
   }
 
   private loadRuntimeContext(): void {
@@ -567,8 +581,8 @@ export class CompanionRuntime {
     });
 
     const config = this.getConfig();
-    if (!config.proactive.localOnly) {
-      await this.pushToRecentInboundChannel(proactiveMessage);
+    if (config.proactive.pushTargets.telegram || config.proactive.pushTargets.feishu) {
+      await this.pushToConfiguredChannels(proactiveMessage, config.proactive.pushTargets);
     }
 
     try {
@@ -599,8 +613,14 @@ export class CompanionRuntime {
     await this.emitStatus();
   }
 
-  private async pushToRecentInboundChannel(text: string): Promise<void> {
-    await this.activityCoordinator.pushToRecentInboundChannel(text);
+  private async pushToConfiguredChannels(
+    text: string,
+    targets: {
+      telegram: boolean;
+      feishu: boolean;
+    }
+  ): Promise<void> {
+    await this.activityCoordinator.pushToConfiguredChannels(text, targets);
   }
 
 
@@ -628,6 +648,12 @@ export class CompanionRuntime {
     if (this.shouldRestartQQ(previousConfig, nextConfig)) {
       await this.runConfigSideEffect("重启 QQ 通道", 8_000, async () => {
         await this.restartQQ();
+      });
+    }
+
+    if (this.shouldRestartFeishu(previousConfig, nextConfig)) {
+      await this.runConfigSideEffect("重启飞书通道", 8_000, async () => {
+        await this.restartFeishu();
       });
     }
 
@@ -678,6 +704,14 @@ export class CompanionRuntime {
       previousConfig.qq.enabled !== nextConfig.qq.enabled ||
       previousConfig.qq.appId !== nextConfig.qq.appId ||
       previousConfig.qq.appSecret !== nextConfig.qq.appSecret
+    );
+  }
+
+  private shouldRestartFeishu(previousConfig: AppConfig, nextConfig: AppConfig): boolean {
+    return (
+      previousConfig.feishu.enabled !== nextConfig.feishu.enabled ||
+      previousConfig.feishu.appId !== nextConfig.feishu.appId ||
+      previousConfig.feishu.appSecret !== nextConfig.feishu.appSecret
     );
   }
 

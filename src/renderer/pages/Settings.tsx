@@ -16,6 +16,7 @@ import { PetRuntimeCard } from "@renderer/pages/settings/PetRuntimeCard";
 import { ProactiveSettingsCard } from "@renderer/pages/settings/ProactiveSettingsCard";
 import { QQChannelCard } from "@renderer/pages/settings/QQChannelCard";
 import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCard";
+import { FeishuChannelCard } from "@renderer/pages/settings/FeishuChannelCard";
 
 export function SettingsPage({
   config,
@@ -216,6 +217,8 @@ export function SettingsPage({
       <TelegramChannelCard config={config} setConfig={setConfig} />
 
       <QQChannelCard config={config} setConfig={setConfig} />
+
+      <FeishuChannelCard config={config} setConfig={setConfig} />
 
       <MessagingCard config={config} setConfig={setConfig} />
 

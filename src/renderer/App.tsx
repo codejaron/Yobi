@@ -327,6 +327,9 @@ export default function App() {
               <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
                 QQ {status?.qqConnected ? "Online" : "Offline"}
               </Badge>
+              <Badge className={status?.feishuConnected ? "border-emerald-300" : "border-amber-300"}>
+                Feishu {status?.feishuConnected ? "Online" : "Offline"}
+              </Badge>
               {config ? (
                 <Button onClick={saveConfig} disabled={saving}>
                   {saving ? "保存中..." : "保存配置"}

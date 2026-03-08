@@ -546,8 +546,8 @@ export class YobiMemory {
   }
 }
 
-function normalizeChannel(value: unknown): "telegram" | "console" | "qq" {
-  if (value === "telegram" || value === "qq") {
+function normalizeChannel(value: unknown): "telegram" | "console" | "qq" | "feishu" {
+  if (value === "telegram" || value === "qq" || value === "feishu") {
     return value;
   }
   return "console";
@@ -560,7 +560,12 @@ function normalizeBufferMessage(raw: BufferMessage): BufferMessage | null {
   if (raw.role !== "assistant" && raw.role !== "system" && raw.role !== "user") {
     return null;
   }
-  if (raw.channel !== "telegram" && raw.channel !== "console" && raw.channel !== "qq") {
+  if (
+    raw.channel !== "telegram" &&
+    raw.channel !== "console" &&
+    raw.channel !== "qq" &&
+    raw.channel !== "feishu"
+  ) {
     return null;
   }
   const text = normalizeTopicText(raw.text);

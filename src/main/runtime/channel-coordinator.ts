@@ -1,6 +1,7 @@
 import type { InboundMessage } from "@main/channels/types";
 import { TelegramChannel } from "@main/channels/telegram";
 import { QQChannel } from "@main/channels/qq";
+import { FeishuChannel } from "@main/channels/feishu";
 import type { QQChannelConfig } from "@main/channels/qq-types";
 import { extractEmotionTag } from "@main/core/emotion-tags";
 import { AppLogger } from "@main/services/logger";
@@ -9,6 +10,7 @@ import type { RuntimeInboundChannel } from "@main/storage/runtime-context-store"
 
 interface ChannelCoordinatorInput {
   telegram: TelegramChannel;
+  feishu: FeishuChannel;
   createQQChannel: (config: QQChannelConfig) => QQChannel;
   logger: AppLogger;
   pet: PetWindowController;
@@ -20,6 +22,12 @@ interface ChannelCoordinatorInput {
     threadId: string;
   }) => Promise<string>;
   handleQQ: (payload: {
+    text: string;
+    photoUrl?: string;
+    resourceId: string;
+    threadId: string;
+  }) => Promise<string>;
+  handleFeishu: (payload: {
     text: string;
     photoUrl?: string;
     resourceId: string;
@@ -51,6 +59,10 @@ export class ChannelCoordinator {
     return this.qqChannel;
   }
 
+  getFeishuChannel(): FeishuChannel {
+    return this.input.feishu;
+  }
+
   isQQConnected(): boolean {
     return this.qqChannel?.isConnected() ?? false;
   }
@@ -78,6 +90,31 @@ export class ChannelCoordinator {
   async restartTelegram(): Promise<void> {
     await this.input.telegram.stop();
     await this.startTelegram();
+  }
+
+  async startFeishu(): Promise<void> {
+    await this.input.feishu.start(async (inbound) => {
+      try {
+        await this.handleInboundMessage({
+          channel: "feishu",
+          inbound,
+          handle: (payload) => this.input.handleFeishu(payload),
+          sendReply: async (text, chatId) => {
+            await this.input.feishu.send({ kind: "text", text, chatId });
+          }
+        });
+      } catch (error) {
+        this.input.logger.error("runtime", "feishu:inbound-failed", undefined, error);
+        const message = error instanceof Error ? `处理消息时出错：${error.message}` : "处理消息时出现未知错误。";
+        await this.input.feishu.send({ kind: "text", text: message, chatId: inbound.chatId });
+      }
+      await this.input.emitStatus();
+    });
+  }
+
+  async restartFeishu(): Promise<void> {
+    await this.input.feishu.stop();
+    await this.startFeishu();
   }
 
   async startQQ(): Promise<void> {
@@ -121,8 +158,12 @@ export class ChannelCoordinator {
     this.qqChannel = null;
   }
 
+  async stopFeishu(): Promise<void> {
+    await this.input.feishu.stop();
+  }
+
   private async handleInboundMessage(input: {
-    channel: "telegram" | "qq";
+    channel: "telegram" | "qq" | "feishu";
     inbound: InboundMessage;
     handle: (payload: {
       text: string;

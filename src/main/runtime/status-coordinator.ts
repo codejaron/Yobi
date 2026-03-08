@@ -44,6 +44,7 @@ export class RuntimeStatusCoordinator {
       bootedAt: this.input.bootedAt,
       telegramConnected: this.input.channelCoordinator.getTelegramChannel().isConnected(),
       qqConnected: this.input.channelCoordinator.isQQConnected(),
+      feishuConnected: this.input.channelCoordinator.getFeishuChannel().isConnected(),
       lastUserAt: activity.lastUserAt,
       lastProactiveAt: activity.lastProactiveAt,
       historyCount: historyCount.status === "fulfilled" ? historyCount.value : 0,

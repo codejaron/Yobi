@@ -100,6 +100,48 @@ export function ProactiveSettingsCard({ config, setConfig }: ProactiveSettingsCa
           />
         </div>
 
+        <div className="rounded-md border border-border/70 bg-white/70 px-3 py-3">
+          <p className="mb-2 text-sm text-muted-foreground">主动消息推送渠道</p>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Telegram</Label>
+              <Switch
+                checked={config.proactive.pushTargets.telegram}
+                onChange={(checked) =>
+                  setConfig({
+                    ...config,
+                    proactive: {
+                      ...config.proactive,
+                      pushTargets: {
+                        ...config.proactive.pushTargets,
+                        telegram: checked
+                      }
+                    }
+                  })
+                }
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label>飞书</Label>
+              <Switch
+                checked={config.proactive.pushTargets.feishu}
+                onChange={(checked) =>
+                  setConfig({
+                    ...config,
+                    proactive: {
+                      ...config.proactive,
+                      pushTargets: {
+                        ...config.proactive.pushTargets,
+                        feishu: checked
+                      }
+                    }
+                  })
+                }
+              />
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-1.5">
           <Label>冷却时间（毫秒）</Label>
           <Input

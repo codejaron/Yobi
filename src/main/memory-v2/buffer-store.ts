@@ -47,7 +47,7 @@ export class BufferStore {
 
   async append(input: {
     role: ChatRole;
-    channel: "telegram" | "console" | "qq";
+    channel: "telegram" | "console" | "qq" | "feishu";
     text: string;
     meta?: Record<string, unknown>;
     ts?: string;
@@ -184,7 +184,7 @@ function normalizeMessage(raw: BufferMessage): BufferMessage | null {
   ) {
     return null;
   }
-  if (channel !== "telegram" && channel !== "console" && channel !== "qq") {
+  if (channel !== "telegram" && channel !== "console" && channel !== "qq" && channel !== "feishu") {
     return null;
   }
   const text = typeof raw.text === "string" ? raw.text.trim() : "";

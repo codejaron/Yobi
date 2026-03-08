@@ -9,7 +9,10 @@ export function normalizeBufferRow(raw: unknown): BufferMessage | null {
   const ts = typeof row.ts === "string" ? row.ts : "";
   const role =
     row.role === "system" || row.role === "assistant" || row.role === "user" ? row.role : null;
-  const channel = row.channel === "telegram" || row.channel === "qq" ? row.channel : "console";
+  const channel =
+    row.channel === "telegram" || row.channel === "qq" || row.channel === "feishu"
+      ? row.channel
+      : "console";
   const text = typeof row.text === "string" ? row.text.trim() : "";
   if (!id || !ts || !role || !text) {
     return null;

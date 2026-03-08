@@ -31,13 +31,17 @@ export interface ChatReplyStreamListener {
   }) => void;
 }
 
-function tokenSourceFromChannel(channel: "telegram" | "console" | "qq"): TokenUsageSource {
+function tokenSourceFromChannel(channel: "telegram" | "console" | "qq" | "feishu"): TokenUsageSource {
   if (channel === "telegram") {
     return "chat:telegram";
   }
 
   if (channel === "qq") {
     return "chat:qq";
+  }
+
+  if (channel === "feishu") {
+    return "chat:feishu";
   }
 
   return "chat:console";
@@ -66,7 +70,7 @@ export class ConversationEngine {
 
   async reply(input: {
     text: string;
-    channel: "telegram" | "console" | "qq";
+    channel: "telegram" | "console" | "qq" | "feishu";
     resourceId: string;
     threadId: string;
     photoUrl?: string;
@@ -271,7 +275,7 @@ export class ConversationEngine {
 
   async rememberAssistantMessage(input: {
     text: string;
-    channel: "telegram" | "console" | "qq";
+    channel: "telegram" | "console" | "qq" | "feishu";
     resourceId: string;
     threadId: string;
     metadata?: Record<string, unknown>;

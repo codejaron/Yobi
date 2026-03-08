@@ -377,6 +377,21 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
+            <CardDescription>飞书</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bot className="h-4 w-4" />
+              {status?.feishuConnected ? "已连接" : "未连接"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Badge className={status?.feishuConnected ? "border-emerald-300" : "border-amber-300"}>
+              {status?.feishuConnected ? "Bot 在线" : "等待配置"}
+            </Badge>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardDescription>Telegram</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
               <Bot className="h-4 w-4" />

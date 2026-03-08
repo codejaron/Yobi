@@ -1,20 +1,24 @@
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 import { CompanionPaths } from "./paths";
 
-export type RuntimeInboundChannel = "console" | "telegram" | "qq";
+export type RuntimeInboundChannel = "console" | "telegram" | "qq" | "feishu";
 
 export interface RuntimeContextStoreDocument {
   lastProactiveAt: string | null;
   lastUserAt: string | null;
   lastInboundChannel: RuntimeInboundChannel | null;
   lastInboundChatId: string | null;
+  lastTelegramChatId: string | null;
+  lastFeishuChatId: string | null;
 }
 
 const DEFAULT_RUNTIME_CONTEXT: RuntimeContextStoreDocument = {
   lastProactiveAt: null,
   lastUserAt: null,
   lastInboundChannel: null,
-  lastInboundChatId: null
+  lastInboundChatId: null,
+  lastTelegramChatId: null,
+  lastFeishuChatId: null
 };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -35,7 +39,7 @@ function normalizeTimestamp(value: unknown): string | null {
 }
 
 function normalizeChannel(value: unknown): RuntimeInboundChannel | null {
-  if (value === "console" || value === "telegram" || value === "qq") {
+  if (value === "console" || value === "telegram" || value === "qq" || value === "feishu") {
     return value;
   }
 
@@ -62,7 +66,9 @@ function normalizeContext(raw: unknown): RuntimeContextStoreDocument {
     lastProactiveAt: normalizeTimestamp(raw.lastProactiveAt),
     lastUserAt: normalizeTimestamp(raw.lastUserAt),
     lastInboundChannel: normalizeChannel(raw.lastInboundChannel),
-    lastInboundChatId: normalizeChatId(raw.lastInboundChatId)
+    lastInboundChatId: normalizeChatId(raw.lastInboundChatId),
+    lastTelegramChatId: normalizeChatId(raw.lastTelegramChatId),
+    lastFeishuChatId: normalizeChatId(raw.lastFeishuChatId)
   };
 }
 

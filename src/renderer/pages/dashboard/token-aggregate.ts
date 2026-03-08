@@ -41,7 +41,7 @@ export interface TokenAggregateResult {
   trendDowngradedOnMobile: boolean;
 }
 
-const CHAT_SOURCES: TokenUsageSource[] = ["chat:console", "chat:telegram", "chat:qq"];
+const CHAT_SOURCES: TokenUsageSource[] = ["chat:console", "chat:telegram", "chat:qq", "chat:feishu"];
 const BROWSE_INTEREST_SOURCE: TokenUsageSource = "browse:bilibili-interest";
 const BACKGROUND_FACT_EXTRACTION_SOURCE: TokenUsageSource = "background:fact-extraction";
 const BACKGROUND_REFLECTION_SOURCE: TokenUsageSource = "background:reflection";

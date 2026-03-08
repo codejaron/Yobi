@@ -55,4 +55,21 @@ export class ChannelRouter {
       requestApproval: input.requestApproval
     });
   }
+
+  async handleFeishu(input: {
+    text: string;
+    photoUrl?: string;
+    resourceId: string;
+    threadId: string;
+    requestApproval?: ToolApprovalHandler;
+  }): Promise<string> {
+    return this.conversation.reply({
+      text: input.text,
+      channel: "feishu",
+      photoUrl: input.photoUrl,
+      resourceId: input.resourceId,
+      threadId: input.threadId,
+      requestApproval: input.requestApproval
+    });
+  }
 }

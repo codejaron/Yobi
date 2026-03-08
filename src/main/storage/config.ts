@@ -113,6 +113,22 @@ function migrateRawConfig(raw: unknown): unknown {
     }
   }
 
+  const feishu = migratedRaw.feishu;
+  if (isPlainRecord(feishu) && typeof feishu.enabled !== "boolean") {
+    const appId = typeof feishu.appId === "string" ? feishu.appId.trim() : "";
+    const appSecret = typeof feishu.appSecret === "string" ? feishu.appSecret.trim() : "";
+    feishu.enabled = appId.length > 0 && appSecret.length > 0;
+  }
+
+  const proactive = migratedRaw.proactive;
+  if (isPlainRecord(proactive) && !isPlainRecord(proactive.pushTargets)) {
+    const localOnly = typeof proactive.localOnly === "boolean" ? proactive.localOnly : true;
+    proactive.pushTargets = {
+      telegram: !localOnly,
+      feishu: !localOnly
+    };
+  }
+
   return mergeWithDefaults(DEFAULT_CONFIG, migratedRaw);
 }
 

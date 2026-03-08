@@ -70,6 +70,13 @@ const proactiveQuietHoursSchema = z
     message: "quiet hours start/end cannot be the same"
   });
 
+const proactivePushTargetsSchema = z
+  .object({
+    telegram: z.boolean().default(false),
+    feishu: z.boolean().default(false)
+  })
+  .strict();
+
 const browseAuthStateSchema = z.enum(["missing", "pending", "active", "expired", "error"]);
 
 const kernelTickSchema = z
@@ -201,6 +208,13 @@ export const appConfigSchema = z
         appSecret: z.string().default("")
       })
       .strict(),
+    feishu: z
+      .object({
+        enabled: z.boolean().default(false),
+        appId: z.string().default(""),
+        appSecret: z.string().default("")
+      })
+      .strict(),
     messaging: z
       .object({
         allowVoiceMessages: z.boolean().default(true),
@@ -262,7 +276,10 @@ export const appConfigSchema = z
     proactive: z
       .object({
         enabled: z.boolean().default(false),
-        localOnly: z.boolean().default(true),
+        pushTargets: proactivePushTargetsSchema.default({
+          telegram: false,
+          feishu: false
+        }),
         coldStartDelayMs: z.number().int().min(10_000).default(5 * 60 * 1000),
         cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
         silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000),
@@ -572,7 +589,7 @@ export interface HistoryMessage {
   id: string;
   role: ChatRole;
   text: string;
-  channel: "telegram" | "console" | "qq";
+  channel: "telegram" | "console" | "qq" | "feishu";
   timestamp: string;
   meta?: {
     proactive?: boolean;
@@ -803,7 +820,7 @@ export interface BufferMessage {
   id: string;
   ts: string;
   role: ChatRole;
-  channel: "telegram" | "console" | "qq";
+  channel: "telegram" | "console" | "qq" | "feishu";
   text: string;
   meta?: Record<string, unknown>;
   extracted?: boolean;
@@ -822,6 +839,7 @@ export const TOKEN_USAGE_SOURCES = [
   "chat:console",
   "chat:telegram",
   "chat:qq",
+  "chat:feishu",
   "browse:bilibili-interest",
   "background:fact-extraction",
   "background:reflection"
@@ -888,6 +906,7 @@ export interface AppStatus {
   bootedAt: string;
   telegramConnected: boolean;
   qqConnected: boolean;
+  feishuConnected: boolean;
   lastUserAt: string | null;
   lastProactiveAt: string | null;
   historyCount: number;
@@ -998,6 +1017,11 @@ export const DEFAULT_CONFIG: AppConfig = {
     appId: "",
     appSecret: ""
   },
+  feishu: {
+    enabled: false,
+    appId: "",
+    appSecret: ""
+  },
   messaging: {
     allowVoiceMessages: true,
     allowPhotoInput: true
@@ -1068,7 +1092,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   proactive: {
     enabled: false,
-    localOnly: true,
+    pushTargets: {
+      telegram: false,
+      feishu: false
+    },
     coldStartDelayMs: 5 * 60 * 1000,
     cooldownMs: 25 * 60 * 1000,
     silenceThresholdMs: 40 * 60 * 1000,

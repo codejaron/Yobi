@@ -11,6 +11,8 @@ export interface ActivityCoordinatorState {
   lastProactiveAt: string | null;
   lastInboundChannel: RuntimeInboundChannel | null;
   lastInboundChatId: string | null;
+  lastTelegramChatId: string | null;
+  lastFeishuChatId: string | null;
 }
 
 interface ActivityCoordinatorInput {
@@ -22,7 +24,7 @@ interface ActivityCoordinatorInput {
   onUserMessage: (input: { ts: string; text?: string }) => Promise<void>;
   onProactiveMessage: (ts: string) => void;
   sendTelegram: (text: string, chatId: string) => Promise<void>;
-  sendQQ: (text: string, chatId: string) => Promise<void>;
+  sendFeishu: (text: string, chatId: string) => Promise<void>;
 }
 
 export class RuntimeActivityCoordinator {
@@ -30,7 +32,9 @@ export class RuntimeActivityCoordinator {
     lastUserAt: null,
     lastProactiveAt: null,
     lastInboundChannel: null,
-    lastInboundChatId: null
+    lastInboundChatId: null,
+    lastTelegramChatId: null,
+    lastFeishuChatId: null
   };
 
   constructor(private readonly input: ActivityCoordinatorInput) {}
@@ -41,7 +45,9 @@ export class RuntimeActivityCoordinator {
       lastUserAt: context.lastUserAt,
       lastProactiveAt: context.lastProactiveAt,
       lastInboundChannel: context.lastInboundChannel,
-      lastInboundChatId: context.lastInboundChatId
+      lastInboundChatId: context.lastInboundChatId,
+      lastTelegramChatId: context.lastTelegramChatId,
+      lastFeishuChatId: context.lastFeishuChatId
     };
     this.input.onLastUserLoaded(this.state.lastUserAt);
     this.input.onLastProactiveLoaded(this.state.lastProactiveAt);
@@ -61,6 +67,12 @@ export class RuntimeActivityCoordinator {
     this.state.lastUserAt = new Date().toISOString();
     this.state.lastInboundChannel = input.channel;
     this.state.lastInboundChatId = input.chatId?.trim() ? input.chatId.trim() : null;
+    if (input.channel === "telegram" && this.state.lastInboundChatId) {
+      this.state.lastTelegramChatId = this.state.lastInboundChatId;
+    }
+    if (input.channel === "feishu" && this.state.lastInboundChatId) {
+      this.state.lastFeishuChatId = this.state.lastInboundChatId;
+    }
     await this.persist();
     await this.input.onUserMessage({
       ts: this.state.lastUserAt,
@@ -74,35 +86,35 @@ export class RuntimeActivityCoordinator {
     this.input.onProactiveMessage(this.state.lastProactiveAt);
   }
 
-  async pushToRecentInboundChannel(text: string): Promise<void> {
-    if (this.state.lastInboundChannel === "telegram") {
+  async pushToConfiguredChannels(
+    text: string,
+    targets: {
+      telegram: boolean;
+      feishu: boolean;
+    }
+  ): Promise<void> {
+    if (targets.telegram) {
       const configuredChatId = this.input.getConfig().telegram.chatId.trim();
-      const targetChatId = this.state.lastInboundChatId ?? configuredChatId;
+      const targetChatId = this.state.lastTelegramChatId ?? configuredChatId;
+      if (targetChatId) {
+        try {
+          await this.input.sendTelegram(text, targetChatId);
+        } catch (error) {
+          this.input.logger.warn("kernel", "proactive:telegram-push-failed", undefined, error);
+        }
+      }
+    }
+
+    if (targets.feishu) {
+      const targetChatId = this.state.lastFeishuChatId?.trim();
       if (!targetChatId) {
         return;
       }
-
       try {
-        await this.input.sendTelegram(text, targetChatId);
+        await this.input.sendFeishu(text, targetChatId);
       } catch (error) {
-        this.input.logger.warn("kernel", "proactive:telegram-push-failed", undefined, error);
+        this.input.logger.warn("kernel", "proactive:feishu-push-failed", undefined, error);
       }
-      return;
-    }
-
-    if (this.state.lastInboundChannel !== "qq") {
-      return;
-    }
-
-    const targetChatId = this.state.lastInboundChatId?.trim();
-    if (!targetChatId) {
-      return;
-    }
-
-    try {
-      await this.input.sendQQ(text, targetChatId);
-    } catch (error) {
-      this.input.logger.warn("kernel", "proactive:qq-push-failed", undefined, error);
     }
   }
 
@@ -112,7 +124,9 @@ export class RuntimeActivityCoordinator {
         lastProactiveAt: this.state.lastProactiveAt,
         lastUserAt: this.state.lastUserAt,
         lastInboundChannel: this.state.lastInboundChannel,
-        lastInboundChatId: this.state.lastInboundChatId
+        lastInboundChatId: this.state.lastInboundChatId,
+        lastTelegramChatId: this.state.lastTelegramChatId,
+        lastFeishuChatId: this.state.lastFeishuChatId
       });
     } catch (error) {
       this.input.logger.warn("runtime", "persist-runtime-context-failed", undefined, error);

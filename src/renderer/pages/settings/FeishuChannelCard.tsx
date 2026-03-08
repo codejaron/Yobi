@@ -10,30 +10,30 @@ import { Input } from "@renderer/components/ui/input";
 import { Label } from "@renderer/components/ui/label";
 import { Switch } from "@renderer/components/ui/switch";
 
-interface TelegramChannelCardProps {
+interface FeishuChannelCardProps {
   config: AppConfig;
   setConfig: (next: AppConfig) => void;
 }
 
-export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardProps) {
-  const telegramEnabled = config.telegram.enabled;
+export function FeishuChannelCard({ config, setConfig }: FeishuChannelCardProps) {
+  const feishuEnabled = config.feishu.enabled;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Telegram 通道</CardTitle>
-        <CardDescription>填入 Bot Token 和目标 Chat ID，保存后自动重连。</CardDescription>
+        <CardTitle>飞书通道</CardTitle>
+        <CardDescription>启用后通过飞书机器人接收私聊消息（长连接事件模式）。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-          <Label>启用 Telegram 通道</Label>
+          <Label>启用飞书通道</Label>
           <Switch
-            checked={telegramEnabled}
+            checked={feishuEnabled}
             onChange={(checked) =>
               setConfig({
                 ...config,
-                telegram: {
-                  ...config.telegram,
+                feishu: {
+                  ...config.feishu,
                   enabled: checked
                 }
               })
@@ -42,17 +42,17 @@ export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardPr
         </div>
 
         <div className="space-y-1.5">
-          <Label>Bot Token</Label>
+          <Label>App ID</Label>
           <Input
-            type="password"
-            value={config.telegram.botToken}
-            disabled={!telegramEnabled}
+            value={config.feishu.appId}
+            disabled={!feishuEnabled}
+            placeholder="cli_xxx"
             onChange={(event) =>
               setConfig({
                 ...config,
-                telegram: {
-                  ...config.telegram,
-                  botToken: event.target.value
+                feishu: {
+                  ...config.feishu,
+                  appId: event.target.value
                 }
               })
             }
@@ -60,17 +60,18 @@ export function TelegramChannelCard({ config, setConfig }: TelegramChannelCardPr
         </div>
 
         <div className="space-y-1.5">
-          <Label>Chat ID</Label>
+          <Label>App Secret</Label>
           <Input
-            value={config.telegram.chatId}
-            disabled={!telegramEnabled}
-            placeholder="例如: 123456789"
+            type="password"
+            value={config.feishu.appSecret}
+            disabled={!feishuEnabled}
+            placeholder="请输入飞书应用密钥"
             onChange={(event) =>
               setConfig({
                 ...config,
-                telegram: {
-                  ...config.telegram,
-                  chatId: event.target.value
+                feishu: {
+                  ...config.feishu,
+                  appSecret: event.target.value
                 }
               })
             }
