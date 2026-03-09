@@ -18,6 +18,7 @@ import {
   CardTitle
 } from "@renderer/components/ui/card";
 import { Button } from "@renderer/components/ui/button";
+import { formatEmbedderDisplay } from "@renderer/pages/settings/memory-display";
 import type { PageProps } from "@renderer/types";
 import {
   aggregateTokenStats,
@@ -439,11 +440,19 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           <CardHeader>
             <CardDescription>语义记忆检索</CardDescription>
             <CardTitle className="text-base">
-              Embedder：{status?.embedder.status ?? "unknown"}
+              {formatEmbedderDisplay(status?.embedder).statusLabel}
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">{status?.embedder.message || "未上报状态"}</p>
+          <CardContent className="space-y-1.5">
+            <p className="text-sm font-medium text-foreground/90">
+              {formatEmbedderDisplay(status?.embedder).engineLabel}
+            </p>
+            {formatEmbedderDisplay(status?.embedder).modelLabel ? (
+              <p className="text-sm text-muted-foreground">{formatEmbedderDisplay(status?.embedder).modelLabel}</p>
+            ) : null}
+            {formatEmbedderDisplay(status?.embedder).detailLabel ? (
+              <p className="text-xs leading-5 text-muted-foreground">{formatEmbedderDisplay(status?.embedder).detailLabel}</p>
+            ) : null}
           </CardContent>
         </Card>
 

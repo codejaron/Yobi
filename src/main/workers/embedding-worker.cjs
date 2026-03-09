@@ -1,9 +1,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const HASH_VECTOR_SIZE = 48;
 const CONCEPT_VECTOR_SIZE = 16;
 const TOTAL_VECTOR_SIZE = HASH_VECTOR_SIZE + CONCEPT_VECTOR_SIZE;
+
+function unwrapMessage(message) {
+  if (message && typeof message === 'object' && 'data' in message) {
+    return message.data;
+  }
+  return message;
+}
 
 const CONCEPTS = [
   { label: 'fatigue-workload', terms: ['累', '疲惫', '困', '忙', '压力', '加班', '工作多', '工作很满', '撑不住', '上班'] },
@@ -24,6 +32,16 @@ let state = {
   modelPath: null,
   llamaContext: null
 };
+
+function snapshotState() {
+  return {
+    backend: state.backend,
+    status: state.status,
+    message: state.message,
+    modelId: state.modelId,
+    modelPath: state.modelPath
+  };
+}
 
 function normalize(text) {
   return String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -81,12 +99,18 @@ async function initEmbedder(message) {
   state.llamaContext = null;
 
   if (!state.modelPath || !fs.existsSync(state.modelPath)) {
-    return state;
+    return snapshotState();
   }
 
   try {
-    const llamaModule = await import('node-llama-cpp');
-    const llama = await llamaModule.getLlama({ progressLogs: false, skipDownload: true });
+    const moduleUrl = message.nodeLlamaModuleUrl || pathToFileURL(require.resolve('node-llama-cpp/dist/index.js')).href;
+    const llamaModule = await import(moduleUrl);
+    const llama = await llamaModule.getLlama({
+      gpu: message.preferredGpu || 'auto',
+      progressLogs: false,
+      skipDownload: true,
+      logLevel: 'warn'
+    });
     const model = await llama.loadModel({ modelPath: state.modelPath, gpuLayers: 0 });
     state.llamaContext = await model.createEmbeddingContext();
     state.backend = 'llama';
@@ -99,7 +123,7 @@ async function initEmbedder(message) {
     state.llamaContext = null;
   }
 
-  return state;
+  return snapshotState();
 }
 
 async function embedText(message) {
@@ -126,17 +150,18 @@ async function embedText(message) {
 }
 
 process.parentPort.on('message', async (message) => {
-  const id = message?.id;
+  const payload = unwrapMessage(message);
+  const id = payload?.id;
   try {
     let result = null;
-    if (message?.type === 'init') {
-      result = await initEmbedder(message);
-    } else if (message?.type === 'embed') {
-      result = await embedText(message);
-    } else if (message?.type === 'status') {
-      result = { ...state };
+    if (payload?.type === 'init') {
+      result = await initEmbedder(payload);
+    } else if (payload?.type === 'embed') {
+      result = await embedText(payload);
+    } else if (payload?.type === 'status') {
+      result = snapshotState();
     } else {
-      throw new Error(`unknown-worker-message:${String(message?.type || '')}`);
+      throw new Error(`unknown-worker-message:${String(payload?.type || '')}`);
     }
 
     process.parentPort.postMessage({ id, ok: true, result });

@@ -49,11 +49,15 @@ export class AppLogger {
   }
 
   warn(module: string, event: string, detail?: Record<string, unknown>, error?: unknown): void {
-    void this.safeWrite({ module, event, level: "warn", detail, error: stringifyError(error) });
+    const serializedError = stringifyError(error);
+    console.warn(`[${module}] ${event}`, detail ?? {}, serializedError ?? "");
+    void this.safeWrite({ module, event, level: "warn", detail, error: serializedError });
   }
 
   error(module: string, event: string, detail?: Record<string, unknown>, error?: unknown): void {
-    void this.safeWrite({ module, event, level: "error", detail, error: stringifyError(error) });
+    const serializedError = stringifyError(error);
+    console.error(`[${module}] ${event}`, detail ?? {}, serializedError ?? "");
+    void this.safeWrite({ module, event, level: "error", detail, error: serializedError });
   }
 
 

@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { CompanionPaths } from "@main/storage/paths";
+import { appLogger as logger } from "@main/runtime/singletons";
 import type { AppConfig } from "@shared/types";
 
 export type EmbedderStatus = "disabled" | "loading" | "ready" | "error";
@@ -23,11 +25,18 @@ interface WorkerReply {
   error?: string;
 }
 
+interface PendingWorkerCall {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 const HASH_VECTOR_SIZE = 48;
 const CONCEPT_VECTOR_SIZE = 16;
 const TOTAL_VECTOR_SIZE = HASH_VECTOR_SIZE + CONCEPT_VECTOR_SIZE;
 const DEFAULT_MODEL_ID = "embeddinggemma-300m-qat-Q8_0.gguf";
 const DEFAULT_MODEL_URL = "https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/main/embeddinggemma-300m-qat-Q8_0.gguf";
+const WORKER_CALL_TIMEOUT_MS = 20_000;
 
 const CONCEPTS: ConceptDefinition[] = [
   { label: "fatigue-workload", terms: ["累", "疲惫", "困", "忙", "压力", "加班", "工作多", "工作很满", "撑不住", "上班"] },
@@ -129,7 +138,7 @@ export class EmbedderService {
   private backend: "heuristic" | "utility-llama" | "utility-heuristic" = "heuristic";
   private modelPath: string | null = null;
   private worker: any = null;
-  private pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private pending = new Map<string, PendingWorkerCall>();
   private downloadPromise: Promise<void> | null = null;
 
   constructor(
@@ -181,7 +190,9 @@ export class EmbedderService {
           vector: normalizeVector(result.vector ?? [])
         };
       } catch (error) {
+        logger.warn("embedder", "embed-call-fallback", { modelId: this.getCurrentModelId() }, error);
         this.backend = "heuristic";
+        this.status = "ready";
         this.errorMessage = error instanceof Error ? `heuristic fallback: ${error.message}` : "heuristic fallback";
       }
     }
@@ -227,41 +238,88 @@ export class EmbedderService {
   }
 
   private async initializeWorkerBackend(): Promise<void> {
+    this.disposeWorker();
+
     try {
       const electron = await import("electron");
       const workerScript = path.join(electron.app.getAppPath(), "src", "main", "workers", "embedding-worker.cjs");
       const child = electron.utilityProcess.fork(workerScript, [], {
         serviceName: "yobi-embedding-worker"
       });
+
       child.on("message", (message: WorkerReply) => {
         const pending = this.pending.get(message.id);
         if (!pending) {
           return;
         }
         this.pending.delete(message.id);
+        if (pending.timer) {
+          clearTimeout(pending.timer);
+        }
         if (message.ok) {
           pending.resolve(message.result);
           return;
         }
         pending.reject(new Error(message.error || "worker-call-failed"));
       });
-      child.once?.("exit", () => {
-        this.worker = null;
+
+      child.once?.("exit", (code: number | null) => {
+        if (this.worker === child) {
+          this.worker = null;
+        }
+        const exitError = new Error(`embedding worker exited (code: ${code ?? "unknown"})`);
+        logger.error("embedder", "worker-exited", {
+          modelId: this.getCurrentModelId(),
+          modelPath: this.modelPath,
+          code: code ?? "unknown"
+        }, exitError);
+        this.rejectPendingCalls(exitError);
         this.backend = "heuristic";
-        this.errorMessage = "heuristic fallback: embedding worker exited";
+        this.status = "ready";
+        this.errorMessage = `heuristic fallback: ${exitError.message}`;
       });
+
+      const childWithLooseEvents = child as {
+        once?: (event: string, listener: (...args: unknown[]) => void) => void;
+      };
+      childWithLooseEvents.once?.("error", (error: unknown) => {
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        if (this.worker === child) {
+          this.worker = null;
+        }
+        logger.error("embedder", "worker-error", {
+          modelId: this.getCurrentModelId(),
+          modelPath: this.modelPath
+        }, normalizedError);
+        this.rejectPendingCalls(normalizedError);
+        this.backend = "heuristic";
+        this.status = "ready";
+        this.errorMessage = `heuristic fallback: ${normalizedError.message}`;
+      });
+
       this.worker = child;
 
+      const nodeLlamaModuleUrl = pathToFileURL(
+        path.join(electron.app.getAppPath(), "node_modules", "node-llama-cpp", "dist", "index.js")
+      ).href;
       const initResult = await this.callWorker("init", {
         modelId: this.getCurrentModelId(),
-        modelPath: this.modelPath
+        modelPath: this.modelPath,
+        nodeLlamaModuleUrl,
+        preferredGpu: process.platform === "darwin" ? "metal" : "auto"
       }) as { backend?: string; message?: string };
       this.backend = initResult.backend === "llama" ? "utility-llama" : "utility-heuristic";
       this.status = "ready";
-      this.errorMessage = initResult.message || (this.backend === "utility-llama" ? "llama-local-embedder" : "heuristic-local-embedder");
+      this.errorMessage =
+        initResult.message ||
+        (this.backend === "utility-llama" ? "llama-local-embedder" : "heuristic-local-embedder");
       return;
     } catch (error) {
-      this.worker = null;
+      logger.error("embedder", "worker-init-failed", {
+        modelId: this.getCurrentModelId(),
+        modelPath: this.modelPath
+      }, error);
+      this.disposeWorker();
       this.backend = "heuristic";
       this.status = "ready";
       this.errorMessage = error instanceof Error ? `heuristic fallback: ${error.message}` : "heuristic fallback";
@@ -291,6 +349,10 @@ export class EmbedderService {
       this.errorMessage = "GGUF 下载完成，正在切换到 llama embedder";
       await this.initializeWorkerBackend();
     } catch (error) {
+      logger.error("embedder", "gguf-download-failed", {
+        modelId: this.getCurrentModelId(),
+        downloadUrl
+      }, error);
       this.errorMessage = error instanceof Error ? `GGUF 下载失败：${error.message}` : "GGUF 下载失败";
       this.backend = "heuristic";
       this.status = "ready";
@@ -306,12 +368,46 @@ export class EmbedderService {
 
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        const timeoutError = new Error(`embedding-worker-timeout:${type}`);
+        logger.error("embedder", "worker-call-timeout", {
+          type,
+          modelId: this.getCurrentModelId(),
+          modelPath: this.modelPath,
+          timeoutMs: WORKER_CALL_TIMEOUT_MS
+        }, timeoutError);
+        reject(timeoutError);
+      }, WORKER_CALL_TIMEOUT_MS);
+      timer.unref?.();
+
+      this.pending.set(id, { resolve, reject, timer });
       this.worker?.postMessage({
         id,
         type,
         ...payload
       });
     });
+  }
+
+  private rejectPendingCalls(error: Error): void {
+    for (const [id, pending] of this.pending.entries()) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+      pending.reject(error);
+      this.pending.delete(id);
+    }
+  }
+
+  private disposeWorker(): void {
+    const worker = this.worker;
+    this.worker = null;
+    this.rejectPendingCalls(new Error("embedding-worker-restarted"));
+    if (worker?.kill) {
+      try {
+        worker.kill();
+      } catch {}
+    }
   }
 }

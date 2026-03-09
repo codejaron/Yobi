@@ -39,6 +39,13 @@ const proactiveRewriteSchema = zod.z.object({
   rewrittenMessage: zod.z.string().min(1).max(160)
 });
 
+function unwrapMessage(message) {
+  if (message && typeof message === 'object' && 'data' in message) {
+    return message.data;
+  }
+  return message;
+}
+
 function isPlainRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -203,15 +210,16 @@ async function runProactiveRewrite(message) {
 }
 
 process.parentPort.on('message', async (message) => {
-  const id = message?.id;
+  const payload = unwrapMessage(message);
+  const id = payload?.id;
   try {
     let result;
-    if (message?.type === 'fact-extraction') result = await runFactExtraction(message);
-    else if (message?.type === 'daily-episode') result = await runDailyEpisode(message);
-    else if (message?.type === 'profile-semantic-update') result = await runProfileSemantic(message);
-    else if (message?.type === 'daily-reflection') result = await runDailyReflection(message);
-    else if (message?.type === 'proactive-rewrite') result = await runProactiveRewrite(message);
-    else throw new Error(`unknown-background-task:${String(message?.type || '')}`);
+    if (payload?.type === 'fact-extraction') result = await runFactExtraction(payload);
+    else if (payload?.type === 'daily-episode') result = await runDailyEpisode(payload);
+    else if (payload?.type === 'profile-semantic-update') result = await runProfileSemantic(payload);
+    else if (payload?.type === 'daily-reflection') result = await runDailyReflection(payload);
+    else if (payload?.type === 'proactive-rewrite') result = await runProactiveRewrite(payload);
+    else throw new Error(`unknown-background-task:${String(payload?.type || '')}`);
     process.parentPort.postMessage({ id, ok: true, result });
   } catch (error) {
     process.parentPort.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });

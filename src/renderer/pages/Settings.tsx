@@ -17,6 +17,7 @@ import { ProactiveSettingsCard } from "@renderer/pages/settings/ProactiveSetting
 import { QQChannelCard } from "@renderer/pages/settings/QQChannelCard";
 import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCard";
 import { VoiceEnginesCard } from "@renderer/pages/settings/VoiceEnginesCard";
+import { formatEmbedderDisplay } from "@renderer/pages/settings/memory-display";
 
 type SettingsSectionId =
   | "telegram"
@@ -295,7 +296,9 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
       badge: embedderLabel(embedderState).badge,
       tone: embedderLabel(embedderState).tone,
       detail: config.memory.embedding.enabled
-        ? status?.embedder.message || "Embedding 与记忆检索已配置"
+        ? formatEmbedderDisplay(status?.embedder).statusLabel === "回退模式"
+          ? "启发式语义检索"
+          : "本地语义检索已启用"
         : "向量记忆已关闭"
     },
     openclaw: openclawEnabled
