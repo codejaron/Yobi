@@ -10,12 +10,17 @@ import {
   type IpcMainInvokeEvent
 } from "electron";
 import { appLogger as logger } from "@main/runtime/singletons";
+import { DEFAULT_PET_EMOTION_CONFIG, mergePetEmotionConfig, type PetEmotionConfigOverride, normalizePetEmotionName } from "@shared/pet-emotion";
+import type { PetEvent } from "@shared/pet-events";
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
   private dockRepairTimer: NodeJS.Timeout | null = null;
   private lastAlwaysOnTop: boolean | null = null;
   private macWorkspacePinned = false;
+  private loaded = false;
+  private currentModelDir: string | null = null;
+  private pendingEvents: PetEvent[] = [];
 
   private ensureDockIconVisibleOnMac(): void {
     if (process.platform !== "darwin") {
@@ -192,6 +197,11 @@ export class PetWindowController {
   }
 
   open(input: { modelDir: string; alwaysOnTop: boolean }): void {
+    const resolvedModelDir = path.resolve(input.modelDir);
+    if (this.window && !this.window.isDestroyed() && this.currentModelDir && this.currentModelDir !== resolvedModelDir) {
+      this.close();
+    }
+
     if (this.window && !this.window.isDestroyed()) {
       this.applyWindowPinning(input.alwaysOnTop);
       this.showWindowWithoutFocus();
@@ -202,6 +212,7 @@ export class PetWindowController {
     const targetUrl = new URL(`file://${htmlPath}`);
     targetUrl.searchParams.set("modelDir", path.resolve(app.getAppPath(), input.modelDir));
     const modelJsonPath = findModelJsonPath(input.modelDir);
+    const emotionConfig = loadEmotionConfig(input.modelDir);
     const fallbackImagePath = modelJsonPath ? findFallbackImagePath(modelJsonPath) : null;
     const cubismCorePath = resolveExistingPath([
       path.join(input.modelDir, "live2dcubismcore.min.js"),
@@ -234,6 +245,10 @@ export class PetWindowController {
     if (live2dScriptPath) {
       targetUrl.searchParams.set("live2dScriptUrl", pathToFileURL(live2dScriptPath).toString());
     }
+    targetUrl.searchParams.set(
+      "emotionConfigBase64",
+      Buffer.from(JSON.stringify(emotionConfig), "utf8").toString("base64")
+    );
 
     this.window = new BrowserWindow({
       width: 380,
@@ -256,8 +271,13 @@ export class PetWindowController {
     });
     this.lastAlwaysOnTop = input.alwaysOnTop;
     this.macWorkspacePinned = false;
+    this.loaded = false;
+    this.currentModelDir = resolvedModelDir;
+    this.pendingEvents = [];
     this.window.webContents.on("did-finish-load", () => {
       logger.info("pet-window", "did-finish-load");
+      this.loaded = true;
+      this.flushPendingEvents();
     });
     this.window.webContents.on("did-fail-load", (_event, code, description) => {
       logger.error("pet-window", "did-fail-load", { code, description });
@@ -289,6 +309,9 @@ export class PetWindowController {
       this.window = null;
       this.lastAlwaysOnTop = null;
       this.macWorkspacePinned = false;
+      this.loaded = false;
+      this.currentModelDir = null;
+      this.pendingEvents = [];
     });
   }
 
@@ -302,6 +325,9 @@ export class PetWindowController {
       this.window = null;
       this.lastAlwaysOnTop = null;
       this.macWorkspacePinned = false;
+      this.loaded = false;
+      this.currentModelDir = null;
+      this.pendingEvents = [];
       return;
     }
 
@@ -309,25 +335,38 @@ export class PetWindowController {
     this.window = null;
     this.lastAlwaysOnTop = null;
     this.macWorkspacePinned = false;
+    this.loaded = false;
+    this.currentModelDir = null;
+    this.pendingEvents = [];
   }
 
-  emitEvent(
-    event:
-      | { type: "emotion"; value: string }
-      | { type: "talking"; value: string }
-      | { type: "speech"; audioBase64: string; mimeType?: string }
-      | { type: "ptt"; state: "start" | "stop" | "cancel"; reason?: string }
-      | { type: "thinking"; value: "start" | "stop" }
-  ): void {
+  emitEvent(event: PetEvent): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
 
-    this.window.webContents.send("pet:event", event);
+    const normalizedEvent = normalizePetEvent(event);
+    if (!this.loaded) {
+      this.pendingEvents.push(normalizedEvent);
+      return;
+    }
+
+    this.window.webContents.send("pet:event", normalizedEvent);
   }
 
   isOnline(): boolean {
     return Boolean(this.window && !this.window.isDestroyed());
+  }
+
+  private flushPendingEvents(): void {
+    if (!this.window || this.window.isDestroyed() || !this.loaded || this.pendingEvents.length === 0) {
+      return;
+    }
+
+    for (const event of this.pendingEvents) {
+      this.window.webContents.send("pet:event", event);
+    }
+    this.pendingEvents = [];
   }
 }
 
@@ -421,5 +460,44 @@ function resolveExistingPath(candidates: string[]): string | null {
       if (fs.existsSync(candidate)) return candidate;
     } catch {}
   }
+  return null;
+}
+
+function normalizePetEvent(event: PetEvent): PetEvent {
+  if (event.type !== "emotion") {
+    return event;
+  }
+
+  const nextName = normalizePetEmotionName(event.value);
+  if (!nextName) {
+    return event;
+  }
+
+  return {
+    type: "emotion-impulse",
+    name: nextName
+  };
+}
+
+function loadEmotionConfig(modelDir: string) {
+  const override = readEmotionConfigOverride(modelDir);
+  return mergePetEmotionConfig(DEFAULT_PET_EMOTION_CONFIG, override);
+}
+
+function readEmotionConfigOverride(modelDir: string): PetEmotionConfigOverride | null {
+  const candidateDirs = buildCandidateDirs(modelDir);
+  for (const dir of candidateDirs) {
+    const candidate = path.join(dir, "emotion-map.json");
+    try {
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      return JSON.parse(fs.readFileSync(candidate, "utf8")) as PetEmotionConfigOverride;
+    } catch (error) {
+      logger.warn("pet-window", "emotion-config-override-invalid", { candidate }, error);
+      return null;
+    }
+  }
+
   return null;
 }

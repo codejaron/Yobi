@@ -213,6 +213,7 @@
       </div>
     </div>
 
+    <script src="./pet-emotion-runtime.js"></script>
     <script>
       const petBridge = window.petApi;
 
@@ -232,6 +233,12 @@
       const cubismCoreUrl = params.get("cubismCoreUrl") || "";
       const pixiScriptUrl = params.get("pixiScriptUrl") || "";
       const live2dScriptUrl = params.get("live2dScriptUrl") || "";
+      const emotionConfigBase64 = params.get("emotionConfigBase64") || "";
+      const emotionRuntimeModule = window.YobiPetEmotionRuntime || null;
+      const emotionConfig =
+        emotionRuntimeModule && typeof emotionRuntimeModule.decodeConfigBase64 === "function"
+          ? emotionRuntimeModule.decodeConfigBase64(emotionConfigBase64)
+          : null;
       const PET_SCALE_STORAGE_KEY = "yobi.pet.scale.v1";
       const STATUS_TEXT = {
         idle: "",
@@ -736,25 +743,19 @@
           await nextPaint();
           const model = await withTimeout(
             Live2DModel.from(toFileHref(modelJsonPath), {
-              autoInteract: false
+              autoInteract: false,
+              autoUpdate: false
             }),
             MODEL_LOAD_TIMEOUT_MS,
             "model-load-timeout"
           );
           model.interactive = true;
+          model.autoUpdate = false;
           bootSettled = true;
           window.clearTimeout(bootTimer);
           debugLog("boot:model-loaded");
           fallbackEl.style.display = "none";
           updateStatus("idle");
-
-          const expressionDefinitionsRaw =
-            model?.internalModel?.motionManager?.expressionManager?.definitions || {};
-          const expressionDefinitions =
-            expressionDefinitionsRaw instanceof Map
-              ? Object.fromEntries(expressionDefinitionsRaw.entries())
-              : expressionDefinitionsRaw;
-          const availableExpressions = new Set(Object.keys(expressionDefinitions));
 
           const runtimeMotionDefinitions = normalizeMotionDefinitions(
             model?.internalModel?.motionManager?.definitions
@@ -913,6 +914,7 @@
           let cursorPollTimer = 0;
           let cursorPollInFlight = false;
           let pttProcessing = false;
+          let emotionRenderer = null;
           const pttRecorder = createPcm16Recorder();
 
           const MOUTH_PARAMETER_ID = "PARAM_MOUTH_OPEN_Y";
@@ -1167,22 +1169,14 @@
             }
           };
 
-          const applyExpression = (name) => {
-            if (!name) {
-              return;
-            }
-
-            if (availableExpressions.size > 0 && !availableExpressions.has(name)) {
-              return;
-            }
-
-            try {
-              model.expression(name);
-            } catch {}
-          };
+          const applyExpression = () => {};
 
           const setMouthOpen = (value) => {
             const clamped = clamp(value, 0, 1);
+            if (emotionRenderer) {
+              emotionRenderer.setLipSyncOpen(clamped);
+              return;
+            }
             try {
               model.internalModel?.coreModel?.setParameterValueById?.(MOUTH_PARAMETER_ID, clamped);
             } catch {}
@@ -1219,6 +1213,7 @@
             }
 
             audioAnalyserData = null;
+            setMouthOpen(0);
             if (audioContext) {
               const contextRef = audioContext;
               audioContext = null;
@@ -1313,7 +1308,6 @@
                 applyThinkingState();
                 return;
               }
-              applyExpression("Normal");
               updateStatus("idle");
             }, delayMs);
           };
@@ -1336,7 +1330,6 @@
             }
 
             clearStatusTimer();
-            applyExpression("Normal");
             if (playImmediateMotion) {
               playMotion(idleMotionGroup);
             }
@@ -1347,7 +1340,6 @@
           const applyThinkingState = () => {
             clearStatusTimer();
             clearIdleMotionLoop();
-            applyExpression("Normal");
             if (!playMotion(thinkingMotionGroup, 1)) {
               playMotion(thinkingMotionGroup);
             }
@@ -1358,10 +1350,6 @@
             const durationMs = input.durationMs ?? 1700;
             clearIdleMotionLoop();
             clearStatusTimer();
-
-            if (input.expression) {
-              applyExpression(input.expression);
-            }
 
             if (typeof input.motionGroup === "string") {
               const ok = playMotion(input.motionGroup, input.motionIndex);
@@ -1381,6 +1369,46 @@
             updateStatus(input.status);
             scheduleStatusBackToBaseline(durationMs);
             scheduleIdleMotionLoop();
+          };
+
+          const runEmotionImpulseAction = (emotion, options = {}) => {
+            const normalizedEmotion = typeof emotion === "string" ? emotion.trim().toLowerCase() : "";
+            if (!normalizedEmotion) {
+              return;
+            }
+
+            if (normalizedEmotion === "idle" || normalizedEmotion === "calm") {
+              enterIdle(false);
+              return;
+            }
+
+            if (emotionRenderer) {
+              emotionRenderer.triggerImpulse(normalizedEmotion, {
+                intensity: options.intensity,
+                durationMs: options.durationMs
+              });
+            }
+
+            const mapping = {
+              happy: { motionGroup: motionBinding.happy },
+              sad: { motionGroup: motionBinding.sad, motionIndex: 0 },
+              angry: { motionGroup: motionBinding.angry },
+              surprised: { motionGroup: motionBinding.surprised },
+              shy: { motionGroup: motionBinding.shy },
+              excited: { motionGroup: motionBinding.excited }
+            };
+
+            const action = mapping[normalizedEmotion];
+            if (!action) {
+              return;
+            }
+
+            runStateAction({
+              status: `emotion · ${normalizedEmotion}`,
+              motionGroup: action.motionGroup,
+              motionIndex: action.motionIndex,
+              durationMs: Math.max(650, Number.isFinite(options.durationMs) ? options.durationMs : 1850)
+            });
           };
 
           const stopCurrentAudio = () => {
@@ -1866,11 +1894,27 @@
           );
 
           fitModel();
+          if (emotionRuntimeModule && typeof emotionRuntimeModule.createPetEmotionRenderer === "function") {
+            emotionRenderer = emotionRuntimeModule.createPetEmotionRenderer({
+              model,
+              config: emotionConfig,
+              debugLog
+            });
+            if (emotionRenderer) {
+              emotionRenderer.reset();
+              debugLog("emotion-runtime:ready", {
+                slots: emotionRenderer.capabilities ? emotionRenderer.capabilities.slotCount : 0
+              });
+            }
+          }
           app.stage.addChild(model);
           rootEl.appendChild(app.view);
           app.view.style.position = "absolute";
           app.view.style.inset = "0";
           app.view.style.zIndex = "10";
+          app.ticker.add(() => {
+            model.update(app.ticker.deltaMS);
+          });
 
           window.addEventListener("resize", () => {
             app.renderer.resize(window.innerWidth, window.innerHeight);
@@ -1888,6 +1932,9 @@
             stopCursorPolling();
             unsubscribePetEvents();
             void cancelPushToTalkCapture("");
+            if (emotionRenderer) {
+              emotionRenderer.destroy();
+            }
             setMousePassthrough(false);
           });
 
@@ -2028,27 +2075,23 @@
               return;
             }
 
-            if (data.type === "emotion") {
-              const emotion = typeof data.value === "string" ? data.value.trim().toLowerCase() : "";
-              const mapping = {
-                happy: { expression: "Smile", motionGroup: motionBinding.happy },
-                sad: { expression: "Sad", motionGroup: motionBinding.sad, motionIndex: 0 },
-                angry: { expression: "Angry", motionGroup: motionBinding.angry },
-                surprised: { expression: "Surprised", motionGroup: motionBinding.surprised },
-                shy: { expression: "Blushing", motionGroup: motionBinding.shy },
-                excited: { expression: "Smile", motionGroup: motionBinding.excited },
-                calm: { expression: "Normal", motionGroup: idleMotionGroup },
-                idle: { expression: "Normal", motionGroup: idleMotionGroup }
-              };
+            if (data.type === "emotion-state") {
+              if (emotionRenderer && data.emotional && typeof data.emotional === "object") {
+                emotionRenderer.setTargetEmotion(data.emotional);
+              }
+              return;
+            }
 
-              const action = mapping[emotion] || mapping.idle;
-              runStateAction({
-                status: `emotion · ${emotion || "idle"}`,
-                expression: action.expression,
-                motionGroup: action.motionGroup,
-                motionIndex: action.motionIndex,
-                durationMs: 1850
+            if (data.type === "emotion-impulse") {
+              runEmotionImpulseAction(data.name, {
+                intensity: data.intensity,
+                durationMs: data.durationMs
               });
+              return;
+            }
+
+            if (data.type === "emotion") {
+              runEmotionImpulseAction(data.value);
               return;
             }
 

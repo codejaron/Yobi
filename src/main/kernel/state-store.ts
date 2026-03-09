@@ -4,6 +4,7 @@ import { CompanionPaths } from "@main/storage/paths";
 import { readJsonFile, writeJsonFileAtomic } from "@main/storage/fs";
 
 type Mutator = (current: KernelStateDocument) => KernelStateDocument | void;
+type StateListener = (state: KernelStateDocument) => void;
 
 export class StateStore {
   private loaded = false;
@@ -11,6 +12,7 @@ export class StateStore {
     ...DEFAULT_KERNEL_STATE
   };
   private dirty = false;
+  private readonly listeners = new Set<StateListener>();
 
   constructor(private readonly paths: CompanionPaths) {}
 
@@ -22,6 +24,7 @@ export class StateStore {
     const raw = await readJsonFile<KernelStateDocument>(this.paths.statePath, DEFAULT_KERNEL_STATE);
     this.state = normalizeState(raw);
     this.loaded = true;
+    this.emit(this.getSnapshot());
   }
 
   getSnapshot(): KernelStateDocument {
@@ -38,13 +41,25 @@ export class StateStore {
     };
   }
 
+  subscribe(listener: StateListener, options?: { emitCurrent?: boolean }): () => void {
+    this.listeners.add(listener);
+    if (options?.emitCurrent) {
+      listener(this.getSnapshot());
+    }
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   mutate(mutator: Mutator): KernelStateDocument {
     const draft = this.getSnapshot();
     const next = mutator(draft) ?? draft;
     this.state = normalizeState(next);
     this.state.updatedAt = new Date().toISOString();
     this.dirty = true;
-    return this.getSnapshot();
+    const snapshot = this.getSnapshot();
+    this.emit(snapshot);
+    return snapshot;
   }
 
   async flushIfDirty(): Promise<void> {
@@ -61,6 +76,12 @@ export class StateStore {
   private async flushInternal(): Promise<void> {
     await writeJsonFileAtomic(this.paths.statePath, this.state);
     this.dirty = false;
+  }
+
+  private emit(snapshot: KernelStateDocument): void {
+    for (const listener of this.listeners) {
+      listener(snapshot);
+    }
   }
 }
 

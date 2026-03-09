@@ -230,6 +230,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     paths,
     getConfig: () => configStore.getConfig(),
     pet,
+    stateStore,
     voiceRouter,
     realtimeVoice,
     globalPtt,

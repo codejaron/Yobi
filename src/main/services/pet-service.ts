@@ -2,7 +2,8 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { app } from "electron";
-import type { AppConfig } from "@shared/types";
+import type { AppConfig, EmotionalState, KernelStateDocument } from "@shared/types";
+import { DEFAULT_PET_EMOTION_CONFIG } from "@shared/pet-emotion";
 import { CompanionPaths } from "@main/storage/paths";
 import { appLogger as logger } from "@main/runtime/singletons";
 import { ChannelRouter } from "@main/channels/router";
@@ -15,11 +16,14 @@ import {
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { SystemPermissionsService } from "@main/services/system-permissions";
 import { extractEmotionTag } from "@main/core/emotion-tags";
+import { StateStore } from "@main/kernel/state-store";
+import { shouldPublishEmotionState } from "@main/pet/emotion-state-sync";
 
 interface PetServiceInput {
   paths: CompanionPaths;
   getConfig: () => AppConfig;
   pet: PetWindowController;
+  stateStore: StateStore;
   voiceRouter: VoiceProviderRouter;
   realtimeVoice: RealtimeVoiceService;
   globalPtt: GlobalPetPushToTalkService;
@@ -34,8 +38,15 @@ interface PetServiceInput {
 
 export class PetService {
   private petPttRecording = false;
+  private latestEmotionalState: EmotionalState = { ...DEFAULT_PET_EMOTION_CONFIG.defaultEmotion };
+  private lastPublishedEmotionalState: EmotionalState | null = null;
+  private lastPublishedAtMs = 0;
 
-  constructor(private readonly input: PetServiceInput) {}
+  constructor(private readonly input: PetServiceInput) {
+    this.input.stateStore.subscribe((state) => {
+      this.handleKernelStateSnapshot(state);
+    }, { emitCurrent: true });
+  }
 
   isPetOnline(): boolean {
     return this.input.pet.isOnline();
@@ -240,6 +251,8 @@ export class PetService {
       modelDir,
       alwaysOnTop: config.alwaysOnTop
     });
+
+    this.publishEmotionState({ force: true });
   }
 
   async syncGlobalPetPushToTalk(): Promise<void> {
@@ -408,6 +421,45 @@ export class PetService {
     } catch (error) {
       logger.warn("pet", "speech-synthesis-failed", undefined, error);
     }
+  }
+
+  private handleKernelStateSnapshot(state: KernelStateDocument): void {
+    this.latestEmotionalState = {
+      ...state.emotional
+    };
+    this.publishEmotionState();
+  }
+
+  private publishEmotionState(input?: { force?: boolean }): void {
+    if (!this.input.pet.isOnline()) {
+      return;
+    }
+
+    const nowMs = Date.now();
+    const syncConfig = DEFAULT_PET_EMOTION_CONFIG.stateSync;
+    if (
+      !shouldPublishEmotionState({
+        previous: this.lastPublishedEmotionalState,
+        next: this.latestEmotionalState,
+        epsilon: syncConfig.epsilon,
+        heartbeatMs: syncConfig.heartbeatMs,
+        nowMs,
+        lastPublishedAtMs: this.lastPublishedAtMs,
+        force: input?.force === true
+      })
+    ) {
+      return;
+    }
+
+    const next = {
+      ...this.latestEmotionalState
+    };
+    this.input.pet.emitEvent({
+      type: "emotion-state",
+      emotional: next
+    });
+    this.lastPublishedEmotionalState = next;
+    this.lastPublishedAtMs = nowMs;
   }
 
   private async containsModel3JsonFile(dir: string): Promise<boolean> {
