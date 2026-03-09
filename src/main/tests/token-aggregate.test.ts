@@ -42,8 +42,24 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
             estimatedTokens: 0
           },
           "background:fact-extraction": {
-            tokens: 40,
-            estimatedTokens: 20
+            tokens: 10,
+            estimatedTokens: 0
+          },
+          "background:daily-summary": {
+            tokens: 8,
+            estimatedTokens: 6
+          },
+          "background:profile-update": {
+            tokens: 6,
+            estimatedTokens: 4
+          },
+          "background:reflection": {
+            tokens: 9,
+            estimatedTokens: 8
+          },
+          "background:proactive-push": {
+            tokens: 7,
+            estimatedTokens: 2
           }
         },
         updatedAt: "2026-03-10T04:00:00.000Z"
@@ -91,6 +107,15 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
   assert.equal(today.sourceTotals.background.tokens, 60);
   assert.equal(today.backgroundDetails[0]?.label, "B站兴趣提取");
   assert.equal(today.backgroundDetails[0]?.tokens, 20);
+  assert.equal(today.backgroundDetails[2]?.label, "每日总结");
+  assert.equal(today.backgroundDetails[2]?.tokens, 8);
+  assert.equal(today.backgroundDetails[3]?.label, "画像更新");
+  assert.equal(today.backgroundDetails[3]?.tokens, 6);
+  assert.equal(today.backgroundDetails[4]?.label, "反思");
+  assert.equal(today.backgroundDetails[4]?.tokens, 9);
+  assert.equal(today.backgroundDetails[5]?.label, "主动推送");
+  assert.equal(today.backgroundDetails[5]?.tokens, 7);
+  assert.equal(today.backgroundDetails.length, 6);
 
   const sevenDays = aggregateTokenStats(status, {
     period: "7d",
@@ -136,7 +161,7 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
         totalTokens: 80,
         estimatedTokens: 0,
         bySource: {
-          "background:reflection": {
+          "background:proactive-push": {
             tokens: 80,
             estimatedTokens: 0
           }
@@ -157,4 +182,5 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
   assert.equal(result.trendWindowDays, 7);
   assert.equal(result.trendBars.length, 7);
   assert.equal(result.sourceTotals.claw.label, "待接入");
+  assert.equal(result.backgroundDetails[5]?.tokens, 80);
 });

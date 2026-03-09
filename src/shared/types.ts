@@ -844,7 +844,10 @@ export const TOKEN_USAGE_SOURCES = [
   "chat:feishu",
   "browse:bilibili-interest",
   "background:fact-extraction",
-  "background:reflection"
+  "background:daily-summary",
+  "background:profile-update",
+  "background:reflection",
+  "background:proactive-push"
 ] as const;
 
 export type TokenUsageSource = (typeof TOKEN_USAGE_SOURCES)[number];

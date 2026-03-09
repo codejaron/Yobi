@@ -44,11 +44,17 @@ export interface TokenAggregateResult {
 const CHAT_SOURCES: TokenUsageSource[] = ["chat:console", "chat:telegram", "chat:qq", "chat:feishu"];
 const BROWSE_INTEREST_SOURCE: TokenUsageSource = "browse:bilibili-interest";
 const BACKGROUND_FACT_EXTRACTION_SOURCE: TokenUsageSource = "background:fact-extraction";
+const BACKGROUND_DAILY_SUMMARY_SOURCE: TokenUsageSource = "background:daily-summary";
+const BACKGROUND_PROFILE_UPDATE_SOURCE: TokenUsageSource = "background:profile-update";
 const BACKGROUND_REFLECTION_SOURCE: TokenUsageSource = "background:reflection";
+const BACKGROUND_PROACTIVE_PUSH_SOURCE: TokenUsageSource = "background:proactive-push";
 const BACKGROUND_SOURCES: TokenUsageSource[] = [
   BROWSE_INTEREST_SOURCE,
   BACKGROUND_FACT_EXTRACTION_SOURCE,
-  BACKGROUND_REFLECTION_SOURCE
+  BACKGROUND_DAILY_SUMMARY_SOURCE,
+  BACKGROUND_PROFILE_UPDATE_SOURCE,
+  BACKGROUND_REFLECTION_SOURCE,
+  BACKGROUND_PROACTIVE_PUSH_SOURCE
 ];
 
 function emptyCounters(): TokenSourceCounters {
@@ -184,8 +190,20 @@ export function aggregateTokenStats(
         ...(sourceTotals[BACKGROUND_FACT_EXTRACTION_SOURCE] ?? emptyCounters())
       },
       {
+        label: "每日总结",
+        ...(sourceTotals[BACKGROUND_DAILY_SUMMARY_SOURCE] ?? emptyCounters())
+      },
+      {
+        label: "画像更新",
+        ...(sourceTotals[BACKGROUND_PROFILE_UPDATE_SOURCE] ?? emptyCounters())
+      },
+      {
         label: "反思",
         ...(sourceTotals[BACKGROUND_REFLECTION_SOURCE] ?? emptyCounters())
+      },
+      {
+        label: "主动推送",
+        ...(sourceTotals[BACKGROUND_PROACTIVE_PUSH_SOURCE] ?? emptyCounters())
       }
     ],
     trendBars,

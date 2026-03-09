@@ -172,7 +172,7 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
       });
       if (result.tokenUsage) {
         reportTokenUsage({
-          source: "background:reflection",
+          source: "background:daily-summary",
           usage: result.tokenUsage,
           inputText: JSON.stringify(todayItems.slice(-80)),
           outputText: JSON.stringify(result)
@@ -235,7 +235,7 @@ export class ProfileSemanticTaskHandler implements KernelQueueTaskHandler {
     });
     if (result.tokenUsage) {
       reportTokenUsage({
-        source: "background:reflection",
+        source: "background:profile-update",
         usage: result.tokenUsage,
         inputText: prompt,
         outputText: JSON.stringify(result.result ?? {})
@@ -399,7 +399,7 @@ export class WorkerProactiveRewriteHandler implements ProactiveRewriteHandler {
       );
       if (result.tokenUsage) {
         reportTokenUsage({
-          source: "background:reflection",
+          source: "background:proactive-push",
           usage: result.tokenUsage,
           inputText: JSON.stringify({
             message: trimmed,
