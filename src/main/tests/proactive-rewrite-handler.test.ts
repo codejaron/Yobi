@@ -46,13 +46,72 @@ test("WorkerProactiveRewriteHandler: skips rewrite when worker unavailable", asy
 });
 
 test("WorkerProactiveRewriteHandler: returns rewritten text from worker", async () => {
+  let receivedInput: Record<string, unknown> | null = null;
+  const fakeWorker = {
+    getStatus: () => ({
+      available: true,
+      message: "ready"
+    }),
+    runProactiveRewrite: async (input: Record<string, unknown>) => {
+      receivedInput = input;
+      return {
+      rewrittenMessage: "  改写后的消息  "
+      };
+    }
+  } as unknown as BackgroundTaskWorkerService;
+
+  const handler = new WorkerProactiveRewriteHandler({
+    getConfig: () => ({}) as AppConfig,
+    backgroundWorker: fakeWorker,
+    timeoutMs: 20
+  });
+
+  const rewritten = await handler.rewrite({
+    message: "原始消息",
+    stage: "familiar",
+    emotional: baseEmotional,
+    recentHistory: [
+      {
+        role: "user",
+        text: "前一条消息",
+        timestamp: "2026-03-09T10:00:00.000Z",
+        proactive: false
+      }
+    ],
+    lastProactiveAt: "2026-03-09T08:00:00.000Z",
+    lastUserMessageAt: "2026-03-09T09:00:00.000Z",
+    now: "2026-03-09T12:00:00.000Z"
+  });
+
+  assert.equal(rewritten, "改写后的消息");
+  assert.equal(handler.getPauseReason(), null);
+  assert.deepEqual(receivedInput, {
+    message: "原始消息",
+    stage: "familiar",
+    emotional: baseEmotional,
+    recentHistory: [
+      {
+        role: "user",
+        text: "前一条消息",
+        timestamp: "2026-03-09T10:00:00.000Z",
+        proactive: false
+      }
+    ],
+    lastProactiveAt: "2026-03-09T08:00:00.000Z",
+    lastUserMessageAt: "2026-03-09T09:00:00.000Z",
+    now: "2026-03-09T12:00:00.000Z",
+    config: {}
+  });
+});
+
+test("WorkerProactiveRewriteHandler: treats empty rewrite as do not send", async () => {
   const fakeWorker = {
     getStatus: () => ({
       available: true,
       message: "ready"
     }),
     runProactiveRewrite: async () => ({
-      rewrittenMessage: "  改写后的消息  "
+      rewrittenMessage: "   "
     })
   } as unknown as BackgroundTaskWorkerService;
 
@@ -68,6 +127,5 @@ test("WorkerProactiveRewriteHandler: returns rewritten text from worker", async 
     emotional: baseEmotional
   });
 
-  assert.equal(rewritten, "改写后的消息");
-  assert.equal(handler.getPauseReason(), null);
+  assert.equal(rewritten, "");
 });

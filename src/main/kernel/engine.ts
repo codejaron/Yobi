@@ -401,6 +401,11 @@ export class KernelEngine {
     }
 
     const now = Date.now();
+
+    if (now - this.startedAtMs < config.proactive.coldStartDelayMs) {
+      return;
+    }
+
     if (this.lastProactiveAt) {
       const elapsed = now - new Date(this.lastProactiveAt).getTime();
       if (elapsed < config.proactive.cooldownMs) {
@@ -412,11 +417,27 @@ export class KernelEngine {
     }
 
     const snapshot = this.input.stateStore.getSnapshot();
+
+    const recentHistory = await this.input.memory.listHistory({
+      threadId: this.input.threadId,
+      resourceId: this.input.resourceId,
+      limit: 10
+    });
+
     const tryEmit = async (message: string, topicId?: string): Promise<boolean> => {
       const rewritten = await this.input.proactiveRewriteHandler.rewrite({
         message,
         stage: snapshot.relationship.stage,
-        emotional: snapshot.emotional
+        emotional: snapshot.emotional,
+        recentHistory: recentHistory.map((item) => ({
+          role: item.role,
+          text: item.text,
+          timestamp: item.timestamp,
+          proactive: item.meta?.proactive ?? false
+        })),
+        lastProactiveAt: this.lastProactiveAt,
+        lastUserMessageAt: this.lastUserMessageAt,
+        now: new Date(now).toISOString()
       });
       if (!rewritten || !rewritten.trim()) {
         return false;
@@ -430,10 +451,10 @@ export class KernelEngine {
     };
 
     if (!this.lastUserMessageAt) {
-      if (!snapshot.coldStart || now - this.startedAtMs < config.proactive.coldStartDelayMs) {
+      if (!snapshot.coldStart) {
         return;
       }
-      await tryEmit("嗨，我是 Yobi。今天想让我陪你做点什么吗？");
+      await tryEmit("我是 Yobi，想和你打个招呼");
       return;
     }
 
@@ -446,13 +467,13 @@ export class KernelEngine {
     const interestProfile = await this.input.memory.getInterestProfile();
     const topic = selectBestProactiveTopic(activeTopics, interestProfile, snapshot.emotional.curiosity);
     if (!topic) {
-      await tryEmit("我刚刚想到你了，要不要和我聊两句？");
+      await tryEmit("想找你随便聊聊");
       return;
     }
 
     const message = topic.material
-      ? `我刚刷到个东西，感觉你会有兴趣：${topic.text}`
-      : `突然想起一件事：${topic.text}`;
+      ? `${topic.text}`
+      : `${topic.text}`;
     await tryEmit(message, topic.id);
   }
 

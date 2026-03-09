@@ -129,6 +129,15 @@ export class BackgroundTaskWorkerService {
     message: string;
     stage: RelationshipStage;
     emotional: EmotionalState;
+    recentHistory: Array<{
+      role: string;
+      text: string;
+      timestamp: string;
+      proactive: boolean;
+    }>;
+    lastProactiveAt: string | null;
+    lastUserMessageAt: string | null;
+    now: string;
     config: AppConfig;
   }): Promise<ProactiveRewriteWorkerResult> {
     return this.call("proactive-rewrite", input) as Promise<ProactiveRewriteWorkerResult>;

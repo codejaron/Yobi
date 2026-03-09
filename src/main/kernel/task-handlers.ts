@@ -58,6 +58,15 @@ export interface ProactiveRewriteHandler {
     message: string;
     stage: RelationshipStage;
     emotional: EmotionalState;
+    recentHistory?: Array<{
+      role: string;
+      text: string;
+      timestamp: string;
+      proactive: boolean;
+    }>;
+    lastProactiveAt?: string | null;
+    lastUserMessageAt?: string | null;
+    now?: string;
   }): Promise<string | null>;
   getWorkerStatus(): { available: boolean; message: string };
   getPauseReason(): string | null;
@@ -355,6 +364,15 @@ export class WorkerProactiveRewriteHandler implements ProactiveRewriteHandler {
     message: string;
     stage: RelationshipStage;
     emotional: EmotionalState;
+    recentHistory?: Array<{
+      role: string;
+      text: string;
+      timestamp: string;
+      proactive: boolean;
+    }>;
+    lastProactiveAt?: string | null;
+    lastUserMessageAt?: string | null;
+    now?: string;
   }): Promise<string | null> {
     const trimmed = input.message.trim();
     if (!trimmed) {
@@ -370,6 +388,10 @@ export class WorkerProactiveRewriteHandler implements ProactiveRewriteHandler {
           message: trimmed,
           stage: input.stage,
           emotional: input.emotional,
+          recentHistory: input.recentHistory ?? [],
+          lastProactiveAt: input.lastProactiveAt ?? null,
+          lastUserMessageAt: input.lastUserMessageAt ?? null,
+          now: input.now ?? new Date().toISOString(),
           config: this.input.getConfig()
         }),
         this.input.timeoutMs ?? 10_000,
@@ -388,7 +410,10 @@ export class WorkerProactiveRewriteHandler implements ProactiveRewriteHandler {
         });
       }
       const rewrittenMessage = result.rewrittenMessage.trim();
-      return rewrittenMessage || trimmed;
+      if (!rewrittenMessage) {
+        return "";
+      }
+      return rewrittenMessage;
     } catch {
       return null;
     }
