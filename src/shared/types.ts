@@ -296,14 +296,7 @@ export const appConfigSchema = z
       .object({
         enabled: z.boolean().default(false),
         bilibiliCookie: z.string().default(""),
-        collectIntervalMs: z.number().int().min(60_000).default(30 * 60 * 1000),
-        digestIntervalMs: z.number().int().min(60_000).default(2 * 60 * 60 * 1000),
-        eventCheckIntervalMs: z.number().int().min(60_000).default(10 * 60 * 1000),
-        eventFreshWindowMs: z.number().int().min(60_000).default(2 * 60 * 60 * 1000),
-        eventMinGapMs: z.number().int().min(60_000).default(15 * 60 * 1000),
-        eventDailyCap: z.number().int().min(1).max(20).default(2),
-        tokenBudgetDaily: z.number().int().min(100).default(15_000),
-        reversePromptEvery: z.number().int().min(2).max(10).default(4)
+        autoFollowEnabled: z.boolean().default(false)
       })
       .strict(),
     memory: z
@@ -643,11 +636,21 @@ export interface TopicPoolItem {
 export interface BrowseStatus {
   authState: BrowseAuthState;
   lastNavCheckAt: string | null;
-  lastCollectAt: string | null;
-  lastDigestAt: string | null;
-  todayTokenUsed: number;
-  todayEventShares: number;
+  lastSyncAt: string | null;
+  preferenceFactCount: number;
+  recentFactCount: number;
+  lastAutoFollowAt: string | null;
+  autoFollowTodayCount: number;
+  recentAutoFollows: BrowseAutoFollowRecord[];
   pausedReason: string | null;
+}
+
+export interface BrowseAutoFollowRecord {
+  followedAt: string;
+  upMid: string;
+  upName: string;
+  reason: string;
+  accountUrl: string;
 }
 
 export type RelationshipStage =
@@ -842,7 +845,6 @@ export const TOKEN_USAGE_SOURCES = [
   "chat:telegram",
   "chat:qq",
   "chat:feishu",
-  "browse:bilibili-interest",
   "background:fact-extraction",
   "background:daily-summary",
   "background:profile-update",
@@ -1115,14 +1117,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   browse: {
     enabled: false,
     bilibiliCookie: "",
-    collectIntervalMs: 30 * 60 * 1000,
-    digestIntervalMs: 2 * 60 * 60 * 1000,
-    eventCheckIntervalMs: 10 * 60 * 1000,
-    eventFreshWindowMs: 2 * 60 * 60 * 1000,
-    eventMinGapMs: 15 * 60 * 1000,
-    eventDailyCap: 2,
-    tokenBudgetDaily: 15_000,
-    reversePromptEvery: 4
+    autoFollowEnabled: false
   },
   memory: {
     recentMessages: 60,

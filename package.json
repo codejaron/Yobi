@@ -23,6 +23,7 @@
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@modelcontextprotocol/sdk": "^1.17.5",
     "@openrouter/ai-sdk-provider": "^1.5.4",
+    "@types/qrcode": "^1.5.6",
     "ai": "^5.0.90",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -34,6 +35,7 @@
     "node-screenshots": "^0.2.1",
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "^6.5.10",
+    "qrcode": "^1.5.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
@@ -91,7 +93,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Yobi \u9700\u8981\u9ea6\u514b\u98ce\u6743\u9650\u6765\u8fdb\u884c\u8bed\u97f3\u8f93\u5165\u4e0e\u5b9e\u65f6\u5bf9\u8bdd\u3002"
+        "NSMicrophoneUsageDescription": "Yobi 需要麦克风权限来进行语音输入与实时对话。"
       },
       "target": [
         "dmg"

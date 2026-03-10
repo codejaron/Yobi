@@ -110,6 +110,24 @@ export class TopicStore {
     return count;
   }
 
+  async clearBySourcePrefixes(prefixes: string[]): Promise<number> {
+    await this.init();
+    const normalized = prefixes.map((item) => item.trim()).filter(Boolean);
+    if (normalized.length === 0) {
+      return 0;
+    }
+    const next = this.pool.items.filter(
+      (item) => !normalized.some((prefix) => item.source === prefix || item.source.startsWith(prefix))
+    );
+    const removed = this.pool.items.length - next.length;
+    if (removed <= 0) {
+      return 0;
+    }
+    this.pool.items = next;
+    await this.persistPool();
+    return removed;
+  }
+
   async deleteTopic(id: string): Promise<boolean> {
     await this.init();
     const next = this.pool.items.filter((item) => item.id !== id);

@@ -13,6 +13,7 @@ import type { YobiMemory } from "@main/memory/setup";
 import type { StateStore } from "@main/kernel/state-store";
 import type { KernelEngine } from "@main/kernel/engine";
 import type { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
+import type { BilibiliSyncCoordinator } from "@main/services/browse/bilibili-sync-coordinator";
 import type { SystemPermissionsService } from "@main/services/system-permissions";
 
 interface HistoryQuery {
@@ -27,6 +28,7 @@ interface RuntimeDataCoordinatorInput {
   stateStore: StateStore;
   kernel: KernelEngine;
   bilibiliBrowse: BilibiliBrowseService;
+  bilibiliSyncCoordinator: BilibiliSyncCoordinator;
   systemPermissionsService: SystemPermissionsService;
   resourceId: string;
   threadId: string;
@@ -214,6 +216,9 @@ export class RuntimeDataCoordinator {
 
   async pollBilibiliQrAuth(input: { qrcodeKey: string }) {
     const result = await this.input.bilibiliBrowse.pollQrAuth(input);
+    if (result.cookieSaved) {
+      await this.input.bilibiliSyncCoordinator.refresh();
+    }
     await this.input.emitStatus();
     return {
       authState: result.authState,
@@ -225,6 +230,7 @@ export class RuntimeDataCoordinator {
 
   async saveBilibiliCookie(input: { cookie: string }) {
     const result = await this.input.bilibiliBrowse.saveCookie(input);
+    await this.input.bilibiliSyncCoordinator.refresh();
     await this.input.emitStatus();
     return result;
   }
@@ -236,18 +242,28 @@ export class RuntimeDataCoordinator {
     return result;
   }
 
-  async triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }> {
-    const browseResult = await this.input.bilibiliBrowse.runHeartbeat({ forceDigest: true });
-    await this.input.kernel.runTickNow();
-    const result = {
-      accepted: browseResult.reason !== "error",
-      message:
-        browseResult.reason === "error"
-          ? `浏览任务失败：${browseResult.detail ?? "未知错误"}`
-          : "浏览任务已触发。"
-    };
+  async triggerBilibiliSync(): Promise<{ accepted: boolean; message: string }> {
+    const result = await this.input.bilibiliSyncCoordinator.triggerNow();
     await this.input.emitStatus();
-    return result;
+    return {
+      accepted: result.reason === "synced" || result.reason === "no-content",
+      message:
+        result.reason === "synced"
+          ? "Bilibili 素材已同步。"
+          : result.reason === "no-content"
+            ? "Bilibili 已完成同步，但这轮没有新增素材。"
+            : result.reason === "disabled"
+              ? "Bilibili 同步已关闭。"
+              : result.reason === "missing-cookie"
+                ? "请先配置 B 站 Cookie。"
+                : result.reason === "auth-expired"
+                  ? result.detail ?? "Cookie 已失效，请重新扫码。"
+                  : `Bilibili 同步失败：${result.detail ?? "未知错误"}`
+    };
+  }
+
+  async openBilibiliAccount(): Promise<{ opened: boolean; message: string }> {
+    return this.input.bilibiliBrowse.openAccountPage();
   }
 
   async deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {

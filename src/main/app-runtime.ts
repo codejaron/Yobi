@@ -354,8 +354,12 @@ export class CompanionRuntime {
     return this.dataCoordinator.triggerTopicRecall();
   }
 
-  async triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }> {
-    return this.dataCoordinator.triggerTopicBrowse();
+  async triggerBilibiliSync(): Promise<{ accepted: boolean; message: string }> {
+    return this.dataCoordinator.triggerBilibiliSync();
+  }
+
+  async openBilibiliAccount(): Promise<{ opened: boolean; message: string }> {
+    return this.dataCoordinator.openBilibiliAccount();
   }
 
   async deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {

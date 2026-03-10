@@ -82,7 +82,7 @@ export function TopicPoolPage({
   status: AppStatus | null;
   refreshStatus: () => Promise<void>;
 }) {
-  const [triggering, setTriggering] = useState<"recall" | "wander" | null>(null);
+  const [triggering, setTriggering] = useState<"recall" | null>(null);
   const [taskNotice, setTaskNotice] = useState<{
     type: "success" | "error";
     message: string;
@@ -159,38 +159,6 @@ export function TopicPoolPage({
               {triggering === "recall" ? "回想触发中..." : "立即触发回想"}
             </Button>
 
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (triggering) {
-                  return;
-                }
-
-                setTaskNotice(null);
-                setTriggering("wander");
-                void window.companion
-                  .triggerTopicBrowse()
-                  .then(async (result) => {
-                    setTaskNotice({
-                      type: result.accepted ? "success" : "error",
-                      message: result.message
-                    });
-                    await refreshStatus();
-                  })
-                  .catch((error) => {
-                    setTaskNotice({
-                      type: "error",
-                      message: error instanceof Error ? error.message : "触发闲逛失败。"
-                    });
-                  })
-                  .finally(() => {
-                    setTriggering(null);
-                  });
-              }}
-              disabled={triggering !== null}
-            >
-              {triggering === "wander" ? "浏览触发中..." : "立即触发浏览"}
-            </Button>
           </div>
           {taskNotice ? (
             <p className={`text-xs ${taskNotice.type === "success" ? "text-emerald-700" : "text-rose-700"}`}>

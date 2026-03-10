@@ -59,10 +59,12 @@ export class RuntimeStatusCoordinator {
           : {
               authState: "error",
               lastNavCheckAt: null,
-              lastCollectAt: null,
-              lastDigestAt: null,
-              todayTokenUsed: 0,
-              todayEventShares: 0,
+              lastSyncAt: null,
+              preferenceFactCount: 0,
+              recentFactCount: 0,
+              lastAutoFollowAt: null,
+              autoFollowTodayCount: 0,
+              recentAutoFollows: [],
               pausedReason: "状态加载失败"
             },
       tokenStats:

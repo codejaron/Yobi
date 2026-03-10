@@ -120,6 +120,67 @@ export class FactsStore {
     return changed;
   }
 
+  async replaceBySource(input: {
+    source: string;
+    entity?: string;
+    facts: Array<FactOperationInput["fact"]>;
+  }): Promise<Fact[]> {
+    await this.init();
+    const source = input.source.trim();
+    const entity = input.entity?.trim();
+    const now = new Date().toISOString();
+
+    const keepFact = (fact: Fact): boolean => {
+      if (fact.source !== source) {
+        return true;
+      }
+      if (entity && fact.entity !== entity) {
+        return true;
+      }
+      return false;
+    };
+
+    this.activeFacts = this.activeFacts.filter(keepFact);
+
+    const created: Fact[] = [];
+    for (const next of input.facts) {
+      const normalized = normalizeOperation({
+        action: "add",
+        fact: next
+      });
+      if (!normalized) {
+        continue;
+      }
+      const fact = createFact(normalized.fact, source, now);
+      this.activeFacts.push(fact);
+      created.push({ ...fact });
+    }
+
+    await this.persist();
+    return created;
+  }
+
+  async removeBySource(input: { source: string; entity?: string }): Promise<number> {
+    await this.init();
+    const source = input.source.trim();
+    const entity = input.entity?.trim();
+    const before = this.activeFacts.length;
+    this.activeFacts = this.activeFacts.filter((fact) => {
+      if (fact.source !== source) {
+        return true;
+      }
+      if (entity && fact.entity !== entity) {
+        return true;
+      }
+      return false;
+    });
+    const removed = before - this.activeFacts.length;
+    if (removed > 0) {
+      await this.persist();
+    }
+    return removed;
+  }
+
   async touch(ids: string[]): Promise<void> {
     await this.init();
     if (ids.length === 0) {

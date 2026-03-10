@@ -1,15 +1,8 @@
-import { generateObject } from "ai";
-import { z } from "zod";
-import type { AppConfig, BrowseStatus, InterestProfile } from "@shared/types";
-import { CompanionPaths } from "@main/storage/paths";
-import type { ModelFactory } from "@main/core/model-factory";
-import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
+import type { AppConfig, BrowseAutoFollowRecord, BrowseStatus } from "@shared/types";
+import { openSafeWebUrl } from "@main/utils/external-links";
 import type { YobiMemory } from "@main/memory/setup";
-import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
-import {
-  estimateTokensFromText,
-  parseUsageTokens
-} from "@main/services/token/token-usage-utils";
+import { appLogger as logger } from "@main/runtime/singletons";
+import { CompanionPaths } from "@main/storage/paths";
 import { BrowseStore } from "./browse-store";
 import {
   BilibiliAuthService,
@@ -18,94 +11,219 @@ import {
   type QrStartResult
 } from "./bilibili-auth";
 import { BilibiliCollector } from "./bilibili-collector";
-import { InterestMatcher } from "./interest-matcher";
-import { DigestGenerator } from "./digest-generator";
-import { nextAuthStateFromNav } from "./rules";
-import type { DigestInputCandidate, MatchedCandidate } from "./types";
+import { canAutoFollowCandidate, describeAutoFollowReason, selectSyncItems, type AutoFollowLimits } from "./sync-logic";
+import type { BilibiliVideoItem } from "./types";
 
-const PRIMARY_RESOURCE_ID = "primary-user";
-const PRIMARY_THREAD_ID = "primary-thread";
+const MANAGED_SOURCE = "browse:bilibili";
+const MANAGED_ENTITY = "Yobi";
+const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const RETRY_DELAY_MS = 30 * 60 * 1000;
+const AUTO_FOLLOW_LIMITS: AutoFollowLimits = {
+  minIntervalMs: 12 * 60 * 60 * 1000,
+  maxPerDay: 2,
+  maxPerWeek: 8,
+  maxTotal: 80
+};
+const BLOCKED_KEYWORD_FRAGMENTS = ["热门", "综合", "视频", "推荐", "首页", "搜索结果"];
 
-const interestSchema = z.object({
-  games: z.array(z.string().min(1).max(40)).max(20).default([]),
-  creators: z.array(z.string().min(1).max(40)).max(20).default([]),
-  domains: z.array(z.string().min(1).max(40)).max(20).default([]),
-  dislikes: z.array(z.string().min(1).max(40)).max(20).default([]),
-  keywords: z.array(z.string().min(1).max(40)).max(30).default([])
-});
+export { SYNC_INTERVAL_MS as BILIBILI_SYNC_INTERVAL_MS, RETRY_DELAY_MS as BILIBILI_SYNC_RETRY_DELAY_MS };
 
-export interface BrowseHeartbeatOutcome {
+export interface BrowseSyncOutcome {
   ran: boolean;
   changed: boolean;
-  reason:
-    | "disabled"
-    | "missing-cookie"
-    | "auth-expired"
-    | "no-op"
-    | "added"
-    | "error"
-    | "paused"
-    | "auth-error";
+  reason: "disabled" | "missing-cookie" | "auth-expired" | "synced" | "no-content" | "error" | "auth-error";
   detail?: string;
+  nextDelayMs: number | null;
 }
 
-function uniq(items: string[]): string[] {
-  const unique = new Set<string>();
-  for (const item of items) {
-    const value = item.trim();
+function cookieValue(cookie: string, key: string): string {
+  const entries = cookie
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const currentKey = entry.slice(0, separator).trim();
+    if (currentKey !== key) {
+      continue;
+    }
+    return entry.slice(separator + 1).trim();
+  }
+  return "";
+}
+
+function uniq(values: string[], limit = 12): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
     if (!value) {
       continue;
     }
-    unique.add(value);
+    const normalized = value.toLowerCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(value);
+    if (result.length >= limit) {
+      break;
+    }
   }
-  return [...unique].slice(0, 30);
+  return result;
 }
 
-function shouldRun(lastAt: string | null, intervalMs: number): boolean {
-  if (!lastAt) {
-    return true;
-  }
-  const last = new Date(lastAt).getTime();
-  if (!Number.isFinite(last)) {
-    return true;
-  }
-  return Date.now() - last >= intervalMs;
+function buildAccountUrl(mid: string): string {
+  const target = mid.trim();
+  return target ? `https://space.bilibili.com/${encodeURIComponent(target)}` : "https://www.bilibili.com";
 }
 
-function budgetDigestInterval(config: AppConfig, status: BrowseStatus): number {
-  const base = config.browse.digestIntervalMs;
-  const budget = Math.max(1, config.browse.tokenBudgetDaily);
-  const ratio = status.todayTokenUsed / budget;
-  if (ratio >= 1) {
-    return Math.max(base, 6 * 60 * 60 * 1000);
+function topNames(items: BilibiliVideoItem[], limit: number): string[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const name = item.ownerName.trim();
+    if (!name) {
+      continue;
+    }
+    counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  if (ratio >= 0.7) {
-    return Math.max(base, 4 * 60 * 60 * 1000);
-  }
-  return base;
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, limit)
+    .map(([value]) => value);
 }
 
-function normalizeInterestProfile(profile: InterestProfile): InterestProfile {
+function topTags(items: BilibiliVideoItem[], limit: number): string[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    for (const tag of item.tags) {
+      const value = tag.trim();
+      if (!value) {
+        continue;
+      }
+      if (BLOCKED_KEYWORD_FRAGMENTS.some((entry) => value.includes(entry))) {
+        continue;
+      }
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, limit)
+    .map(([value]) => value);
+}
+
+function buildPreferenceFacts(items: BilibiliVideoItem[]): Array<{
+  entity: string;
+  key: string;
+  value: string;
+  category: "preference";
+  confidence: number;
+  ttl_class: "stable";
+  source: string;
+  source_range?: string;
+}> {
+  const facts: Array<{
+    entity: string;
+    key: string;
+    value: string;
+    category: "preference";
+    confidence: number;
+    ttl_class: "stable";
+    source: string;
+    source_range?: string;
+  }> = [];
+  const owners = topNames(items, 3);
+  const tags = topTags(items, 5);
+
+  if (owners.length > 0) {
+    facts.push({
+      entity: MANAGED_ENTITY,
+      key: "bilibili.preference.ups",
+      value: `最近常看 UP：${owners.join("、")}`,
+      category: "preference",
+      confidence: 0.78,
+      ttl_class: "stable",
+      source: MANAGED_SOURCE
+    });
+  }
+
+  if (tags.length > 0) {
+    facts.push({
+      entity: MANAGED_ENTITY,
+      key: "bilibili.preference.tags",
+      value: `最近偏好的内容方向：${tags.join("、")}`,
+      category: "preference",
+      confidence: 0.72,
+      ttl_class: "stable",
+      source: MANAGED_SOURCE
+    });
+  }
+
+  return facts;
+}
+
+function buildRecentFacts(items: BilibiliVideoItem[]): Array<{
+  entity: string;
+  key: string;
+  value: string;
+  category: "event";
+  confidence: number;
+  ttl_class: "active";
+  source: string;
+  source_range?: string;
+}> {
+  return items.slice(0, 5).map((item, index) => ({
+    entity: MANAGED_ENTITY,
+    key: `bilibili.recent.${index + 1}`,
+    value: `最近在看《${item.title}》by ${item.ownerName}${item.tags.length > 0 ? `，内容偏向 ${item.tags.slice(0, 3).join("、")}` : ""}`,
+    category: "event",
+    confidence: 0.7,
+    ttl_class: "active",
+    source: MANAGED_SOURCE,
+    source_range: item.bvid
+  }));
+}
+
+function buildAutoFollowFact(record: BrowseAutoFollowRecord): {
+  entity: string;
+  key: string;
+  value: string;
+  category: "event";
+  confidence: number;
+  ttl_class: "active";
+  source: string;
+  source_range?: string;
+} {
   return {
-    games: uniq(profile.games),
-    creators: uniq(profile.creators),
-    domains: uniq(profile.domains),
-    dislikes: uniq(profile.dislikes),
-    keywords: uniq(profile.keywords),
-    updatedAt: profile.updatedAt
+    entity: MANAGED_ENTITY,
+    key: "bilibili.recent.follow",
+    value: `最近决定关注 ${record.upName}，原因：${record.reason}`,
+    category: "event",
+    confidence: 0.8,
+    ttl_class: "active",
+    source: MANAGED_SOURCE,
+    source_range: `follow:${record.upMid}`
   };
+}
+
+function extractPreferenceKeywords(items: BilibiliVideoItem[]): string[] {
+  return uniq([
+    ...topTags(items, 4),
+    ...topNames(items, 2)
+  ]).slice(0, 4);
 }
 
 export class BilibiliBrowseService {
   private readonly store: BrowseStore;
   private readonly authService: BilibiliAuthService;
   private readonly collector: BilibiliCollector;
-  private readonly matcher = new InterestMatcher();
-  private readonly digestGenerator = new DigestGenerator();
 
   constructor(
     paths: CompanionPaths,
-    private readonly modelFactory: ModelFactory,
     private readonly memory: YobiMemory,
     private readonly getConfig: () => AppConfig,
     private readonly persistCookie: (cookie: string) => Promise<void>
@@ -157,6 +275,7 @@ export class BilibiliBrowseService {
     const cookie = normalizeCookieString(input.cookie);
     if (!cookie) {
       await this.persistCookie("");
+      await this.clearManagedContent();
       await this.store.setAuthState("missing", "未配置 B 站登录");
       return {
         saved: false,
@@ -174,47 +293,64 @@ export class BilibiliBrowseService {
     };
   }
 
-  async tryConsumeEventShareQuota(): Promise<boolean> {
-    const config = this.getConfig();
-    return this.store.consumeEventShare(config.browse.eventDailyCap);
+  async clearManagedContent(): Promise<void> {
+    await Promise.all([
+      this.memory.getFactsStore().removeBySource({
+        source: MANAGED_SOURCE,
+        entity: MANAGED_ENTITY
+      }),
+      this.memory.clearTopicsBySourcePrefixes(["browse:"])
+    ]);
+    await this.store.clearManagedMetadata();
   }
 
-  async runHeartbeat(input: {
-    forceDigest: boolean;
-  }): Promise<BrowseHeartbeatOutcome> {
+  async ensureManagedStateMatchesConfig(): Promise<void> {
+    const config = this.getConfig();
+    const cookie = config.browse.bilibiliCookie.trim();
+    if (config.browse.enabled && cookie) {
+      return;
+    }
+    await this.clearManagedContent();
+    await this.store.setAuthState("missing", config.browse.enabled ? "未配置 B 站 Cookie" : "浏览同步已关闭");
+  }
+
+  async runSync(): Promise<BrowseSyncOutcome> {
     const config = this.getConfig();
     if (!config.browse.enabled) {
-      await this.store.setAuthState("missing", "浏览感知已关闭");
+      await this.clearManagedContent();
+      await this.store.setAuthState("missing", "浏览同步已关闭");
       return {
         ran: false,
-        changed: false,
-        reason: "disabled"
+        changed: true,
+        reason: "disabled",
+        nextDelayMs: null
       };
     }
 
     const cookie = config.browse.bilibiliCookie.trim();
     if (!cookie) {
+      await this.clearManagedContent();
       await this.store.setAuthState("missing", "未配置 B 站 Cookie");
       return {
-        ran: true,
-        changed: false,
-        reason: "missing-cookie"
+        ran: false,
+        changed: true,
+        reason: "missing-cookie",
+        nextDelayMs: null
       };
     }
 
+    let nav: Awaited<ReturnType<BilibiliCollector["checkLogin"]>>;
     try {
-      const nav = await this.collector.checkLogin(cookie);
+      nav = await this.collector.checkLogin(cookie);
       await this.store.setLastNavCheck();
-
-      const nextAuth = nextAuthStateFromNav(nav.isLogin);
-      await this.store.setAuthState(nextAuth.authState, nextAuth.pausedReason);
-
+      await this.store.setAuthState(nav.isLogin ? "active" : "expired", nav.isLogin ? null : "Cookie 已失效，请重新扫码");
       if (!nav.isLogin) {
         return {
           ran: true,
           changed: false,
           reason: "auth-expired",
-          detail: nav.message
+          detail: nav.message,
+          nextDelayMs: null
         };
       }
     } catch (error) {
@@ -223,219 +359,205 @@ export class BilibiliBrowseService {
         ran: true,
         changed: false,
         reason: "auth-error",
-        detail: error instanceof Error ? error.message : "unknown"
+        detail: error instanceof Error ? error.message : "unknown",
+        nextDelayMs: RETRY_DELAY_MS
       };
     }
 
-    let changed = false;
-    let performed = false;
-    const status = await this.store.getStatus();
+    try {
+      const [{ feed, hotlist }, relationStat] = await Promise.all([
+        this.collector.collect(cookie),
+        nav.mid ? this.collector.fetchRelationStat(cookie, nav.mid).catch(() => ({ following: 0 })) : Promise.resolve({ following: 0 })
+      ]);
+      await this.store.saveFeed(feed);
+      await this.store.saveHotlist(hotlist);
 
-    if (input.forceDigest || shouldRun(status.lastCollectAt, config.browse.collectIntervalMs)) {
-      performed = true;
-      const snapshots = await this.collector.collect(cookie);
-      await this.store.saveFeed(snapshots.feed);
-      await this.store.saveHotlist(snapshots.hotlist);
-      await this.store.setLastCollect();
-    }
+      const selected = selectSyncItems({
+        feedItems: feed.items,
+        hotItems: hotlist.items,
+        maxFeed: 6,
+        maxHot: 4
+      });
+      const selectedFeedCount = selected.filter((item) => item.source === "feed").length;
+      const preferenceKeywords = extractPreferenceKeywords(selected);
+      const autoFollowRecord = config.browse.autoFollowEnabled
+        ? await this.maybeAutoFollow({
+            cookie,
+            selfMid: nav.mid,
+            followingCount: relationStat.following,
+            hotItems: hotlist.items,
+            selectedFeedCount,
+            preferenceKeywords
+          })
+        : null;
 
-    const latestStatus = await this.store.getStatus();
-    const digestInterval = budgetDigestInterval(config, latestStatus);
-    if (input.forceDigest || shouldRun(latestStatus.lastDigestAt, digestInterval)) {
-      performed = true;
-      const inserted = await this.generateDigestTopics(cookie);
-      changed = changed || inserted;
-      await this.store.setLastDigest();
-    }
+      const preferenceFacts = buildPreferenceFacts(selected);
+      const recentFacts = buildRecentFacts(selected);
+      if (autoFollowRecord) {
+        recentFacts.unshift(buildAutoFollowFact(autoFollowRecord));
+      }
 
-    if (!performed) {
+      await this.memory.getFactsStore().replaceBySource({
+        source: MANAGED_SOURCE,
+        entity: MANAGED_ENTITY,
+        facts: [...preferenceFacts, ...recentFacts]
+      });
+      await this.memory.clearTopicsBySourcePrefixes(["browse:"]);
+      await this.store.setSyncSummary({
+        preferenceFactCount: preferenceFacts.length,
+        recentFactCount: recentFacts.length,
+        selectedFeedCount
+      });
+
       return {
         ran: true,
-        changed,
-        reason: "no-op"
+        changed: preferenceFacts.length > 0 || recentFacts.length > 0,
+        reason: preferenceFacts.length > 0 || recentFacts.length > 0 ? "synced" : "no-content",
+        nextDelayMs: SYNC_INTERVAL_MS
+      };
+    } catch (error) {
+      logger.warn("browse", "bilibili-sync-failed", undefined, error);
+      return {
+        ran: true,
+        changed: false,
+        reason: "error",
+        detail: error instanceof Error ? error.message : "unknown",
+        nextDelayMs: RETRY_DELAY_MS
       };
     }
+  }
 
+  async openAccountPage(): Promise<{ opened: boolean; message: string }> {
+    const cookie = this.getConfig().browse.bilibiliCookie.trim();
+    const mid = cookieValue(cookie, "DedeUserID");
+    const url = buildAccountUrl(mid);
+    const opened = await openSafeWebUrl(url);
     return {
-      ran: true,
-      changed,
-      reason: changed ? "added" : "no-op"
+      opened,
+      message: opened ? "已打开 Yobi 的 B 站主页。" : "打开失败，请检查当前登录信息。"
     };
   }
 
-  private async generateDigestTopics(cookie: string): Promise<boolean> {
-    const profileRefresh = await this.refreshInterestsIfNeeded();
-    if (profileRefresh.tokenUsed > 0) {
-      await this.store.addTokenUsed(profileRefresh.tokenUsed);
-    }
+  private async maybeAutoFollow(input: {
+    cookie: string;
+    selfMid: string;
+    followingCount: number;
+    hotItems: BilibiliVideoItem[];
+    selectedFeedCount: number;
+    preferenceKeywords: string[];
+  }): Promise<BrowseAutoFollowRecord | null> {
+    const now = Date.now();
+    const state = await this.store.getState();
+    const recentFeedCount = state.syncHistory
+      .filter((entry) => now - new Date(entry.syncedAt).getTime() <= 24 * 60 * 60 * 1000)
+      .reduce((sum, entry) => sum + entry.selectedFeedCount, 0);
+    const coldStart = input.followingCount === 0 || recentFeedCount + input.selectedFeedCount < 3;
+    const syncKey = new Date().toISOString();
 
-    const profile = profileRefresh.profile;
-    const [feed, hotlist] = await Promise.all([this.store.loadFeed(), this.store.loadHotlist()]);
-    const watched = await this.store.loadWatched();
+    const signalEntries: Array<{
+      ownerMid: string;
+      ownerName: string;
+      bvid: string;
+      source: "hot" | "search";
+      keyword?: string;
+    }> = [];
 
-    const matched = this.matcher.match({
-      feedItems: feed.items,
-      hotItems: hotlist.items,
-      interests: profile,
-      eventFreshWindowMs: this.getConfig().browse.eventFreshWindowMs
-    });
-
-    const unseen = matched.filter((candidate) => !watched.has(candidate.item.bvid)).slice(0, 5);
-    if (unseen.length === 0) {
-      return false;
-    }
-
-    const enriched = await this.enrichCandidates(cookie, unseen);
-    const materials = this.digestGenerator.build({
-      candidates: enriched,
-      maxItems: 5
-    });
-    if (materials.length === 0) {
-      return false;
-    }
-
-    let changed = false;
-
-    for (const entry of materials) {
-      const inserted = await this.memory.addTopic({
-        text: entry.previewText,
-        source: entry.source,
-        expiresAt: entry.expiresAt,
-        material: entry.material
+    for (const item of input.hotItems.slice(0, 12)) {
+      if (!item.ownerMid || !item.bvid || item.ownerMid === input.selfMid) {
+        continue;
+      }
+      signalEntries.push({
+        ownerMid: item.ownerMid,
+        ownerName: item.ownerName,
+        bvid: item.bvid,
+        source: "hot"
       });
-      changed = changed || inserted;
-      if (inserted) {
-        watched.add(entry.bvid);
+    }
+
+    for (const keyword of input.preferenceKeywords.slice(0, 2)) {
+      try {
+        const videos = await this.collector.searchVideos(input.cookie, keyword, 5);
+        for (const item of videos) {
+          if (!item.ownerMid || !item.bvid || item.ownerMid === input.selfMid) {
+            continue;
+          }
+          signalEntries.push({
+            ownerMid: item.ownerMid,
+            ownerName: item.ownerName,
+            bvid: item.bvid,
+            source: "search",
+            keyword
+          });
+        }
+      } catch (error) {
+        logger.warn("browse", "bilibili-search-expand-failed", { keyword }, error);
       }
     }
 
-    if (changed) {
-      await this.store.saveWatched(watched);
-    }
-    return changed;
-  }
+    await this.store.mergeCandidateSignals({
+      syncKey,
+      seenAt: syncKey,
+      entries: signalEntries
+    });
+    const refreshed = await this.store.getState();
+    const weekFollowCount = refreshed.recentAutoFollows.filter(
+      (entry) => now - new Date(entry.followedAt).getTime() <= 7 * 24 * 60 * 60 * 1000
+    ).length;
 
-  private async enrichCandidates(cookie: string, candidates: MatchedCandidate[]): Promise<DigestInputCandidate[]> {
-    const enriched: DigestInputCandidate[] = [];
+    const candidates = refreshed.candidateSignals
+      .filter((candidate) => !refreshed.knownFollowedMids.includes(candidate.ownerMid))
+      .sort((left, right) => {
+        const leftSyncs = new Set(left.syncKeys).size;
+        const rightSyncs = new Set(right.syncKeys).size;
+        if (rightSyncs !== leftSyncs) {
+          return rightSyncs - leftSyncs;
+        }
+        return new Set(right.videos.map((video) => video.bvid)).size - new Set(left.videos.map((video) => video.bvid)).size;
+      });
 
     for (const candidate of candidates) {
-      const next: DigestInputCandidate = {
-        ...candidate
-      };
+      if (
+        !canAutoFollowCandidate({
+          candidate,
+          nowMs: now,
+          lastAutoFollowAt: refreshed.lastAutoFollowAt,
+          autoFollowTodayCount: refreshed.autoFollowTodayCount,
+          weekFollowCount,
+          totalFollowCount: refreshed.recentAutoFollows.length,
+          limits: AUTO_FOLLOW_LIMITS
+        })
+      ) {
+        continue;
+      }
+
+      const reason = describeAutoFollowReason({
+        candidate,
+        coldStart
+      });
 
       try {
-        next.detail = await this.collector.fetchVideoDetail(cookie, candidate.item.bvid);
-      } catch {
-        // ignore per-item detail failure
-      }
-
-      const aid = candidate.item.aid;
-      if (typeof aid === "number" && aid > 0) {
-        try {
-          next.topComments = await this.collector.fetchTopComments(cookie, aid, 5);
-        } catch {
-          // ignore per-item comment failure
+        await this.collector.followUser(input.cookie, candidate.ownerMid);
+        const record: BrowseAutoFollowRecord = {
+          followedAt: new Date().toISOString(),
+          upMid: candidate.ownerMid,
+          upName: candidate.ownerName,
+          reason,
+          accountUrl: buildAccountUrl(candidate.ownerMid)
+        };
+        await this.store.markKnownFollowed(candidate.ownerMid);
+        await this.store.recordAutoFollow(record);
+        return record;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        if (/已关注|重复/i.test(message)) {
+          await this.store.markKnownFollowed(candidate.ownerMid);
+          continue;
         }
+        logger.warn("browse", "bilibili-auto-follow-failed", { mid: candidate.ownerMid, reason }, error);
+        return null;
       }
-
-      enriched.push(next);
     }
 
-    return enriched;
-  }
-
-  private async refreshInterestsIfNeeded(): Promise<{
-    profile: InterestProfile;
-    tokenUsed: number;
-  }> {
-    const current = await this.memory.getInterestProfile();
-    const history = await this.memory.listHistory({
-      resourceId: PRIMARY_RESOURCE_ID,
-      threadId: PRIMARY_THREAD_ID,
-      limit: 120,
-      offset: 0
-    });
-
-    const userMessages = history.filter((message) => message.role === "user");
-    if (userMessages.length === 0) {
-      return {
-        profile: current,
-        tokenUsed: 0
-      };
-    }
-
-    const latestUserTimestamp = userMessages.reduce((latest, message) => {
-      const ts = new Date(message.timestamp).getTime();
-      return Number.isFinite(ts) && ts > latest ? ts : latest;
-    }, 0);
-
-    const currentUpdatedAt = new Date(current.updatedAt).getTime();
-    if (Number.isFinite(currentUpdatedAt) && latestUserTimestamp <= currentUpdatedAt) {
-      return {
-        profile: current,
-        tokenUsed: 0
-      };
-    }
-
-    const transcript = userMessages
-      .slice(0, 80)
-      .reverse()
-      .map((message) => `${message.timestamp} 用户: ${message.text}`)
-      .join("\n");
-
-    const config = this.getConfig();
-    const model = this.modelFactory.getChatModel();
-
-    const result = await generateObject({
-      model,
-      providerOptions: resolveOpenAIStoreOption(config),
-      schema: interestSchema,
-      system: [
-        "你负责从用户聊天里提取兴趣画像标签。",
-        "输出 games/creators/domains/dislikes/keywords。",
-        "只保留稳定兴趣，不要把一次性的短句当兴趣。",
-        "每个数组去重、短词优先。"
-      ].join("\n"),
-      prompt: [
-        `当前兴趣画像:\n${JSON.stringify(current, null, 2)}`,
-        `最近用户消息:\n${transcript}`,
-        "请给出更新后的标签数组。"
-      ].join("\n\n"),
-      maxOutputTokens: 500
-    });
-
-    const parsed = interestSchema.parse(result.object ?? {
-      games: [],
-      creators: [],
-      domains: [],
-      dislikes: [],
-      keywords: []
-    });
-
-    const merged: InterestProfile = normalizeInterestProfile({
-      games: uniq([...current.games, ...parsed.games]),
-      creators: uniq([...current.creators, ...parsed.creators]),
-      domains: uniq([...current.domains, ...parsed.domains]),
-      dislikes: uniq([...current.dislikes, ...parsed.dislikes]),
-      keywords: uniq([...current.keywords, ...parsed.keywords]),
-      updatedAt: new Date().toISOString()
-    });
-
-    const usage = parseUsageTokens((result as { usage?: unknown }).usage ?? result.usage);
-    const tokenUsed =
-      usage.tokens > 0 ? usage.tokens : estimateTokensFromText(transcript, JSON.stringify(parsed));
-
-    reportTokenUsage({
-      source: "browse:bilibili-interest",
-      usage: result.usage,
-      inputText: transcript,
-      outputText: JSON.stringify(parsed)
-    });
-
-    const persisted = await this.memory.saveInterestProfile(merged);
-    return {
-      profile: persisted,
-      tokenUsed
-    };
+    return null;
   }
 }

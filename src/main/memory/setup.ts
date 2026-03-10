@@ -207,6 +207,11 @@ export class YobiMemory {
     return this.topicStore.clearTopicPool();
   }
 
+  async clearTopicsBySourcePrefixes(prefixes: string[]): Promise<number> {
+    await this.init();
+    return this.topicStore.clearBySourcePrefixes(prefixes);
+  }
+
   async markUsed(topicId: string): Promise<void> {
     await this.init();
     await this.topicStore.markUsed(topicId.trim());

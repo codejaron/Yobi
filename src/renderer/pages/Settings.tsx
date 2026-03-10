@@ -92,8 +92,8 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     sections: [
       {
         id: "bilibili",
-        label: "Bilibili 浏览",
-        description: "授权、采集与内容发现策略"
+        label: "Bilibili 素材",
+        description: "授权、同步与自动关注"
       },
       {
         id: "proactive",
@@ -274,12 +274,14 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
           tone: status?.browseStatus.authState === "active" ? "good" : "warn",
           detail: status?.browseStatus.pausedReason
             ? `当前暂停：${status.browseStatus.pausedReason}`
-            : "内容采集与摘要能力已启用"
+            : status?.browseStatus.lastSyncAt
+              ? `最近同步：${new Date(status.browseStatus.lastSyncAt).toLocaleString()}`
+              : "素材同步器已启用，等待首次同步"
         }
       : {
           badge: "关闭",
           tone: "neutral",
-          detail: "未启用 Bilibili 浏览"
+          detail: "未启用 Bilibili 素材同步"
         },
     proactive: proactiveEnabled
       ? {

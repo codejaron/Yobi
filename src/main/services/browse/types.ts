@@ -1,4 +1,4 @@
-import type { BrowseTopicMaterial, BrowseAuthState } from "@shared/types";
+import type { BrowseAuthState, BrowseAutoFollowRecord } from "@shared/types";
 
 export interface BilibiliVideoItem {
   bvid: string;
@@ -10,7 +10,7 @@ export interface BilibiliVideoItem {
   cover?: string;
   description?: string;
   tags: string[];
-  source: "feed" | "hot";
+  source: "feed" | "hot" | "search";
   view?: number;
   durationSec?: number;
   like?: number;
@@ -29,15 +29,37 @@ export interface HotlistSnapshot {
   items: BilibiliVideoItem[];
 }
 
+export interface BrowseSyncHistoryEntry {
+  syncedAt: string;
+  selectedFeedCount: number;
+}
+
+export interface BrowseCandidateSignal {
+  ownerMid: string;
+  ownerName: string;
+  syncKeys: string[];
+  searchKeywords: string[];
+  videos: Array<{
+    bvid: string;
+    seenAt: string;
+    source: "hot" | "search";
+  }>;
+}
+
 export interface BilibiliBrowseState {
   authState: BrowseAuthState;
   pausedReason: string | null;
   lastNavCheckAt: string | null;
-  lastCollectAt: string | null;
-  lastDigestAt: string | null;
-  todayDate: string;
-  todayTokenUsed: number;
-  todayEventShares: number;
+  lastSyncAt: string | null;
+  preferenceFactCount: number;
+  recentFactCount: number;
+  lastAutoFollowAt: string | null;
+  autoFollowTodayDate: string;
+  autoFollowTodayCount: number;
+  recentAutoFollows: BrowseAutoFollowRecord[];
+  syncHistory: BrowseSyncHistoryEntry[];
+  candidateSignals: BrowseCandidateSignal[];
+  knownFollowedMids: string[];
   qrSession:
     | {
         qrcodeKey: string;
@@ -47,6 +69,7 @@ export interface BilibiliBrowseState {
       }
     | null;
 }
+
 
 export interface MatchedCandidate {
   item: BilibiliVideoItem;
@@ -63,5 +86,5 @@ export interface DigestInputCandidate extends MatchedCandidate {
     durationSec?: number;
     pubTs?: number;
   };
-  topComments?: BrowseTopicMaterial["topComments"];
+  topComments?: Array<{ text: string; likes: number }>;
 }

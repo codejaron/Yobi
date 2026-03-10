@@ -37,12 +37,8 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
             tokens: 100,
             estimatedTokens: 0
           },
-          "browse:bilibili-interest": {
-            tokens: 20,
-            estimatedTokens: 0
-          },
           "background:fact-extraction": {
-            tokens: 10,
+            tokens: 30,
             estimatedTokens: 0
           },
           "background:daily-summary": {
@@ -105,17 +101,17 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
   assert.equal(today.estimatedTokens, 20);
   assert.equal(today.sourceTotals.chat.tokens, 100);
   assert.equal(today.sourceTotals.background.tokens, 60);
-  assert.equal(today.backgroundDetails[0]?.label, "B站兴趣提取");
-  assert.equal(today.backgroundDetails[0]?.tokens, 20);
-  assert.equal(today.backgroundDetails[2]?.label, "每日总结");
-  assert.equal(today.backgroundDetails[2]?.tokens, 8);
-  assert.equal(today.backgroundDetails[3]?.label, "画像更新");
-  assert.equal(today.backgroundDetails[3]?.tokens, 6);
-  assert.equal(today.backgroundDetails[4]?.label, "反思");
-  assert.equal(today.backgroundDetails[4]?.tokens, 9);
-  assert.equal(today.backgroundDetails[5]?.label, "主动推送");
-  assert.equal(today.backgroundDetails[5]?.tokens, 7);
-  assert.equal(today.backgroundDetails.length, 6);
+  assert.equal(today.backgroundDetails[0]?.label, "事实提取");
+  assert.equal(today.backgroundDetails[0]?.tokens, 30);
+  assert.equal(today.backgroundDetails[1]?.label, "每日总结");
+  assert.equal(today.backgroundDetails[1]?.tokens, 8);
+  assert.equal(today.backgroundDetails[2]?.label, "画像更新");
+  assert.equal(today.backgroundDetails[2]?.tokens, 6);
+  assert.equal(today.backgroundDetails[3]?.label, "反思");
+  assert.equal(today.backgroundDetails[3]?.tokens, 9);
+  assert.equal(today.backgroundDetails[4]?.label, "主动推送");
+  assert.equal(today.backgroundDetails[4]?.tokens, 7);
+  assert.equal(today.backgroundDetails.length, 5);
 
   const sevenDays = aggregateTokenStats(status, {
     period: "7d",
@@ -182,5 +178,5 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
   assert.equal(result.trendWindowDays, 7);
   assert.equal(result.trendBars.length, 7);
   assert.equal(result.sourceTotals.claw.label, "待接入");
-  assert.equal(result.backgroundDetails[5]?.tokens, 80);
+  assert.equal(result.backgroundDetails[4]?.tokens, 80);
 });

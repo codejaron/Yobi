@@ -82,7 +82,8 @@ export interface CompanionApi {
     authState: BrowseAuthState;
   }>;
   triggerTopicRecall(): Promise<{ accepted: boolean; message: string }>;
-  triggerTopicBrowse(): Promise<{ accepted: boolean; message: string }>;
+  triggerBilibiliSync(): Promise<{ accepted: boolean; message: string }>;
+  openBilibiliAccount(): Promise<{ opened: boolean; message: string }>;
   deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }>;
   clearTopicPool(): Promise<{ accepted: boolean; message: string }>;
   openSystemPermissionSettings(

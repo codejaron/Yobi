@@ -70,8 +70,11 @@ const api = {
   triggerTopicRecall() {
     return ipcRenderer.invoke('topic:recall:trigger');
   },
-  triggerTopicBrowse() {
-    return ipcRenderer.invoke('topic:browse:trigger');
+  triggerBilibiliSync() {
+    return ipcRenderer.invoke('browse:bili:sync:trigger');
+  },
+  openBilibiliAccount() {
+    return ipcRenderer.invoke('browse:bili:account:open');
   },
   deleteTopicPoolItem(topicId) {
     return ipcRenderer.invoke('topic-pool:item:delete', { topicId });

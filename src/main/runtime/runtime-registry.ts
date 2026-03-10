@@ -10,6 +10,7 @@ import { ModelFactory } from "@main/core/model-factory";
 import { YobiMemory } from "@main/memory/setup";
 import { ConversationEngine } from "@main/core/conversation";
 import { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
+import { BilibiliSyncCoordinator } from "@main/services/browse/bilibili-sync-coordinator";
 import { TelegramChannel } from "@main/channels/telegram";
 import { ChannelRouter } from "@main/channels/router";
 import { ConsoleChannel } from "@main/channels/console";
@@ -84,6 +85,7 @@ export interface RuntimeRegistry {
   backgroundWorker: BackgroundTaskWorkerService;
   conversation: ConversationEngine;
   bilibiliBrowse: BilibiliBrowseService;
+  bilibiliSyncCoordinator: BilibiliSyncCoordinator;
   kernel: KernelEngine;
   channelRouter: ChannelRouter;
   telegram: TelegramChannel;
@@ -184,7 +186,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
 
   const bilibiliBrowse = new BilibiliBrowseService(
     paths,
-    modelFactory,
     memory,
     () => configStore.getConfig(),
     async (cookie) => {
@@ -331,10 +332,18 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     getConfig: () => configStore.getConfig()
   });
 
+  const bilibiliSyncCoordinator = new BilibiliSyncCoordinator({
+    service: bilibiliBrowse,
+    logger,
+    getConfig: () => configStore.getConfig(),
+    onStatusChange: () => callbackBridge.emitStatus()
+  });
+
   const lifecycleCoordinator = new LifecycleCoordinator({
     keepAwake,
     petService,
     reminderService,
+    bilibiliSyncCoordinator,
     getConfig: () => configStore.getConfig()
   });
 
@@ -344,6 +353,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     stateStore,
     kernel,
     bilibiliBrowse,
+    bilibiliSyncCoordinator,
     systemPermissionsService,
     resourceId: input.resourceId,
     threadId: input.threadId,
@@ -383,6 +393,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     backgroundWorker,
     conversation,
     bilibiliBrowse,
+    bilibiliSyncCoordinator,
     kernel,
     channelRouter,
     telegram,

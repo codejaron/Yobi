@@ -117,7 +117,8 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     })
   );
   ipcMain.handle("topic:recall:trigger", () => runtime.triggerTopicRecall());
-  ipcMain.handle("topic:browse:trigger", () => runtime.triggerTopicBrowse());
+  ipcMain.handle("browse:bili:sync:trigger", () => runtime.triggerBilibiliSync());
+  ipcMain.handle("browse:bili:account:open", () => runtime.openBilibiliAccount());
   ipcMain.handle("topic-pool:item:delete", (_, payload: { topicId?: string }) =>
     runtime.deleteTopicPoolItem(payload?.topicId ?? "")
   );

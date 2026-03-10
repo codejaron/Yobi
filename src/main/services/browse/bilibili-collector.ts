@@ -1,7 +1,9 @@
-import type { FeedSnapshot, HotlistSnapshot, BilibiliVideoItem } from "./types";
 import { selectTopComments } from "./material-utils";
+import type { FeedSnapshot, HotlistSnapshot, BilibiliVideoItem } from "./types";
 
 const BILIBILI_BASE = "https://api.bilibili.com";
+const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -42,21 +44,47 @@ function safeUrl(bvid: string): string {
   return `https://www.bilibili.com/video/${bvid}`;
 }
 
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function cookieValue(cookie: string, key: string): string {
+  const entries = cookie
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const currentKey = entry.slice(0, separator).trim();
+    if (currentKey !== key) {
+      continue;
+    }
+    return entry.slice(separator + 1).trim();
+  }
+  return "";
+}
+
 export class BilibiliCollector {
-  private createHeaders(cookie: string): Record<string, string> {
+  private createHeaders(cookie: string, extra?: Record<string, string>): Record<string, string> {
     return {
       cookie,
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "user-agent": DEFAULT_USER_AGENT,
       referer: "https://www.bilibili.com/",
-      origin: "https://www.bilibili.com"
+      origin: "https://www.bilibili.com",
+      ...extra
     };
   }
 
-  private async fetchJson(path: string, cookie: string): Promise<Record<string, unknown>> {
+  private async fetchJson(path: string, cookie: string, init?: RequestInit): Promise<Record<string, unknown>> {
     const response = await fetch(`${BILIBILI_BASE}${path}`, {
-      method: "GET",
-      headers: this.createHeaders(cookie)
+      method: init?.method ?? "GET",
+      headers: {
+        ...this.createHeaders(cookie, init?.headers ? (init.headers as Record<string, string>) : undefined)
+      },
+      body: init?.body
     });
 
     const payload = (await response.json().catch(() => null)) as
@@ -78,15 +106,31 @@ export class BilibiliCollector {
   async checkLogin(cookie: string): Promise<{
     isLogin: boolean;
     uname: string;
+    mid: string;
     message: string;
   }> {
     const data = await this.fetchJson("/x/web-interface/nav", cookie);
     const isLogin = data.isLogin === true || data.isLogin === 1;
     const uname = asString(data.uname);
+    const mid = String(asNumber(data.mid) ?? "").trim();
     return {
       isLogin,
       uname,
+      mid,
       message: isLogin ? `已登录${uname ? `(${uname})` : ""}` : "Cookie 已失效"
+    };
+  }
+
+  async fetchRelationStat(cookie: string, vmid: string): Promise<{ following: number }> {
+    const value = vmid.trim();
+    if (!value) {
+      return {
+        following: 0
+      };
+    }
+    const data = await this.fetchJson(`/x/relation/stat?vmid=${encodeURIComponent(value)}`, cookie);
+    return {
+      following: asNumber(data.following) ?? 0
     };
   }
 
@@ -110,6 +154,94 @@ export class BilibiliCollector {
         items: this.parseHotlist(hotData)
       }
     };
+  }
+
+  async searchVideos(cookie: string, keyword: string, limit = 6): Promise<BilibiliVideoItem[]> {
+    const term = keyword.trim();
+    if (!term) {
+      return [];
+    }
+    const data = await this.fetchJson(
+      `/x/web-interface/search/type?search_type=video&keyword=${encodeURIComponent(term)}&page=1&page_size=${encodeURIComponent(String(limit))}`,
+      cookie
+    );
+    const result = Array.isArray(data.result) ? data.result : [];
+    const parsed: BilibiliVideoItem[] = [];
+
+    for (const entry of result) {
+      const item = asRecord(entry);
+      if (!item) {
+        continue;
+      }
+      const bvid = asString(item.bvid);
+      const title = stripHtml(asString(item.title));
+      if (!bvid || !title) {
+        continue;
+      }
+      const tags = [
+        ...compactStrings(asString(item.tag).split(",").map((value) => value.trim()).filter(Boolean)),
+        term
+      ]
+        .map((value) => stripHtml(value))
+        .filter(Boolean)
+        .slice(0, 10);
+
+      parsed.push({
+        bvid,
+        aid: asNumber(item.aid),
+        title,
+        ownerName: stripHtml(asString(item.author)) || "搜索结果",
+        ownerMid: String(asNumber(item.mid) ?? "").trim(),
+        cover: asString(item.pic),
+        description: stripHtml(asString(item.description)),
+        tags,
+        source: "search",
+        view: asNumber(item.play),
+        durationSec: asNumber(item.duration),
+        like: asNumber(item.like),
+        pubTs: asNumber(item.pubdate),
+        url: safeUrl(bvid)
+      });
+      if (parsed.length >= limit) {
+        break;
+      }
+    }
+
+    return parsed;
+  }
+
+  async followUser(cookie: string, targetMid: string): Promise<void> {
+    const mid = targetMid.trim();
+    const csrf = cookieValue(cookie, "bili_jct");
+    if (!mid || !csrf) {
+      throw new Error("缺少关注所需的账号或 csrf");
+    }
+
+    const body = new URLSearchParams({
+      fid: mid,
+      act: "1",
+      re_src: "11",
+      csrf,
+      csrf_token: csrf
+    });
+
+    const response = await fetch(`${BILIBILI_BASE}/x/relation/modify`, {
+      method: "POST",
+      headers: this.createHeaders(cookie, {
+        "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
+      }),
+      body
+    });
+
+    const payload = (await response.json().catch(() => null)) as {
+      code?: number;
+      message?: string;
+    } | null;
+
+    if (!response.ok || !payload || payload.code !== 0) {
+      const detail = payload?.message?.trim() || `HTTP ${response.status}`;
+      throw new Error(`自动关注失败：${detail}`);
+    }
   }
 
   async fetchVideoDetail(cookie: string, bvid: string): Promise<{
@@ -235,7 +367,7 @@ export class BilibiliCollector {
         cid: asNumber(archive.cid),
         title,
         ownerName: asString(author?.name) || asString(asRecord(archive.owner)?.name) || "未知 UP",
-        ownerMid: asString(author?.mid),
+        ownerMid: String(asNumber(author?.mid) ?? asNumber(asRecord(archive.owner)?.mid) ?? "").trim(),
         cover: asString(archive.cover),
         description: asString(archive.desc),
         tags: compactStrings(archive.tname ? [archive.tname] : []),
@@ -288,7 +420,7 @@ export class BilibiliCollector {
         cid: asNumber(item.cid),
         title,
         ownerName: asString(owner?.name) || "热门内容",
-        ownerMid: asString(owner?.mid),
+        ownerMid: String(asNumber(owner?.mid) ?? "").trim(),
         cover: asString(item.pic),
         description: asString(item.desc),
         tags,
