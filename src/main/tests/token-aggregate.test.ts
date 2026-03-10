@@ -22,9 +22,6 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
   const status: TokenStatsStatus = {
     retentionDays: 90,
     lastUpdatedAt: "2026-03-10T04:00:00.000Z",
-    integrations: {
-      claw: "pending"
-    },
     days: [
       {
         dayKey: dayOffset(now, 0),
@@ -132,9 +129,6 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
   const status: TokenStatsStatus = {
     retentionDays: 90,
     lastUpdatedAt: "2026-03-10T04:00:00.000Z",
-    integrations: {
-      claw: "pending"
-    },
     days: [
       {
         dayKey: dayOffset(now, 0),
@@ -177,6 +171,5 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
   assert.equal(result.trendDowngradedOnMobile, true);
   assert.equal(result.trendWindowDays, 7);
   assert.equal(result.trendBars.length, 7);
-  assert.equal(result.sourceTotals.claw.label, "待接入");
   assert.equal(result.backgroundDetails[4]?.tokens, 80);
 });

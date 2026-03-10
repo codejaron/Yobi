@@ -276,16 +276,13 @@ export function McpPage({
     next: McpServer[];
     appended: number;
     updated: number;
-    skippedLocked: number;
   } => {
     const next = [...config.tools.mcp.servers];
     let appended = 0;
     let updated = 0;
-    let skippedLocked = 0;
 
     for (const server of imported) {
       if (server.id === "exa") {
-        skippedLocked += 1;
         continue;
       }
 
@@ -303,8 +300,7 @@ export function McpPage({
     return {
       next,
       appended,
-      updated,
-      skippedLocked
+      updated
     };
   };
 
@@ -328,7 +324,7 @@ export function McpPage({
       <Card>
         <CardHeader>
           <CardTitle>JSON 导入 / 导出</CardTitle>
-          <CardDescription>支持 JSON 导入导出。</CardDescription>
+          <CardDescription>支持自定义 MCP Server 的 JSON 导入导出。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -395,11 +391,9 @@ export function McpPage({
                   setNotice({
                     type: "success",
                     text:
-                      merged.skippedLocked > 0
-                        ? `导入成功：新增 ${merged.appended} 个，更新 ${merged.updated} 个，忽略内置 Exa ${merged.skippedLocked} 项。`
-                        : merged.updated > 0
-                          ? `导入成功：新增 ${merged.appended} 个，更新 ${merged.updated} 个。`
-                          : `导入成功：新增 ${merged.appended} 个 Server。`
+                      merged.updated > 0
+                        ? `导入成功：新增 ${merged.appended} 个，更新 ${merged.updated} 个。`
+                        : `导入成功：新增 ${merged.appended} 个 Server。`
                   });
                 } catch (error) {
                   setNotice({
@@ -427,9 +421,9 @@ export function McpPage({
               onChange={(event) => setJsonText(event.target.value)}
               className="font-mono text-xs leading-6"
               placeholder={`{
-  "exa": {
+  "docs": {
     "type": "remote",
-    "url": "https://mcp.exa.ai/mcp"
+    "url": "https://example.com/mcp"
   }
 }`}
             />
@@ -440,7 +434,7 @@ export function McpPage({
       <Card>
         <CardHeader>
           <CardTitle>MCP Server 列表</CardTitle>
-          <CardDescription>每个 Server 可单独开关；内置 Exa 固定锁定。</CardDescription>
+          <CardDescription>管理自定义 MCP Server。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {config.tools.mcp.servers.length === 0 ? (
@@ -453,19 +447,15 @@ export function McpPage({
               >
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium">Server #{index + 1}</p>
-                  {server.id === "exa" ? (
-                    <span className="text-xs text-muted-foreground">内置锁定</span>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">
-                        {server.enabled ? "已开启" : "已关闭"}
-                      </span>
-                      <Switch
-                        checked={server.enabled}
-                        onChange={(checked) => setServerEnabled(server.id, checked)}
-                      />
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {server.enabled ? "已开启" : "已关闭"}
+                    </span>
+                    <Switch
+                      checked={server.enabled}
+                      onChange={(checked) => setServerEnabled(server.id, checked)}
+                    />
+                  </div>
                 </div>
 
                 <pre className="overflow-auto rounded-md border border-border/70 bg-muted/40 p-3 font-mono text-xs leading-6">

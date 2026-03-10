@@ -6,7 +6,6 @@ import type { KernelEngine } from "@main/kernel/engine";
 import type { SystemPermissionsService } from "@main/services/system-permissions";
 import type { RuntimeActivityCoordinator } from "@main/runtime/activity-coordinator";
 import type { ChannelCoordinator } from "@main/runtime/channel-coordinator";
-import type { ClawCoordinator } from "@main/runtime/claw-coordinator";
 import type { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
 
 interface StatusCoordinatorInput {
@@ -18,7 +17,6 @@ interface StatusCoordinatorInput {
   systemPermissionsService: SystemPermissionsService;
   activityCoordinator: RuntimeActivityCoordinator;
   channelCoordinator: ChannelCoordinator;
-  clawCoordinator: ClawCoordinator;
   lifecycleCoordinator: LifecycleCoordinator;
   resourceId: string;
   threadId: string;
@@ -29,7 +27,6 @@ export class RuntimeStatusCoordinator {
 
   async collectStatus(): Promise<AppStatus> {
     this.input.systemPermissionsService.refreshSystemPermissions();
-    const openclawStatus = this.input.clawCoordinator.getOpenClawStatus();
     const [browseStatus, tokenStats, historyCount, topicPool] = await Promise.allSettled([
       this.input.bilibiliBrowse.getStatus(),
       this.input.tokenStatsService.getStatus(),
@@ -51,8 +48,6 @@ export class RuntimeStatusCoordinator {
       keepAwakeActive: this.input.lifecycleCoordinator.isKeepAwakeActive(),
       topicPool: topicPool.status === "fulfilled" ? topicPool.value : [],
       petOnline: this.input.lifecycleCoordinator.isPetOnline(),
-      openclawOnline: openclawStatus.online,
-      openclawStatus: openclawStatus.message,
       browseStatus:
         browseStatus.status === "fulfilled"
           ? browseStatus.value
@@ -73,10 +68,7 @@ export class RuntimeStatusCoordinator {
           : {
               retentionDays: 90,
               lastUpdatedAt: null,
-              days: [],
-              integrations: {
-                claw: "pending"
-              }
+              days: []
             },
       systemPermissions: this.input.systemPermissionsService.getSnapshot(),
       embedder: this.input.memory.getEmbedderStatus(),

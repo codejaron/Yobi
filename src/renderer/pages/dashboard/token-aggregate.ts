@@ -30,10 +30,6 @@ export interface TokenAggregateResult {
   sourceTotals: {
     chat: TokenBreakdownItem;
     background: TokenBreakdownItem;
-    claw: {
-      status: "pending" | "ready";
-      label: string;
-    };
   };
   backgroundDetails: TokenBreakdownItem[];
   trendBars: TokenTrendBar[];
@@ -172,10 +168,6 @@ export function aggregateTokenStats(
       background: {
         label: "后台任务",
         ...backgroundTotals
-      },
-      claw: {
-        status: current.integrations.claw,
-        label: current.integrations.claw === "ready" ? "已接入" : "待接入"
       }
     },
     backgroundDetails: [

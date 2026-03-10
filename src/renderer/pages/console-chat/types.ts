@@ -10,7 +10,7 @@ export interface ConsoleMessage {
   role: MessageRole;
   text: string;
   state: MessageState;
-  source?: "claw" | "yobi";
+  source?: "yobi";
 }
 
 export interface ActionItem {

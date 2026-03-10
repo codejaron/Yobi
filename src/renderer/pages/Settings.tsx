@@ -11,11 +11,11 @@ import {
   normalizeHotkeyString
 } from "@renderer/pages/settings/hotkey-utils";
 import { MemorySettingsCard } from "@renderer/pages/settings/MemorySettingsCard";
-import { OpenClawSettingsCard } from "@renderer/pages/settings/OpenClawSettingsCard";
 import { PetRuntimeCard } from "@renderer/pages/settings/PetRuntimeCard";
 import { ProactiveSettingsCard } from "@renderer/pages/settings/ProactiveSettingsCard";
 import { QQChannelCard } from "@renderer/pages/settings/QQChannelCard";
 import { TelegramChannelCard } from "@renderer/pages/settings/TelegramChannelCard";
+import { ToolSettingsCard } from "@renderer/pages/settings/ToolSettingsCard";
 import { VoiceEnginesCard } from "@renderer/pages/settings/VoiceEnginesCard";
 import { formatEmbedderDisplay } from "@renderer/pages/settings/memory-display";
 
@@ -28,7 +28,7 @@ type SettingsSectionId =
   | "bilibili"
   | "proactive"
   | "memory"
-  | "openclaw";
+  | "tools";
 
 type SectionTone = "good" | "warn" | "neutral" | "info";
 
@@ -111,9 +111,9 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
         description: "Embedding、上下文与记忆策略"
       },
       {
-        id: "openclaw",
-        label: "OpenClaw",
-        description: "网关、模型和浏览器能力"
+        id: "tools",
+        label: "工具",
+        description: "Exa 搜索、浏览器、系统与文件能力"
       }
     ]
   }
@@ -219,7 +219,6 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
   const petEnabled = config.pet.enabled;
   const browseEnabled = config.browse.enabled;
   const proactiveEnabled = config.proactive.enabled;
-  const openclawEnabled = config.openclaw.enabled;
   const embedderState = status?.embedder ?? {
     status: config.memory.embedding.enabled ? "loading" : "disabled",
     mode: config.memory.embedding.enabled ? "bm25-only" : "disabled",
@@ -312,17 +311,20 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
           : "Hybrid 检索已启用"
         : "向量记忆已关闭"
     },
-    openclaw: openclawEnabled
-      ? {
-          badge: status?.openclawOnline ? "在线" : "待连接",
-          tone: status?.openclawOnline ? "good" : "warn",
-          detail: status?.openclawStatus || "OpenClaw 网关已启用"
-        }
-      : {
-          badge: "关闭",
-          tone: "neutral",
-          detail: "未启用 OpenClaw"
-        }
+    tools: {
+      badge:
+        config.tools.browser.enabled ||
+        config.tools.system.enabled ||
+        config.tools.file.writeEnabled ||
+        config.tools.exa.enabled
+          ? "已配置"
+          : "关闭",
+      tone:
+        config.tools.exa.enabled || config.tools.browser.enabled || config.tools.system.enabled
+          ? "good"
+          : "neutral",
+      detail: `Exa ${config.tools.exa.enabled ? "开启" : "关闭"} · 浏览器 ${config.tools.browser.enabled ? "开启" : "关闭"} · 系统 ${config.tools.system.enabled ? "开启" : "关闭"}`
+    }
   };
 }
 
@@ -335,47 +337,11 @@ export function SettingsPage({
   status: AppStatus | null;
   setConfig: (next: AppConfig) => void;
 }) {
-  const clawProviderOptions = config.providers.map((provider) => ({
-    id: provider.id,
-    label: provider.enabled ? provider.label : `${provider.label}（已停用）`
-  }));
-  const clawPrimarySelection = (() => {
-    const route = config.modelRouting.chat;
-    const raw = config.openclaw.modelPrimary.trim();
-    if (!raw) {
-      return {
-        followChat: true,
-        providerId: route.providerId,
-        modelId: route.model
-      };
-    }
-
-    const slashIndex = raw.indexOf("/");
-    if (slashIndex <= 0 || slashIndex >= raw.length - 1) {
-      return {
-        followChat: false,
-        providerId: route.providerId,
-        modelId: raw
-      };
-    }
-
-    return {
-      followChat: false,
-      providerId: raw.slice(0, slashIndex),
-      modelId: raw.slice(slashIndex + 1)
-    };
-  })();
-  const clawFallbackInput = config.openclaw.modelFallbacks.join(", ");
   const isMac =
     typeof navigator !== "undefined" &&
     /Mac|iPhone|iPad|iPod/.test(navigator.platform);
   const [importingModel, setImportingModel] = useState(false);
   const [modelImportNotice, setModelImportNotice] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
-  const [openingOpenClawWebUi, setOpeningOpenClawWebUi] = useState(false);
-  const [openClawWebUiNotice, setOpenClawWebUiNotice] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
@@ -514,30 +480,6 @@ export function SettingsPage({
     setIsRecordingPttHotkey(false);
   };
 
-  const openClawWebUi = async (): Promise<void> => {
-    if (openingOpenClawWebUi) {
-      return;
-    }
-
-    setOpeningOpenClawWebUi(true);
-    setOpenClawWebUiNotice(null);
-    try {
-      const result = await window.companion.openOpenClawWebUi();
-      setOpenClawWebUiNotice({
-        type: result.opened ? "success" : "error",
-        message: result.message
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "打开失败，请稍后重试。";
-      setOpenClawWebUiNotice({
-        type: "error",
-        message
-      });
-    } finally {
-      setOpeningOpenClawWebUi(false);
-    }
-  };
-
   const sectionSnapshots = useMemo(() => buildSectionSnapshots(config, status), [config, status]);
 
   const activeMeta = useMemo(
@@ -578,19 +520,8 @@ export function SettingsPage({
         return <ProactiveSettingsCard config={config} setConfig={setConfig} />;
       case "memory":
         return <MemorySettingsCard config={config} status={status} setConfig={setConfig} />;
-      case "openclaw":
-        return (
-          <OpenClawSettingsCard
-            config={config}
-            setConfig={setConfig}
-            clawProviderOptions={clawProviderOptions}
-            clawPrimarySelection={clawPrimarySelection}
-            clawFallbackInput={clawFallbackInput}
-            openClawWebUi={openClawWebUi}
-            openingOpenClawWebUi={openingOpenClawWebUi}
-            openClawWebUiNotice={openClawWebUiNotice}
-          />
-        );
+      case "tools":
+        return <ToolSettingsCard config={config} setConfig={setConfig} />;
       default:
         return null;
     }

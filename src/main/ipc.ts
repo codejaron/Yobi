@@ -2,14 +2,12 @@ import { BrowserWindow, dialog, ipcMain, shell, WebContents } from "electron";
 import type { OpenDialogOptions } from "electron";
 import type {
   AppConfig,
-  ClawEvent,
   CommandApprovalDecision
 } from "@shared/types";
 import type { CompanionRuntime } from "./app-runtime";
 
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
-const CLAW_EVENT_CHANNEL = "runtime:claw-event";
 const WHISPER_MODEL_PROGRESS_CHANNEL = "runtime:whisper-model-progress";
 
 interface IpcSubscription {
@@ -19,7 +17,6 @@ interface IpcSubscription {
 
 const statusSubscriptions = new Map<number, IpcSubscription>();
 const consoleRunSubscriptions = new Map<number, IpcSubscription>();
-const clawEventSubscriptions = new Map<number, IpcSubscription>();
 
 function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSubscription>): void {
   const current = subscriptions.get(target.id);
@@ -131,7 +128,6 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     ) => runtime.openSystemPermissionSettings(permission)
   );
   ipcMain.handle("system:permissions:reset", () => runtime.resetSystemPermissions());
-  ipcMain.handle("openclaw:webui:open", () => runtime.openOpenClawWebUi());
 
   ipcMain.handle("pet:model:import", async (event) => {
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
@@ -204,26 +200,12 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     ) => runtime.resolveConsoleApproval(payload)
   );
 
-  ipcMain.handle("claw:connect", () => runtime.clawConnect());
-  ipcMain.handle("claw:disconnect", () => runtime.clawDisconnect());
-  ipcMain.handle("claw:send", (_, payload: { message?: string }) =>
-    runtime.clawSend(payload?.message ?? "")
-  );
-  ipcMain.handle("claw:history", (_, payload: { limit?: number }) =>
-    runtime.clawHistory(payload?.limit ?? 50)
-  );
-  ipcMain.handle("claw:abort", () => runtime.clawAbort());
-
   ipcMain.on("status:subscribe", (event) => {
     subscribeToStatus(runtime, event.sender);
   });
 
   ipcMain.on("console:chat:subscribe", (event) => {
     subscribeToConsoleRun(runtime, event.sender);
-  });
-
-  ipcMain.on("claw:subscribe", (event) => {
-    subscribeToClawEvents(runtime, event.sender);
   });
 
   ipcMain.handle("open:path", (_, location: string) => {
@@ -278,32 +260,4 @@ function subscribeToConsoleRun(runtime: CompanionRuntime, target: WebContents): 
     onDestroyed
   });
   target.on("destroyed", onDestroyed);
-}
-
-function subscribeToClawEvents(runtime: CompanionRuntime, target: WebContents): void {
-  clearSubscription(target, clawEventSubscriptions);
-
-  const unsubscribe = runtime.onClawEvent((event: ClawEvent) => {
-    if (target.isDestroyed()) {
-      clearSubscription(target, clawEventSubscriptions);
-      return;
-    }
-
-    target.send(CLAW_EVENT_CHANNEL, event);
-  });
-
-  const onDestroyed = () => {
-    clearSubscription(target, clawEventSubscriptions);
-  };
-
-  clawEventSubscriptions.set(target.id, {
-    unsubscribe,
-    onDestroyed
-  });
-  target.on("destroyed", onDestroyed);
-
-  if (!target.isDestroyed()) {
-    target.send(CLAW_EVENT_CHANNEL, runtime.getClawConnectionEvent());
-    target.send(CLAW_EVENT_CHANNEL, runtime.getClawTaskMonitorEvent());
-  }
 }

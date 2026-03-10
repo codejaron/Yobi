@@ -320,7 +320,7 @@ test("searchRelevantFacts: BM25 can match Chinese two-character tokens and symbo
           fact: {
             entity: "用户",
             key: "技术",
-            value: "OpenClaw 3.0 用了 BM25 和 C++ 扩展",
+            value: "旧版本 3.0 工具链用了 BM25 和 C++ 扩展",
             category: "event",
             confidence: 0.8,
             ttl_class: "active"

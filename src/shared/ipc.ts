@@ -2,8 +2,6 @@ import type {
   AppConfig,
   AppStatus,
   BrowseAuthState,
-  ClawEvent,
-  ClawHistoryItem,
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
@@ -90,7 +88,6 @@ export interface CompanionApi {
     permission: keyof AppStatus["systemPermissions"]
   ): Promise<{ opened: boolean; prompted: boolean }>;
   resetSystemPermissions(): Promise<{ reset: boolean; message?: string }>;
-  openOpenClawWebUi(): Promise<{ opened: boolean; message: string }>;
   importPetModelFromDialog(): Promise<{
     canceled: boolean;
     modelDir?: string;
@@ -112,11 +109,4 @@ export interface CompanionApi {
     decision: CommandApprovalDecision;
   }): Promise<{ accepted: boolean }>;
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void;
-
-  clawConnect(): Promise<{ connected: boolean; message: string }>;
-  clawDisconnect(): Promise<{ connected: boolean; message: string }>;
-  clawSend(message: string): Promise<{ accepted: boolean; message: string }>;
-  clawHistory(limit?: number): Promise<{ items: ClawHistoryItem[] }>;
-  clawAbort(): Promise<{ accepted: boolean; message: string }>;
-  onClawEvent(listener: (event: ClawEvent) => void): () => void;
 }

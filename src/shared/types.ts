@@ -47,16 +47,7 @@ export const mcpServerSchema = z.discriminatedUnion("transport", [
   mcpStdioServerSchema
 ]);
 
-export const DEFAULT_MCP_SERVERS: Array<z.output<typeof mcpServerSchema>> = [
-  {
-    id: "exa",
-    label: "Exa Search",
-    enabled: true,
-    transport: "remote",
-    url: "https://mcp.exa.ai/mcp",
-    headers: {}
-  }
-] as const;
+export const DEFAULT_MCP_SERVERS: Array<z.output<typeof mcpServerSchema>> = [];
 
 const proactiveQuietHoursSchema = z
   .object({
@@ -306,11 +297,13 @@ export const appConfigSchema = z
         recentMessages: z.number().int().min(10).max(400).default(60),
         context: z
           .object({
-            memoryFloorTokens: z.number().int().min(200).max(8000).default(1200)
+            memoryFloorTokens: z.number().int().min(200).max(8000).default(1200),
+            maxPromptTokens: z.number().int().min(4000).max(24_000).default(24_000)
           })
           .strict()
           .default({
-            memoryFloorTokens: 1200
+            memoryFloorTokens: 1200,
+            maxPromptTokens: 24_000
           }),
         embedding: z
           .object({
@@ -391,33 +384,38 @@ export const appConfigSchema = z
       sessionReentryGapHours: 6,
       dailyTaskHour: 3
     }),
-    openclaw: z
-      .object({
-        enabled: z.boolean().default(false),
-        gatewayUrl: z.string().url().default("http://127.0.0.1:18789"),
-        approvalRequired: z.boolean().default(true),
-        modelPrimary: z.string().default(""),
-        modelFallbacks: z.array(z.string().min(1)).default([]),
-        thinkingDefault: z
-          .enum(["off", "low", "medium", "high", "xhigh", "minimal"])
-          .default("low"),
-        contextTokens: z.number().int().min(1).max(2_000_000).default(200_000),
-        timeoutSeconds: z.number().int().min(30).max(7_200).default(600),
-        browserEnabled: z.boolean().default(true),
-        browserProfile: z.enum(["openclaw", "chrome"]).default("openclaw"),
-        browserHeadless: z.boolean().default(false),
-        browserExecutablePath: z.string().default(""),
-        heartbeatEvery: z.string().default("30m"),
-        toolWebSearchEnabled: z.boolean().default(true),
-        toolWebFetchEnabled: z.boolean().default(true),
-        toolExecEnabled: z.boolean().default(true),
-        toolElevatedEnabled: z.boolean().default(false),
-        maxConcurrent: z.number().int().min(1).max(32).default(1),
-        sandboxMode: z.enum(["off", "non-main", "all"]).default("non-main")
-      })
-      .strict(),
     tools: z
       .object({
+        browser: z
+          .object({
+            enabled: z.boolean().default(false),
+            headless: z.boolean().default(false),
+            cdpPort: z.number().int().min(1000).max(65535).default(19222),
+            allowedDomains: z.array(z.string().min(1)).default([]),
+            blockPrivateNetwork: z.boolean().default(true)
+          })
+          .strict(),
+        system: z
+          .object({
+            enabled: z.boolean().default(false),
+            execEnabled: z.boolean().default(false),
+            allowedCommands: z.array(z.string().min(1)).default([]),
+            blockedPatterns: z.array(z.string().min(1)).default(["rm -rf", "sudo"]),
+            approvalRequired: z.boolean().default(true)
+          })
+          .strict(),
+        file: z
+          .object({
+            readEnabled: z.boolean().default(true),
+            writeEnabled: z.boolean().default(false),
+            allowedPaths: z.array(z.string().min(1)).default([])
+          })
+          .strict(),
+        exa: z
+          .object({
+            enabled: z.boolean().default(true)
+          })
+          .strict(),
         mcp: z
           .object({
             servers: z.array(mcpServerSchema).default(DEFAULT_MCP_SERVERS)
@@ -502,104 +500,7 @@ export type ConsoleRunEventV2 =
       type: "external-assistant-message";
       messageId: string;
       text: string;
-      source: "claw" | "yobi";
-      timestamp: string;
-    };
-
-export type ClawOrigin = "yobi-tool" | "claw-tab" | "unknown";
-
-export interface ClawHistoryItem {
-  id: string;
-  role: "assistant" | "user" | "system" | "tool";
-  text: string;
-  timestamp?: string;
-}
-
-export type ClawConnectionState =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "disconnected-manual";
-
-export type ClawTaskStatus = "idle" | "running" | "error";
-
-export interface ClawTaskSessionItem {
-  sessionKey: string;
-  displayName: string;
-  status: ClawTaskStatus;
-  activeRunCount: number;
-  updatedAt: string;
-  lastError?: string;
-  lastTransitionAt: string;
-}
-
-export type ClawEvent =
-  | {
-      type: "connection";
-      state: ClawConnectionState;
-      message: string;
-      timestamp: string;
-    }
-  | {
-      type: "user-message";
-      sessionKey: string;
-      text: string;
-      origin: ClawOrigin;
-      timestamp: string;
-    }
-  | {
-      type: "status";
-      sessionKey: string;
-      message: string;
-      timestamp: string;
-    }
-  | {
-      type: "assistant-delta";
-      sessionKey: string;
-      delta: string;
-      timestamp: string;
-    }
-  | {
-      type: "assistant-final";
-      sessionKey: string;
-      text: string;
-      origin: ClawOrigin;
-      timestamp: string;
-    }
-  | {
-      type: "tool";
-      sessionKey: string;
-      phase: "start" | "result" | "error";
-      toolName: string;
-      input?: unknown;
-      output?: unknown;
-      error?: string;
-      timestamp: string;
-    }
-  | {
-      type: "lifecycle";
-      sessionKey: string;
-      status: string;
-      detail?: string;
-      timestamp: string;
-    }
-  | {
-      type: "history";
-      sessionKey: string;
-      items: ClawHistoryItem[];
-      timestamp: string;
-    }
-  | {
-      type: "task-monitor";
-      sessions: ClawTaskSessionItem[];
-      timestamp: string;
-    }
-  | {
-      type: "error";
-      sessionKey?: string;
-      message: string;
-      code?: string;
+      source: "yobi";
       timestamp: string;
     };
 
@@ -611,7 +512,7 @@ export interface HistoryMessage {
   timestamp: string;
   meta?: {
     proactive?: boolean;
-    source?: "claw" | "yobi";
+    source?: "yobi";
   };
 }
 
@@ -898,9 +799,6 @@ export interface TokenStatsStatus {
   retentionDays: number;
   lastUpdatedAt: string | null;
   days: TokenBucketSummary[];
-  integrations: {
-    claw: "pending" | "ready";
-  };
 }
 
 export interface KernelStatus {
@@ -918,10 +816,7 @@ export interface KernelStatus {
 export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
   retentionDays: 90,
   lastUpdatedAt: null,
-  days: [],
-  integrations: {
-    claw: "pending"
-  }
+  days: []
 };
 
 export interface EmbedderRuntimeStatus {
@@ -947,8 +842,6 @@ export interface AppStatus {
   keepAwakeActive: boolean;
   topicPool: TopicPoolItem[];
   petOnline: boolean;
-  openclawOnline: boolean;
-  openclawStatus: string;
   browseStatus: BrowseStatus;
   tokenStats: TokenStatsStatus;
   systemPermissions: SystemPermissionStatus;
@@ -1150,7 +1043,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   memory: {
     recentMessages: 60,
     context: {
-      memoryFloorTokens: 1200
+      memoryFloorTokens: 1200,
+      maxPromptTokens: 24_000
     },
     embedding: {
       enabled: true,
@@ -1211,28 +1105,29 @@ export const DEFAULT_CONFIG: AppConfig = {
     sessionReentryGapHours: 6,
     dailyTaskHour: 3
   },
-  openclaw: {
-    enabled: false,
-    gatewayUrl: "http://127.0.0.1:18789",
-    approvalRequired: true,
-    modelPrimary: "",
-    modelFallbacks: [],
-    thinkingDefault: "low",
-    contextTokens: 200_000,
-    timeoutSeconds: 600,
-    browserEnabled: true,
-    browserProfile: "openclaw",
-    browserHeadless: false,
-    browserExecutablePath: "",
-    heartbeatEvery: "30m",
-    toolWebSearchEnabled: true,
-    toolWebFetchEnabled: true,
-    toolExecEnabled: true,
-    toolElevatedEnabled: false,
-    maxConcurrent: 1,
-    sandboxMode: "non-main"
-  },
   tools: {
+    browser: {
+      enabled: false,
+      headless: false,
+      cdpPort: 19222,
+      allowedDomains: [],
+      blockPrivateNetwork: true
+    },
+    system: {
+      enabled: false,
+      execEnabled: false,
+      allowedCommands: [],
+      blockedPatterns: ["rm -rf", "sudo"],
+      approvalRequired: true
+    },
+    file: {
+      readEnabled: true,
+      writeEnabled: false,
+      allowedPaths: []
+    },
+    exa: {
+      enabled: true
+    },
     mcp: {
       servers: DEFAULT_MCP_SERVERS.map((server) =>
         server.transport === "stdio"

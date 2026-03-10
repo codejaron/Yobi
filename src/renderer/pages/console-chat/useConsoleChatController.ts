@@ -207,12 +207,11 @@ export function useConsoleChatController(): ConsoleChatController {
           source: event.source
         }
       ]);
-      const fromClaw = event.source === "claw";
       appendAction({
         requestId: event.requestId,
         kind: "status",
-        label: fromClaw ? "Claw 结果已同步" : "Yobi 主动消息",
-        detail: fromClaw ? "Claw 完成消息已回流到 Yobi 对话。" : "后台主动消息已写入当前聊天流。",
+        label: "Yobi 主动消息",
+        detail: "后台主动消息已写入当前聊天流。",
         timestamp: event.timestamp
       });
       return;

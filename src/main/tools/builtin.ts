@@ -1,10 +1,23 @@
 import { z } from "zod";
 import type { ReminderService } from "@main/services/reminders";
+import { ExaSearchService } from "@main/services/exa-search";
+import { createBrowserTool } from "@main/tools/browser/browser-tool";
+import { BrowserController } from "@main/tools/browser/controller";
+import { createExaTools } from "@main/tools/exa";
+import { createFileTool } from "@main/tools/file/file-tool";
+import { SandboxGuard } from "@main/tools/guard/sandbox";
+import { createSystemTool } from "@main/tools/system/system-tool";
+import type { AppConfig } from "@shared/types";
 import type { ToolDefinition } from "./types";
 
 export function createBuiltinTools(input: {
   reminderService: ReminderService;
+  getConfig: () => AppConfig;
+  exaSearchService: ExaSearchService;
 }): Array<ToolDefinition<any>> {
+  const sandboxGuard = new SandboxGuard(input.getConfig);
+  const browserController = new BrowserController();
+
   const reminderTool: ToolDefinition<{ time: string; text: string }> = {
     name: "reminder",
     source: "builtin",
@@ -37,5 +50,22 @@ export function createBuiltinTools(input: {
     }
   };
 
-  return [reminderTool];
+  return [
+    createBrowserTool({
+      controller: browserController,
+      sandboxGuard,
+      getConfig: input.getConfig
+    }),
+    createSystemTool({
+      getConfig: input.getConfig,
+      sandboxGuard
+    }),
+    createFileTool({
+      sandboxGuard
+    }),
+    ...createExaTools({
+      exaSearchService: input.exaSearchService
+    }),
+    reminderTool
+  ];
 }

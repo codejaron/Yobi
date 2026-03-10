@@ -26,9 +26,6 @@ import { RealtimeVoiceService } from "@main/services/realtime-voice";
 import { GlobalPetPushToTalkService } from "@main/services/global-ptt";
 import { SystemPermissionsService } from "@main/services/system-permissions";
 import { PetService } from "@main/services/pet-service";
-import { OpenClawRuntime } from "@main/openclaw/runtime";
-import { ClawClient } from "@main/claw/claw-client";
-import { ClawChannel } from "@main/claw/claw-channel";
 import { ApprovalGuard } from "@main/tools/guard/approval";
 import { DefaultToolRegistry } from "@main/tools/registry";
 import { TokenStatsStore } from "@main/services/token/token-stats-store";
@@ -38,7 +35,6 @@ import { KernelEngine } from "@main/kernel/engine";
 import type { AppLogger } from "@main/services/logger";
 import { RuntimeActivityCoordinator } from "@main/runtime/activity-coordinator";
 import { ChannelCoordinator } from "@main/runtime/channel-coordinator";
-import { ClawCoordinator } from "@main/runtime/claw-coordinator";
 import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
 import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
 import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
@@ -99,13 +95,9 @@ export interface RuntimeRegistry {
   globalPtt: GlobalPetPushToTalkService;
   systemPermissionsService: SystemPermissionsService;
   petService: PetService;
-  openclawRuntime: OpenClawRuntime;
-  clawClient: ClawClient;
-  clawChannel: ClawChannel;
   reminderService: ReminderService;
   activityCoordinator: RuntimeActivityCoordinator;
   channelCoordinator: ChannelCoordinator;
-  clawCoordinator: ClawCoordinator;
   lifecycleCoordinator: LifecycleCoordinator;
   dataCoordinator: RuntimeDataCoordinator;
   statusCoordinator: RuntimeStatusCoordinator;
@@ -245,35 +237,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
       void callbackBridge.emitStatus();
     }
   });
-  const openclawRuntime = new OpenClawRuntime(paths, () => {
-    void callbackBridge.emitStatus();
-  });
-  const clawClient = new ClawClient(
-    () => configStore.getConfig(),
-    () => openclawRuntime.getGatewayAuthToken()
-  );
-  const clawChannel = new ClawChannel(clawClient, {
-    defaultSessionKey: "main",
-    onYobiFinal: async ({ text }) => {
-      await memory.rememberMessage({
-        threadId: input.threadId,
-        resourceId: input.resourceId,
-        role: "assistant",
-        text,
-        metadata: {
-          channel: "console",
-          source: "claw"
-        }
-      });
-
-      consoleChannel.emitExternalAssistantMessage({
-        text,
-        source: "claw"
-      });
-      await kernel.onAssistantMessage();
-      await callbackBridge.emitStatus();
-    }
-  });
 
   const reminderService = new ReminderService(reminderStore, {
     sendReminder: async (item) => {
@@ -325,13 +288,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   });
   channelCoordinatorRef = channelCoordinator;
 
-  const clawCoordinator = new ClawCoordinator({
-    openclawRuntime,
-    clawClient,
-    clawChannel,
-    getConfig: () => configStore.getConfig()
-  });
-
   const bilibiliSyncCoordinator = new BilibiliSyncCoordinator({
     service: bilibiliBrowse,
     logger,
@@ -369,7 +325,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     systemPermissionsService,
     activityCoordinator,
     channelCoordinator,
-    clawCoordinator,
     lifecycleCoordinator,
     resourceId: input.resourceId,
     threadId: input.threadId
@@ -407,13 +362,9 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     globalPtt,
     systemPermissionsService,
     petService,
-    openclawRuntime,
-    clawClient,
-    clawChannel,
     reminderService,
     activityCoordinator,
     channelCoordinator,
-    clawCoordinator,
     lifecycleCoordinator,
     dataCoordinator,
     statusCoordinator,

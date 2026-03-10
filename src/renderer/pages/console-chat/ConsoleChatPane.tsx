@@ -125,12 +125,7 @@ export function ConsoleChatPane({
                       }`
                 }
               >
-                {item.role === "assistant" && item.source === "claw" ? (
-                  <div className="mb-2 flex items-center gap-2">
-                    <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">Claw</Badge>
-                    <span className="text-[11px] text-muted-foreground">来自 Claw 执行结果</span>
-                  </div>
-                ) : item.role === "assistant" && item.source === "yobi" ? (
+                {item.role === "assistant" && item.source === "yobi" ? (
                   <div className="mb-2 flex items-center gap-2">
                     <Badge className="border-sky-200 bg-sky-50 text-sky-700">Yobi</Badge>
                     <span className="text-[11px] text-muted-foreground">后台主动消息</span>

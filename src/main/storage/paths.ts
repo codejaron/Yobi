@@ -125,18 +125,6 @@ export class CompanionPaths {
     return path.join(this.modelsDir, "whisper");
   }
 
-  get openclawStateDir(): string {
-    return path.join(this.baseDir, "openclaw");
-  }
-
-  get openclawConfigPath(): string {
-    return path.join(this.openclawStateDir, "openclaw.json");
-  }
-
-  get openclawSyncStatePath(): string {
-    return path.join(this.openclawStateDir, "yobi-sync-state.json");
-  }
-
   get browseDir(): string {
     return path.join(this.baseDir, "browse");
   }
@@ -185,7 +173,6 @@ export class CompanionPaths {
     mkdirSync(this.modelsDir, { recursive: true });
     mkdirSync(this.embeddingModelsDir, { recursive: true });
     mkdirSync(this.whisperModelsDir, { recursive: true });
-    mkdirSync(this.openclawStateDir, { recursive: true });
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });
     mkdirSync(this.tokenStatsDir, { recursive: true });

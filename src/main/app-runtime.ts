@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   type AppConfig,
   type AppStatus,
-  type ClawEvent,
-  type ClawHistoryItem,
   type CommandApprovalDecision,
   type ConsoleRunEventV2,
   type MindSnapshot,
@@ -15,7 +13,7 @@ import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
-import { createClawToolDefinition } from "@main/claw/tool";
+import { ExaSearchService } from "@main/services/exa-search";
 import { createBuiltinTools } from "@main/tools/builtin";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
@@ -54,11 +52,9 @@ export class CompanionRuntime {
   private readonly voiceRouter: RuntimeRegistry["voiceRouter"];
   private readonly pet: RuntimeRegistry["pet"];
   private readonly petService: RuntimeRegistry["petService"];
-  private readonly clawChannel: RuntimeRegistry["clawChannel"];
   private readonly reminderService: RuntimeRegistry["reminderService"];
   private readonly activityCoordinator: RuntimeRegistry["activityCoordinator"];
   private readonly channelCoordinator: RuntimeRegistry["channelCoordinator"];
-  private readonly clawCoordinator: RuntimeRegistry["clawCoordinator"];
   private readonly lifecycleCoordinator: RuntimeRegistry["lifecycleCoordinator"];
   private readonly dataCoordinator: RuntimeRegistry["dataCoordinator"];
   private readonly statusCoordinator: RuntimeRegistry["statusCoordinator"];
@@ -82,11 +78,9 @@ export class CompanionRuntime {
     this.voiceRouter = registry.voiceRouter;
     this.pet = registry.pet;
     this.petService = registry.petService;
-    this.clawChannel = registry.clawChannel;
     this.reminderService = registry.reminderService;
     this.activityCoordinator = registry.activityCoordinator;
     this.channelCoordinator = registry.channelCoordinator;
-    this.clawCoordinator = registry.clawCoordinator;
     this.lifecycleCoordinator = registry.lifecycleCoordinator;
     this.dataCoordinator = registry.dataCoordinator;
     this.statusCoordinator = registry.statusCoordinator;
@@ -130,10 +124,8 @@ export class CompanionRuntime {
     await this.startQQ();
     this.kernel.start();
 
-    await this.clawCoordinator.start();
-    const openclawStatus = this.clawCoordinator.getOpenClawStatus();
     await this.emitStatus();
-    this.logger.info("runtime", "start:ready", { openclawOnline: openclawStatus.online });
+    this.logger.info("runtime", "start:ready");
   }
 
   async stop(): Promise<void> {
@@ -142,7 +134,6 @@ export class CompanionRuntime {
 
     this.lifecycleCoordinator.stop();
     await this.kernel.stop();
-    await this.clawCoordinator.stop();
     await this.memory.stop();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
@@ -163,18 +154,6 @@ export class CompanionRuntime {
 
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void {
     return this.consoleChannel.onEvent(listener);
-  }
-
-  onClawEvent(listener: (event: ClawEvent) => void): () => void {
-    return this.clawCoordinator.onEvent(listener);
-  }
-
-  getClawConnectionEvent(): ClawEvent {
-    return this.clawCoordinator.getConnectionEvent();
-  }
-
-  getClawTaskMonitorEvent(): ClawEvent {
-    return this.clawCoordinator.getTaskMonitorEvent();
   }
 
   getConfig(): AppConfig {
@@ -380,10 +359,6 @@ export class CompanionRuntime {
     return this.dataCoordinator.resetSystemPermissions();
   }
 
-  async openOpenClawWebUi(): Promise<{ opened: boolean; message: string }> {
-    return this.clawCoordinator.openWebUi();
-  }
-
   async getConsoleChatHistory(input?: {
     cursor?: string;
     limit?: number;
@@ -416,26 +391,6 @@ export class CompanionRuntime {
     decision: CommandApprovalDecision;
   }): Promise<{ accepted: boolean }> {
     return this.consoleChannel.resolveApproval(input);
-  }
-
-  async clawConnect(): Promise<{ connected: boolean; message: string }> {
-    return this.clawCoordinator.connect();
-  }
-
-  async clawDisconnect(): Promise<{ connected: boolean; message: string }> {
-    return this.clawCoordinator.disconnect();
-  }
-
-  async clawSend(message: string): Promise<{ accepted: boolean; message: string }> {
-    return this.clawCoordinator.send(message);
-  }
-
-  async clawHistory(limit = 50): Promise<{ items: ClawHistoryItem[] }> {
-    return this.clawCoordinator.history(limit);
-  }
-
-  async clawAbort(): Promise<{ accepted: boolean; message: string }> {
-    return this.clawCoordinator.abort();
   }
 
 
@@ -473,10 +428,12 @@ export class CompanionRuntime {
   }
 
   private registerBuiltinTools(): void {
-    this.toolRegistry.register(createClawToolDefinition(this.clawChannel));
+    const exaSearchService = new ExaSearchService(() => this.getConfig());
 
     for (const builtin of createBuiltinTools({
-      reminderService: this.reminderService
+      reminderService: this.reminderService,
+      getConfig: () => this.getConfig(),
+      exaSearchService
     })) {
       this.toolRegistry.register(builtin);
     }
@@ -760,17 +717,6 @@ export class CompanionRuntime {
         await this.toolRegistry.unregisterBySource("mcp");
         await this.mcpManager.dispose();
         await this.mcpManager.init(this.toolRegistry);
-      });
-    }
-
-    const openclawChanged =
-      JSON.stringify(previousConfig.openclaw) !== JSON.stringify(nextConfig.openclaw) ||
-      JSON.stringify(previousConfig.providers) !== JSON.stringify(nextConfig.providers) ||
-      JSON.stringify(previousConfig.modelRouting) !== JSON.stringify(nextConfig.modelRouting);
-
-    if (openclawChanged) {
-      await this.runConfigSideEffect("重启 OpenClaw", 20_000, async () => {
-        await this.clawCoordinator.restartForConfig(nextConfig);
       });
     }
 

@@ -132,6 +132,30 @@ export function MemorySettingsCard({
             />
           </div>
           <div className="space-y-1.5">
+            <Label>对话上下文上限(tokens)</Label>
+            <Input
+              type="number"
+              min={4000}
+              max={24000}
+              value={String(config.memory.context.maxPromptTokens)}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  memory: {
+                    ...config.memory,
+                    context: {
+                      ...config.memory.context,
+                      maxPromptTokens: toInt(event.target.value, config.memory.context.maxPromptTokens, 4000, 24000)
+                    }
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
             <Label>最近消息上限</Label>
             <Input
               type="number"

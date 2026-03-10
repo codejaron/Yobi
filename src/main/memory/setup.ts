@@ -66,10 +66,10 @@ function toHistoryMessage(message: BufferMessage): HistoryMessage {
     channel: message.channel,
     timestamp: message.ts,
     meta:
-      typeof proactive === "boolean" || source === "claw" || source === "yobi"
+      typeof proactive === "boolean" || source === "yobi"
         ? {
             proactive: typeof proactive === "boolean" ? proactive : undefined,
-            source: source === "claw" || source === "yobi" ? source : undefined
+            source: source === "yobi" ? "yobi" : undefined
           }
         : undefined
   };

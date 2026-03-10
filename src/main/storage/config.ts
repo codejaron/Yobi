@@ -5,15 +5,6 @@ import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 
 type McpServerList = AppConfig["tools"]["mcp"]["servers"];
 
-const EXA_LOCKED_SERVER: Extract<McpServerList[number], { transport: "remote" }> = {
-  id: "exa",
-  label: "Exa Search",
-  enabled: true,
-  transport: "remote",
-  url: "https://mcp.exa.ai/mcp",
-  headers: {}
-};
-
 function normalizeVoiceProviders(config: AppConfig): AppConfig {
   const asrProvider = config.voice.asrProvider;
   const ttsProvider = config.voice.ttsProvider;
@@ -55,17 +46,8 @@ function cloneMcpServers(servers: McpServerList): McpServerList {
   );
 }
 
-function ensureLockedExaServer(servers: McpServerList): McpServerList {
-  const others = cloneMcpServers(servers).filter((server) => server.id !== EXA_LOCKED_SERVER.id);
-  return [
-    {
-      ...EXA_LOCKED_SERVER,
-      headers: {
-        ...EXA_LOCKED_SERVER.headers
-      }
-    },
-    ...others
-  ];
+function filterInternalMcpServers(servers: McpServerList): McpServerList {
+  return cloneMcpServers(servers).filter((server) => server.id !== "exa");
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -154,6 +136,57 @@ function migrateRawConfig(raw: unknown): unknown {
   const voice = isPlainRecord(migratedRaw.voice) ? voiceOrDefault(migratedRaw.voice) : {};
   const whisperLocal = isPlainRecord(migratedRaw.whisperLocal) ? migratedRaw.whisperLocal : {};
   const alibabaVoice = isPlainRecord(migratedRaw.alibabaVoice) ? migratedRaw.alibabaVoice : {};
+  const legacyRuntimeConfig = isPlainRecord(migratedRaw.openclaw) ? migratedRaw.openclaw : null;
+  const tools = isPlainRecord(migratedRaw.tools) ? migratedRaw.tools : {};
+  const toolMcp = isPlainRecord(tools.mcp) ? tools.mcp : {};
+  const mcpServers = Array.isArray(toolMcp.servers) ? toolMcp.servers : [];
+
+  const legacyExaServer = mcpServers.find((server) => isPlainRecord(server) && server.id === "exa");
+  const legacyExaEnabled =
+    legacyExaServer && typeof legacyExaServer.enabled === "boolean" ? legacyExaServer.enabled : undefined;
+
+  if (legacyRuntimeConfig && isPlainRecord(migratedRaw.memory) && isPlainRecord(migratedRaw.memory.context)) {
+    const legacyContextTokens = Number(legacyRuntimeConfig.contextTokens);
+    if (Number.isFinite(legacyContextTokens) && migratedRaw.memory.context.maxPromptTokens === undefined) {
+      migratedRaw.memory.context.maxPromptTokens = Math.max(4_000, Math.min(24_000, Math.floor(legacyContextTokens)));
+    }
+  }
+
+  if (!isPlainRecord(tools.browser)) {
+    tools.browser = {
+      ...DEFAULT_CONFIG.tools.browser
+    };
+  }
+
+  if (!isPlainRecord(tools.system)) {
+    tools.system = {
+      ...DEFAULT_CONFIG.tools.system
+    };
+  }
+
+  if (!isPlainRecord(tools.file)) {
+    tools.file = {
+      ...DEFAULT_CONFIG.tools.file
+    };
+  }
+
+  if (!isPlainRecord(tools.exa)) {
+    tools.exa = {
+      enabled: typeof legacyExaEnabled === "boolean" ? legacyExaEnabled : DEFAULT_CONFIG.tools.exa.enabled
+    };
+  } else if (typeof tools.exa.enabled !== "boolean" && typeof legacyExaEnabled === "boolean") {
+    tools.exa.enabled = legacyExaEnabled;
+  }
+
+  if (isPlainRecord(tools.mcp)) {
+    tools.mcp = {
+      ...tools.mcp,
+      servers: mcpServers.filter((server) => !(isPlainRecord(server) && server.id === "exa"))
+    };
+  }
+
+  migratedRaw.tools = tools;
+  delete migratedRaw.openclaw;
 
   if (typeof voice.asrProvider !== "string") {
     if (whisperLocal.enabled === true) {
@@ -249,7 +282,7 @@ export class ConfigStore {
         ...normalized.tools,
         mcp: {
           ...normalized.tools.mcp,
-          servers: ensureLockedExaServer(normalized.tools.mcp.servers)
+          servers: filterInternalMcpServers(normalized.tools.mcp.servers)
         }
       }
     };

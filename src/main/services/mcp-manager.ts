@@ -76,6 +76,10 @@ export class McpManager {
 
     const config = this.getConfig();
     for (const server of config.tools.mcp.servers) {
+      if (server.id === "exa") {
+        continue;
+      }
+
       if (!server.enabled) {
         continue;
       }

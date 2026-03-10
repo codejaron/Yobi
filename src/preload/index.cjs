@@ -88,9 +88,6 @@ const api = {
   resetSystemPermissions() {
     return ipcRenderer.invoke('system:permissions:reset');
   },
-  openOpenClawWebUi() {
-    return ipcRenderer.invoke('openclaw:webui:open');
-  },
   importPetModelFromDialog() {
     return ipcRenderer.invoke('pet:model:import');
   },
@@ -124,28 +121,6 @@ const api = {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on(channel, wrapped);
     ipcRenderer.send('console:chat:subscribe');
-    return () => ipcRenderer.removeListener(channel, wrapped);
-  },
-  clawConnect() {
-    return ipcRenderer.invoke('claw:connect');
-  },
-  clawDisconnect() {
-    return ipcRenderer.invoke('claw:disconnect');
-  },
-  clawSend(message) {
-    return ipcRenderer.invoke('claw:send', { message });
-  },
-  clawHistory(limit) {
-    return ipcRenderer.invoke('claw:history', { limit });
-  },
-  clawAbort() {
-    return ipcRenderer.invoke('claw:abort');
-  },
-  onClawEvent(listener) {
-    const channel = 'runtime:claw-event';
-    const wrapped = (_event, payload) => listener(payload);
-    ipcRenderer.on(channel, wrapped);
-    ipcRenderer.send('claw:subscribe');
     return () => ipcRenderer.removeListener(channel, wrapped);
   }
 };

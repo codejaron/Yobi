@@ -125,7 +125,7 @@ export class ConversationEngine {
       buffer,
       facts: factCandidates.map((row) => row.fact),
       episodes: episodeCandidates.map((row) => row.episode),
-      maxTokens: Math.min(24_000, Math.max(4_000, config.openclaw.contextTokens || 8_000)),
+      maxTokens: Math.min(24_000, Math.max(4_000, config.memory.context.maxPromptTokens || 8_000)),
       memoryFloorTokens: config.memory.context.memoryFloorTokens
     });
 

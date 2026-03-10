@@ -3,7 +3,6 @@ import {
   Bot,
   Clock3,
   ShieldCheck,
-  Sparkles,
   PawPrint,
   MessageCircle
 } from "lucide-react";
@@ -41,56 +40,6 @@ function formatPermission(value: PermissionState | undefined): string {
     return "未授权";
   }
   return "未知";
-}
-
-function formatOpenClawStatus(value: string | undefined): string {
-  if (!value) {
-    return "状态未知";
-  }
-
-  if (value === "disabled") {
-    return "已关闭（未启动）";
-  }
-
-  if (value === "checking") {
-    return "正在检查安装状态";
-  }
-
-  if (value === "syncing-llm") {
-    return "正在同步模型配置";
-  }
-
-  if (value === "starting-gateway") {
-    return "正在启动 Gateway";
-  }
-
-  if (value === "online") {
-    return "Gateway 已就绪";
-  }
-
-  if (value === "not-installed") {
-    return "未安装 OpenClaw";
-  }
-
-  if (value === "gateway-exited") {
-    return "Gateway 已退出";
-  }
-
-  if (value.startsWith("gateway-exited:code-")) {
-    const code = value.replace("gateway-exited:code-", "").trim();
-    return `Gateway 已退出（code=${code}）`;
-  }
-
-  if (value.startsWith("gateway-exited:signal-")) {
-    const signal = value.replace("gateway-exited:signal-", "").trim();
-    return `Gateway 被信号终止（${signal}）`;
-  }
-
-  if (value.startsWith("gateway-error:")) {
-    return `Gateway 错误：${value.replace("gateway-error:", "").trim()}`;
-  }
-
-  return value;
 }
 
 function formatProactivePauseReason(value: string | null | undefined): string {
@@ -408,21 +357,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
 
         <Card>
           <CardHeader>
-            <CardDescription>OpenClaw</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Sparkles className="h-4 w-4" />
-              {status?.openclawOnline ? "在线" : "离线"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {formatOpenClawStatus(status?.openclawStatus)}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardDescription>主动聊天</CardDescription>
             <CardTitle className="flex items-center gap-2 text-base">
               <Clock3 className="h-4 w-4" />
@@ -600,11 +534,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
                     </div>
                   ))}
                 </div>
-              </div>
-
-              <div className="flex items-center justify-between rounded-xl border border-dashed border-border/70 bg-white/55 px-3 py-2 text-sm">
-                <span className="text-muted-foreground">Claw</span>
-                <span className="text-muted-foreground">{tokenAggregate.sourceTotals.claw.label}</span>
               </div>
             </div>
           </div>
