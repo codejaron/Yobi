@@ -178,6 +178,13 @@ function authStateLabel(authState: BrowseAuthState): string {
 }
 
 function embedderLabel(embedder: EmbedderRuntimeStatus): { badge: string; tone: SectionTone } {
+  if (embedder.status === "ready" && (embedder.mode === "bm25-only" || embedder.mode === "vector-only")) {
+    return {
+      badge: "回退模式",
+      tone: "warn"
+    };
+  }
+
   if (embedder.status === "ready") {
     return {
       badge: "已就绪",
@@ -214,7 +221,9 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
   const proactiveEnabled = config.proactive.enabled;
   const openclawEnabled = config.openclaw.enabled;
   const embedderState = status?.embedder ?? {
-    status: config.memory.embedding.enabled ? "disabled" : "disabled",
+    status: config.memory.embedding.enabled ? "loading" : "disabled",
+    mode: config.memory.embedding.enabled ? "bm25-only" : "disabled",
+    downloadPending: false,
     message: ""
   };
 
@@ -299,8 +308,8 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
       tone: embedderLabel(embedderState).tone,
       detail: config.memory.embedding.enabled
         ? formatEmbedderDisplay(status?.embedder).statusLabel === "回退模式"
-          ? "启发式语义检索"
-          : "本地语义检索已启用"
+          ? formatEmbedderDisplay(status?.embedder).engineLabel
+          : "Hybrid 检索已启用"
         : "向量记忆已关闭"
     },
     openclaw: openclawEnabled
@@ -568,7 +577,7 @@ export function SettingsPage({
       case "proactive":
         return <ProactiveSettingsCard config={config} setConfig={setConfig} />;
       case "memory":
-        return <MemorySettingsCard config={config} setConfig={setConfig} />;
+        return <MemorySettingsCard config={config} status={status} setConfig={setConfig} />;
       case "openclaw":
         return (
           <OpenClawSettingsCard

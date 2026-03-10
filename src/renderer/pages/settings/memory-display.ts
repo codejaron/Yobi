@@ -39,30 +39,39 @@ export function formatEmbedderDisplay(embedder: EmbedderRuntimeStatus | null | u
   const modelLabel = modelMatch ? cleanModelName(modelMatch[1]) : null;
 
   if (embedder.status === "ready") {
-    if (message.startsWith("llama-local-embedder:")) {
+    if (embedder.mode === "hybrid") {
       return {
         statusLabel: "已就绪",
-        engineLabel: "本地 GGUF 嵌入",
+        engineLabel: "Hybrid 检索",
         modelLabel,
-        detailLabel: null
+        detailLabel: message.replace(/^llama-local-embedder:\s*/i, "") || null
       };
     }
 
-    if (message.startsWith("heuristic fallback:")) {
+    if (embedder.mode === "bm25-only" && embedder.downloadPending) {
       return {
         statusLabel: "回退模式",
-        engineLabel: "启发式语义检索",
+        engineLabel: "BM25-only（下载中）",
         modelLabel,
-        detailLabel: message.replace(/^heuristic fallback:\s*/i, "") || null
+        detailLabel: message || "正在后台下载 GGUF，当前仅使用词法检索"
       };
     }
 
-    if (message.includes("heuristic-local-embedder")) {
+    if (embedder.mode === "bm25-only") {
       return {
-        statusLabel: "已就绪",
-        engineLabel: "启发式语义检索",
+        statusLabel: "回退模式",
+        engineLabel: "BM25-only",
         modelLabel,
-        detailLabel: null
+        detailLabel: message || "当前未使用向量检索"
+      };
+    }
+
+    if (embedder.mode === "vector-only") {
+      return {
+        statusLabel: "回退模式",
+        engineLabel: "Vector-only",
+        modelLabel,
+        detailLabel: message || "词法检索不可用，当前仅使用向量检索"
       };
     }
 

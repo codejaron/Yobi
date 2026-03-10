@@ -53,6 +53,10 @@ export class CompanionPaths {
     return path.join(this.memoryDir, "fact-embeddings.json");
   }
 
+  get factsDbPath(): string {
+    return path.join(this.memoryDir, "facts.sqlite");
+  }
+
   get profilePath(): string {
     return path.join(this.memoryDir, "profile.json");
   }

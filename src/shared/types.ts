@@ -121,7 +121,8 @@ const kernelQueueSchema = z
 const kernelFactExtractionSchema = z
   .object({
     maxInputTokens: z.number().int().min(256).max(16000).default(3000),
-    maxOutputTokens: z.number().int().min(128).max(4000).default(800)
+    maxOutputTokens: z.number().int().min(128).max(4000).default(800),
+    incrementalMessageThreshold: z.number().int().min(1).max(500).default(20)
   })
   .strict();
 
@@ -168,7 +169,8 @@ const kernelSchema = z
     }),
     factExtraction: kernelFactExtractionSchema.default({
       maxInputTokens: 3000,
-      maxOutputTokens: 800
+      maxOutputTokens: 800,
+      incrementalMessageThreshold: 20
     }),
     emotionSignals: kernelEmotionSignalsSchema.default({
       enabled: true,
@@ -321,6 +323,26 @@ export const appConfigSchema = z
             enabled: true,
             modelId: "embeddinggemma-300m-qat-Q8_0.gguf",
             similarityThreshold: 0.35
+          }),
+        facts: z
+          .object({
+            activeSoftCap: z.number().int().min(50).max(5000).default(500)
+          })
+          .strict()
+          .default({
+            activeSoftCap: 500
+          }),
+        retrieval: z
+          .object({
+            candidateMultiplier: z.number().int().min(1).max(8).default(2),
+            vectorWeight: z.number().min(0).max(1).default(0.6),
+            textWeight: z.number().min(0).max(1).default(0.4)
+          })
+          .strict()
+          .default({
+            candidateMultiplier: 2,
+            vectorWeight: 0.6,
+            textWeight: 0.4
           })
       })
       .strict(),
@@ -346,7 +368,8 @@ export const appConfigSchema = z
       },
       factExtraction: {
         maxInputTokens: 3000,
-        maxOutputTokens: 800
+        maxOutputTokens: 800,
+        incrementalMessageThreshold: 20
       },
       emotionSignals: {
         enabled: true,
@@ -690,6 +713,7 @@ export interface KernelStateDocument {
   relationship: RelationshipState;
   coldStart: boolean;
   lastDecayAt: string | null;
+  lastDailyTaskDayKey?: string | null;
   sessionReentry?: {
     active: boolean;
     gapHours: number;
@@ -829,6 +853,7 @@ export interface BufferMessage {
   text: string;
   meta?: Record<string, unknown>;
   extracted?: boolean;
+  extractionQueued?: boolean;
 }
 
 export interface MindSnapshot {
@@ -901,6 +926,8 @@ export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
 
 export interface EmbedderRuntimeStatus {
   status: "disabled" | "loading" | "ready" | "error";
+  mode: "disabled" | "hybrid" | "bm25-only" | "vector-only";
+  downloadPending: boolean;
   message: string;
 }
 
@@ -971,6 +998,7 @@ export const DEFAULT_KERNEL_STATE: KernelStateDocument = {
   },
   coldStart: true,
   lastDecayAt: null,
+  lastDailyTaskDayKey: null,
   sessionReentry: null,
   updatedAt: new Date(0).toISOString()
 };
@@ -1128,6 +1156,14 @@ export const DEFAULT_CONFIG: AppConfig = {
       enabled: true,
       modelId: "embeddinggemma-300m-qat-Q8_0.gguf",
       similarityThreshold: 0.35
+    },
+    facts: {
+      activeSoftCap: 500
+    },
+    retrieval: {
+      candidateMultiplier: 2,
+      vectorWeight: 0.6,
+      textWeight: 0.4
     }
   },
   kernel: {
@@ -1152,7 +1188,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     },
     factExtraction: {
       maxInputTokens: 3000,
-      maxOutputTokens: 800
+      maxOutputTokens: 800,
+      incrementalMessageThreshold: 20
     },
     emotionSignals: {
       enabled: true,

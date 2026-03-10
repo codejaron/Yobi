@@ -193,6 +193,7 @@ export class RuntimeDataCoordinator {
     }
     if (section === "facts") {
       await this.input.memory.getFactsStore().clearAll();
+      await this.input.memory.getFactEmbeddingStore().clearAll();
       return { accepted: true, message: "FACTS 与归档已清空。" };
     }
     const removed = await this.input.memory.getEpisodesStore().clearAll();

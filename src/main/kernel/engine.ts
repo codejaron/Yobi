@@ -52,7 +52,6 @@ export class KernelEngine {
   private lastTickAt: string | null = null;
   private lastUserMessageAt: string | null = null;
   private lastProactiveAt: string | null = null;
-  private dailyRanDayKey: string | null = null;
   private currentTickIntervalMs = 30_000;
   private readonly startedAtMs = Date.now();
 
@@ -162,7 +161,8 @@ export class KernelEngine {
       state.emotional = applyRealtimeEmotionalSignals({
         emotional: state.emotional,
         signals,
-        config
+        config,
+        latestMessageTs: this.lastUserMessageAt
       });
     });
   }
@@ -173,8 +173,10 @@ export class KernelEngine {
 
   async runDailyNow(): Promise<void> {
     await this.scheduleDailyTasks(true);
+    await this.enqueueUnprocessedBufferTasks();
     await this.taskQueue.processAvailable();
     await this.taskQueue.drainUntilIdle();
+    await this.maybeFinalizeDailyTasks();
     await this.taskQueue.compactCompleted();
     await this.input.stateStore.flushIfDirty();
   }
@@ -198,10 +200,12 @@ export class KernelEngine {
     }
 
     this.applyStateDecay();
-    await this.consumeCompactionSignals();
     await this.processQueuedEvents();
+    await this.maybeQueueIncrementalFactExtraction();
     await this.maybeScheduleDailyTasks();
+    await this.enqueueUnprocessedBufferTasks();
     await this.taskQueue.processAvailable();
+    await this.maybeFinalizeDailyTasks();
     await this.input.memory.backfillFactEmbeddings(10);
     await this.maybeEmitProactiveMessage();
     await this.input.stateStore.flushIfDirty();
@@ -216,6 +220,9 @@ export class KernelEngine {
       maxEvents: 20,
       priorities: new Set(["P0", "P1"])
     });
+    await this.enqueueUnprocessedBufferTasks();
+    await this.taskQueue.processAvailable();
+    await this.maybeFinalizeDailyTasks();
     await this.input.stateStore.flushIfDirty();
   }
 
@@ -301,57 +308,41 @@ export class KernelEngine {
     });
   }
 
-  private async consumeCompactionSignals(): Promise<void> {
-    const signals = this.input.memory.drainCompactionSignals();
-    if (signals.length === 0) {
-      return;
-    }
-
-    const enqueueInputs: Array<{
-      type: PendingTaskType;
-      sourceRange?: string;
-      payload: Record<string, unknown>;
-    }> = [];
-
-    for (const signal of signals) {
-      await this.input.memory.getProfileStore().updateFromStatSignals(signal.removed);
-      for (const range of signal.sourceRanges) {
-        const [start, end] = range.split("..");
-        const windowMessages = signal.removed.filter((message) => message.id >= start && message.id <= end);
-        const chunks = splitExtractionWindows({
-          messages: windowMessages,
-          maxInputTokens: this.input.getConfig().kernel.factExtraction.maxInputTokens
-        });
-        for (const chunk of chunks) {
-          enqueueInputs.push({
-            type: "fact-extraction",
-            sourceRange: chunk.sourceRange,
-            payload: {
-              sourceRange: chunk.sourceRange,
-              messages: chunk.messages
-            }
-          });
-        }
-      }
-    }
-
-    await this.taskQueue.enqueueMany(enqueueInputs);
-  }
-
   private async maybeScheduleDailyTasks(): Promise<void> {
     await this.scheduleDailyTasks(false);
   }
 
   private async scheduleDailyTasks(force: boolean): Promise<void> {
     const now = new Date();
-    const dayKey = toDayKey(now);
     const hour = now.getHours();
     const targetHour = this.input.getConfig().kernel.dailyTaskHour;
-    if (!force && (hour !== targetHour || this.dailyRanDayKey === dayKey)) {
+    const ready = force || hour >= targetHour;
+    if (!ready) {
+      return;
+    }
+    const targetDate = new Date(now.getTime());
+    targetDate.setDate(targetDate.getDate() - 1);
+    const dayKey = toDayKey(targetDate);
+    const lastDailyTaskDayKey = this.input.stateStore.getSnapshot().lastDailyTaskDayKey ?? null;
+    if (!force && lastDailyTaskDayKey === dayKey) {
+      return;
+    }
+    const alreadyQueuedForDay = this.taskQueue.list().some(
+      (task) =>
+        (task.type === "daily-episode" ||
+          task.type === "profile-semantic-update" ||
+          task.type === "daily-reflection") &&
+        task.payload.dayKey === dayKey &&
+        (task.status === "pending" || task.status === "running" || task.status === "completed")
+    );
+    if (!force && alreadyQueuedForDay) {
       return;
     }
 
-    await this.input.memory.getFactsStore().cleanupExpired(now.toISOString());
+    await this.input.memory.getFactsStore().cleanupExpired(
+      now.toISOString(),
+      this.input.getConfig().memory.facts.activeSoftCap
+    );
     await this.taskQueue.enqueueMany([
       {
         type: "daily-episode",
@@ -366,8 +357,69 @@ export class KernelEngine {
         payload: { dayKey }
       }
     ]);
+  }
+
+  private async maybeQueueIncrementalFactExtraction(): Promise<void> {
+    const threshold = this.input.getConfig().kernel.factExtraction.incrementalMessageThreshold;
+    await this.input.memory.queuePendingBufferExtractions(threshold);
+  }
+
+  private async enqueueUnprocessedBufferTasks(): Promise<void> {
+    const rows = await this.input.memory.consumeUnprocessedBuffer();
+    if (rows.length === 0) {
+      return;
+    }
+
+    const chunks = splitExtractionWindows({
+      messages: rows,
+      maxInputTokens: this.input.getConfig().kernel.factExtraction.maxInputTokens
+    });
+    await this.taskQueue.enqueueMany(
+      chunks.map((chunk) => ({
+        type: "fact-extraction" as const,
+        sourceRange: chunk.sourceRange,
+        payload: {
+          sourceRange: chunk.sourceRange,
+          messages: chunk.messages
+        }
+      }))
+    );
+  }
+
+  private async maybeFinalizeDailyTasks(): Promise<void> {
+    const lastDailyTaskDayKey = this.input.stateStore.getSnapshot().lastDailyTaskDayKey ?? null;
+    const dailyTasks = this.taskQueue
+      .list()
+      .filter(
+        (task) =>
+          (task.type === "daily-episode" ||
+            task.type === "profile-semantic-update" ||
+            task.type === "daily-reflection") &&
+          typeof task.payload.dayKey === "string"
+      );
+    const dayKeys = [...new Set(dailyTasks.map((task) => String(task.payload.dayKey)).filter(Boolean))].sort();
+    const nextDayKey = dayKeys.reverse().find((dayKey) => dayKey !== lastDailyTaskDayKey);
+    if (!nextDayKey) {
+      return;
+    }
+
+    const tasksForDay = dailyTasks.filter((task) => task.payload.dayKey === nextDayKey);
+    const hasPending = tasksForDay.some((task) => task.status === "pending" || task.status === "running");
+    if (hasPending) {
+      return;
+    }
+
+    const episodeCompleted = tasksForDay.some(
+      (task) => task.type === "daily-episode" && task.status === "completed"
+    );
+    if (!episodeCompleted) {
+      return;
+    }
+
     await this.evaluateRelationshipTransition();
-    this.dailyRanDayKey = dayKey;
+    this.input.stateStore.mutate((state) => {
+      state.lastDailyTaskDayKey = nextDayKey;
+    });
   }
 
   private resolveTickIntervalMs(): number {
@@ -527,24 +579,7 @@ export class KernelEngine {
   }
 
   private async bootstrapUnprocessedTasks(): Promise<void> {
-    const rows = await this.input.memory.consumeUnprocessedBuffer();
-    if (rows.length === 0) {
-      return;
-    }
-    const chunks = splitExtractionWindows({
-      messages: rows,
-      maxInputTokens: this.input.getConfig().kernel.factExtraction.maxInputTokens
-    });
-    await this.taskQueue.enqueueMany(
-      chunks.map((chunk) => ({
-        type: "fact-extraction",
-        sourceRange: chunk.sourceRange,
-        payload: {
-          sourceRange: chunk.sourceRange,
-          messages: chunk.messages
-        }
-      }))
-    );
+    await this.enqueueUnprocessedBufferTasks();
   }
 }
 

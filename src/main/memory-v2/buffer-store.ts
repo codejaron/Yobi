@@ -37,12 +37,12 @@ export class BufferStore {
   }
 
   listAll(): BufferMessage[] {
-    return this.rows.map((row) => ({ ...row, meta: row.meta ? { ...row.meta } : undefined }));
+    return this.rows.map(cloneMessage);
   }
 
   listRecent(limit = 60): BufferMessage[] {
     const safe = Math.max(1, limit);
-    return this.rows.slice(-safe).map((row) => ({ ...row, meta: row.meta ? { ...row.meta } : undefined }));
+    return this.rows.slice(-safe).map(cloneMessage);
   }
 
   async append(input: {
@@ -69,11 +69,12 @@ export class BufferStore {
       channel: input.channel,
       text,
       meta: input.meta ? { ...input.meta } : undefined,
-      extracted: false
+      extracted: false,
+      extractionQueued: false
     };
     this.rows.push(message);
     await appendJsonlLine(this.paths.bufferPath, message);
-    return { ...message, meta: message.meta ? { ...message.meta } : undefined };
+    return cloneMessage(message);
   }
 
   async compactIfNeeded(input: { maxMessages: number; lowWatermark: number }): Promise<BufferCompactionResult> {
@@ -93,14 +94,34 @@ export class BufferStore {
     const removed = this.rows.slice(0, removeCount);
     this.rows = this.rows.slice(removeCount);
     const archiveFiles = await this.archiveMessages(removed);
+    await this.appendToUnprocessed(removed.filter((row) => !row.extracted));
     await writeJsonlFileAtomic(this.paths.bufferPath, this.rows);
 
     return {
       compacted: true,
-      removed: removed.map((row) => ({ ...row, meta: row.meta ? { ...row.meta } : undefined })),
+      removed: removed.map(cloneMessage),
       sourceRanges: buildSourceRanges(removed),
       archiveFiles
     };
+  }
+
+  async queueUnextractedMessages(minMessages = 1): Promise<BufferMessage[]> {
+    await this.init();
+    const queued = this.rows.filter((row) => !row.extracted && !row.extractionQueued);
+    if (queued.length < Math.max(1, minMessages)) {
+      return [];
+    }
+
+    for (const row of this.rows) {
+      if (row.extracted || row.extractionQueued) {
+        continue;
+      }
+      row.extractionQueued = true;
+    }
+
+    await this.appendToUnprocessed(queued);
+    await writeJsonlFileAtomic(this.paths.bufferPath, this.rows);
+    return queued.map(cloneMessage);
   }
 
   async markExtractedByRange(range: string): Promise<void> {
@@ -118,6 +139,7 @@ export class BufferStore {
         continue;
       }
       row.extracted = true;
+      row.extractionQueued = false;
       changed = true;
     }
     if (changed) {
@@ -147,6 +169,32 @@ export class BufferStore {
     this.rows = [];
     this.idCounter = 0;
     await writeJsonlFileAtomic(this.paths.bufferPath, []);
+    await writeJsonlFileAtomic(this.paths.unprocessedPath, []);
+  }
+
+  private async appendToUnprocessed(messages: BufferMessage[]): Promise<void> {
+    const normalized = messages
+      .map((row) => normalizeMessage(row))
+      .filter((row): row is BufferMessage => row !== null)
+      .filter((row) => !row.extracted);
+    if (normalized.length === 0) {
+      return;
+    }
+
+    const current = (await readJsonlFile<BufferMessage>(this.paths.unprocessedPath))
+      .map((row) => normalizeMessage(row))
+      .filter((row): row is BufferMessage => row !== null);
+    const merged = new Map<string, BufferMessage>();
+    for (const row of [...current, ...normalized]) {
+      merged.set(row.id, {
+        ...row,
+        extractionQueued: false
+      });
+    }
+    await writeJsonlFileAtomic(
+      this.paths.unprocessedPath,
+      [...merged.values()].sort((left, right) => left.id.localeCompare(right.id))
+    );
   }
 
   private async archiveMessages(messages: BufferMessage[]): Promise<string[]> {
@@ -205,7 +253,15 @@ function normalizeMessage(raw: BufferMessage): BufferMessage | null {
     channel,
     text,
     meta,
-    extracted: Boolean(raw.extracted)
+    extracted: Boolean(raw.extracted),
+    extractionQueued: Boolean(raw.extractionQueued)
+  };
+}
+
+function cloneMessage(row: BufferMessage): BufferMessage {
+  return {
+    ...row,
+    meta: row.meta ? { ...row.meta } : undefined
   };
 }
 

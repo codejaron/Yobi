@@ -77,6 +77,13 @@ export class FactEmbeddingStore {
     this.dirty = false;
   }
 
+  async clearAll(): Promise<void> {
+    await this.init();
+    this.records.clear();
+    this.dirty = false;
+    await writeJsonFileAtomic(this.paths.factEmbeddingsPath, []);
+  }
+
   async findPendingFacts(facts: Fact[], modelId: string, limit = 10): Promise<Fact[]> {
     await this.init();
     const activeFacts = facts

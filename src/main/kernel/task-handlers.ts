@@ -45,7 +45,9 @@ const reflectionSchema = z.object({
 const dailyEpisodeSummarySchema = z.object({
   summary: z.string().min(1).max(240),
   unresolved: z.array(z.string().min(1).max(120)).max(5).default([]),
-  significance: z.number().min(0).max(1).default(0.4)
+  significance: z.number().min(0).max(1).default(0.4),
+  user_mood: z.string().min(1).max(30).default("unknown"),
+  yobi_mood: z.string().min(1).max(30).default("neutral")
 });
 
 export interface KernelQueueTaskHandler {
@@ -136,23 +138,23 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
 
   constructor(private readonly context: KernelTaskHandlerContext) {}
 
-  async handle(_task: PendingTask): Promise<void> {
+  async handle(task: PendingTask): Promise<void> {
     const history = await this.context.memory.listHistory({
       threadId: this.context.threadId,
       resourceId: this.context.resourceId,
       limit: 5000
     });
-    const today = toDayKey(new Date());
-    const todayItems = history.filter((item) => toDayKey(new Date(item.timestamp)) === today);
-    if (todayItems.length === 0) {
+    const dayKey = typeof task.payload.dayKey === "string" ? task.payload.dayKey : toDayKey(new Date());
+    const dayItems = history.filter((item) => toDayKey(new Date(item.timestamp)) === dayKey);
+    if (dayItems.length === 0) {
       return;
     }
 
-    const first = todayItems[0];
-    const last = todayItems[todayItems.length - 1];
-    const userMessages = todayItems.filter((item) => item.role === "user");
+    const first = dayItems[0];
+    const last = dayItems[dayItems.length - 1];
+    const userMessages = dayItems.filter((item) => item.role === "user");
     const fallbackSummary = [
-      `今天共对话 ${todayItems.length} 条，用户消息 ${userMessages.length} 条。`,
+      `${dayKey} 共对话 ${dayItems.length} 条，用户消息 ${userMessages.length} 条。`,
       first ? `开场：${shorten(first.text, 40)}` : "",
       last ? `收尾：${shorten(last.text, 40)}` : ""
     ]
@@ -162,10 +164,14 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
     let summary = fallbackSummary;
     let unresolved: string[] = [];
     let significance = 0.4;
+    let emotionalContext = {
+      user: "unknown",
+      yobi: "neutral"
+    };
     try {
       const result = await this.context.backgroundWorker.runDailyEpisode({
-        date: today,
-        todayItems: todayItems.map((item) => ({ role: item.role, text: item.text })),
+        date: dayKey,
+        dayItems: dayItems.map((item) => ({ role: item.role, text: item.text })),
         userMessageCount: userMessages.length,
         fallbackSummary,
         config: this.context.getConfig()
@@ -174,7 +180,7 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
         reportTokenUsage({
           source: "background:daily-summary",
           usage: result.tokenUsage,
-          inputText: JSON.stringify(todayItems.slice(-80)),
+          inputText: JSON.stringify(dayItems.slice(-120)),
           outputText: JSON.stringify(result)
         });
       }
@@ -182,13 +188,17 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
       summary = parsed.summary.trim() || fallbackSummary;
       unresolved = parsed.unresolved;
       significance = parsed.significance;
+      emotionalContext = {
+        user: parsed.user_mood,
+        yobi: parsed.yobi_mood
+      };
     } catch (error) {
       logger.warn(
         "kernel",
         "daily-episode-fallback",
         {
-          date: today,
-          historyCount: todayItems.length,
+          date: dayKey,
+          historyCount: dayItems.length,
           userMessageCount: userMessages.length
         },
         error
@@ -196,13 +206,14 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
     }
 
     const episode = this.context.memory.getEpisodesStore().buildEpisode({
-      date: today,
+      date: dayKey,
       summary,
       significance,
-      sourceRanges: [],
-      unresolved
+      sourceRanges: [`day:${dayKey}`],
+      unresolved,
+      emotionalContext
     });
-    await this.context.memory.getEpisodesStore().saveDailyEpisodes(today, [episode]);
+    await this.context.memory.getEpisodesStore().saveDailyEpisodes(dayKey, [episode]);
   }
 }
 

@@ -33,7 +33,9 @@ const reflectionSchema = zod.z.object({
 const dailyEpisodeSummarySchema = zod.z.object({
   summary: zod.z.string().min(1).max(240),
   unresolved: zod.z.array(zod.z.string().min(1).max(120)).max(5).default([]),
-  significance: zod.z.number().min(0).max(1).default(0.4)
+  significance: zod.z.number().min(0).max(1).default(0.4),
+  user_mood: zod.z.string().min(1).max(30).default('unknown'),
+  yobi_mood: zod.z.string().min(1).max(30).default('neutral')
 });
 const proactiveRewriteSchema = zod.z.object({
   shouldSend: zod.z.boolean(),
@@ -165,11 +167,27 @@ async function runFactExtraction(message) {
 async function runDailyEpisode(message) {
   const { generateObject } = await import('ai');
   const model = await createModelForRoute(message.config, 'reflection');
-  const system = '你负责把当天对话整理成一条简短 episode，总结当天对话、未解事项和重要性。';
-  const prompt = JSON.stringify({ date: message.date, message_window: message.todayItems.slice(-80) });
+  const system = [
+    '你负责把指定日期的一整天对话整理成一条简短 episode。',
+    '请总结当天主线、列出未解事项、判断重要性，并分别给出用户情绪和 Yobi 情绪。',
+    '只输出 schema 字段，不要输出额外解释。'
+  ].join('\n');
+  const prompt = JSON.stringify({
+    date: message.date,
+    fallback_summary: message.fallbackSummary,
+    user_message_count: message.userMessageCount,
+    message_window: Array.isArray(message.dayItems) ? message.dayItems.slice(-120) : []
+  }, null, 2);
   const result = await generateObject({ model, providerOptions: resolveProviderOptions(message.config, 'reflection'), schema: dailyEpisodeSummarySchema, system, prompt, maxOutputTokens: 240 });
   const parsed = dailyEpisodeSummarySchema.parse(result.object ?? {});
-  return { summary: parsed.summary, unresolved: parsed.unresolved, significance: parsed.significance, tokenUsage: result.usage };
+  return {
+    summary: parsed.summary,
+    unresolved: parsed.unresolved,
+    significance: parsed.significance,
+    user_mood: parsed.user_mood,
+    yobi_mood: parsed.yobi_mood,
+    tokenUsage: result.usage
+  };
 }
 
 async function runProfileSemantic(message) {

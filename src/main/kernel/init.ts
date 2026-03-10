@@ -2,7 +2,6 @@ import { promises as fs } from "node:fs";
 import {
   DEFAULT_KERNEL_STATE,
   DEFAULT_USER_PROFILE,
-  type Fact,
   type ReflectionProposal
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
@@ -72,8 +71,6 @@ export async function ensureKernelBootstrap(paths: CompanionPaths): Promise<void
   await ensureTextFile(paths.personaPath, DEFAULT_PERSONA_TEXT);
 
   await ensureJsonFile(paths.statePath, DEFAULT_KERNEL_STATE);
-  await ensureJsonFile<Fact[]>(paths.factsPath, []);
-  await ensureJsonFile<Fact[]>(paths.factsArchivePath, []);
   await ensureJsonFile(paths.profilePath, DEFAULT_USER_PROFILE);
   await ensureJsonFile(paths.reflectionQueuePath, [] as ReflectionProposal[]);
   await ensureJsonFile(paths.reflectionLogPath, [] as ReflectionProposal[]);

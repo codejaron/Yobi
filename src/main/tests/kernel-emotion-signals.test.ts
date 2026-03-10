@@ -35,6 +35,10 @@ const baseEmotional: EmotionalState = {
   irritation: 0.1
 };
 
+function assertApprox(actual: number, expected: number, epsilon = 1e-9): void {
+  assert.ok(Math.abs(actual - expected) <= epsilon, `expected ${actual} ≈ ${expected}`);
+}
+
 test("computeSignalAgeScale: 在 fullEffect 内保持 1", () => {
   const now = new Date("2026-03-04T12:00:00.000Z");
   const scale = computeSignalAgeScale("2026-03-04T11:45:00.000Z", now, emotionSignalConfig);
@@ -68,12 +72,12 @@ test("applyEmotionalSignalsToState: 正向信号驱动 mood/curiosity/confidence
     ageScale: 1
   });
 
-  assert.equal(next.mood, 0.12);
-  assert.equal(next.energy, 0.63);
-  assert.equal(next.connection, 0.58);
-  assert.equal(next.curiosity, 0.55);
-  assert.equal(next.confidence, 0.52);
-  assert.equal(next.irritation, 0.1);
+  assertApprox(next.mood, 0.048);
+  assertApprox(next.energy, 0.612);
+  assertApprox(next.connection, 0.532);
+  assertApprox(next.curiosity, 0.46);
+  assertApprox(next.confidence, 0.516);
+  assertApprox(next.irritation, 0.1);
 });
 
 test("applyEmotionalSignalsToState: friction 会压 confidence 并推高 irritation", () => {
@@ -90,8 +94,8 @@ test("applyEmotionalSignalsToState: friction 会压 confidence 并推高 irritat
     ageScale: 1
   });
 
-  assert.equal(next.confidence, 0.4);
-  assert.equal(next.irritation, 0.22);
+  assertApprox(next.confidence, 0.48);
+  assertApprox(next.irritation, 0.148);
 });
 
 test("applyEmotionalSignalsToState: 单窗变化受 windowMaxAbsDelta 限幅", () => {
@@ -111,9 +115,27 @@ test("applyEmotionalSignalsToState: 单窗变化受 windowMaxAbsDelta 限幅", (
     ageScale: 1
   });
 
-  assert.equal(next.mood, 0.05);
-  assert.equal(next.connection, 0.55);
-  assert.equal(next.curiosity, 0.45);
+  assertApprox(next.mood, 0.048);
+  assertApprox(next.connection, 0.55);
+  assertApprox(next.curiosity, 0.45);
+});
+
+test("applyRealtimeEmotionalSignals: 过期信号会按 staleness 配置衰减", () => {
+  const next = applyRealtimeEmotionalSignals({
+    emotional: baseEmotional,
+    signals: {
+      user_mood: "positive",
+      engagement: 0.8,
+      trust_delta: 0.08,
+      friction: false,
+      curiosity_trigger: true
+    },
+    config: emotionSignalConfig,
+    latestMessageTs: "2026-03-03T12:00:00.000Z",
+    now: new Date("2026-03-04T12:00:00.000Z")
+  });
+
+  assert.deepEqual(next, baseEmotional);
 });
 
 test("applyRealtimeEmotionalSignals: 有信号时按实时窗口更新情绪", () => {

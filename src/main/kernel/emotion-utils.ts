@@ -89,10 +89,13 @@ export function applyEmotionalSignalsToState(input: {
   ageScale: number;
 }): EmotionalState {
   const scaledDelta = (raw: number): number =>
-    clampAbsDelta(raw * input.ageScale, input.config.windowMaxAbsDelta);
+    clampAbsDelta(raw * input.config.deltaScale * input.ageScale, input.config.windowMaxAbsDelta);
   const next: EmotionalState = {
     ...input.emotional
   };
+  const positiveTrustDelta =
+    input.signals.trust_delta >= input.config.minPositiveTrustDelta ? input.signals.trust_delta : 0;
+  const negativeTrustDelta = input.signals.trust_delta < 0 ? input.signals.trust_delta : 0;
 
   const moodDelta =
     input.signals.user_mood === "positive"
@@ -107,7 +110,7 @@ export function applyEmotionalSignalsToState(input: {
   const energyDelta = (input.signals.engagement - 0.5) * input.config.energyEngagementScale;
   next.energy = clamp01(next.energy + scaledDelta(energyDelta));
 
-  next.connection = clamp01(next.connection + scaledDelta(input.signals.trust_delta));
+  next.connection = clamp01(next.connection + scaledDelta(positiveTrustDelta + negativeTrustDelta));
 
   const curiosityDelta = input.signals.curiosity_trigger ? input.config.curiosityBoost : 0;
   next.curiosity = clamp01(next.curiosity + scaledDelta(curiosityDelta));
@@ -115,6 +118,9 @@ export function applyEmotionalSignalsToState(input: {
   let confidenceDelta = 0;
   if (!input.signals.friction && input.signals.engagement >= input.config.minPositiveEngagement) {
     confidenceDelta += input.config.confidenceGain;
+  }
+  if (positiveTrustDelta > 0) {
+    confidenceDelta += positiveTrustDelta * 0.25;
   }
   if (input.signals.friction) {
     confidenceDelta -= input.config.confidenceDropOnFriction;
@@ -131,15 +137,22 @@ export function applyRealtimeEmotionalSignals(input: {
   emotional: EmotionalState;
   signals: RealtimeEmotionalSignals | null | undefined;
   config: AppConfig["kernel"]["emotionSignals"];
+  latestMessageTs?: string | null;
+  now?: Date;
 }): EmotionalState {
   if (!input.signals) {
     return input.emotional;
   }
 
+  const now = input.now ?? new Date();
+  const ageScale = input.latestMessageTs
+    ? computeSignalAgeScale(input.latestMessageTs, now, input.config)
+    : 1;
+
   return applyEmotionalSignalsToState({
     emotional: input.emotional,
     signals: input.signals,
     config: input.config,
-    ageScale: 1
+    ageScale
   });
 }

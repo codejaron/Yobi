@@ -11,7 +11,7 @@ function cloneConfig(): AppConfig {
   return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 }
 
-test("searchRelevantFacts: heuristic embedding can bridge 疲劳语义到加班 fact", async () => {
+test("searchRelevantFacts: hybrid vector recall can bridge 疲劳语义到加班 fact", async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-embed-"));
   try {
     const paths = new CompanionPaths(baseDir);
@@ -19,7 +19,7 @@ test("searchRelevantFacts: heuristic embedding can bridge 疲劳语义到加班 
 
     const config = cloneConfig();
     config.memory.embedding.enabled = true;
-    config.memory.embedding.modelId = "heuristic-v1";
+    config.memory.embedding.modelId = "test-model-v1";
 
     const memory = new YobiMemory(paths, () => config);
     await memory.init();
@@ -40,7 +40,23 @@ test("searchRelevantFacts: heuristic embedding can bridge 疲劳语义到加班 
       ],
       "test"
     );
-    await memory.syncFactEmbeddings(changed);
+
+    await memory.getFactEmbeddingStore().upsert([
+      {
+        fact_id: changed[0]!.id,
+        model_id: "test-model-v1",
+        vector: [1, 0],
+        updated_at: new Date().toISOString()
+      }
+    ]);
+    await memory.getFactEmbeddingStore().flushIfDirty();
+
+    (memory as any).embedder = {
+      init() {},
+      getCurrentModelId: () => "test-model-v1",
+      getStatus: () => ({ status: "ready", mode: "vector-only", downloadPending: false, message: "test" }),
+      embed: async () => ({ modelId: "test-model-v1", vector: [1, 0] })
+    };
 
     const results = await memory.searchRelevantFacts({
       queryTexts: ["我今天真的好累"],
@@ -50,6 +66,8 @@ test("searchRelevantFacts: heuristic embedding can bridge 疲劳语义到加班 
 
     assert.equal(results[0]?.fact.value, "最近加班较多");
     assert.equal(results[0]?.semanticHit, true);
+    assert.ok((results[0]?.vectorScore ?? 0) > 0);
+    assert.ok((results[0]?.finalScore ?? 0) > 0);
   } finally {
     await fs.rm(baseDir, { recursive: true, force: true });
   }
@@ -63,7 +81,7 @@ test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => 
 
     const config = cloneConfig();
     config.memory.embedding.enabled = true;
-    config.memory.embedding.modelId = "heuristic-v1";
+    config.memory.embedding.modelId = "test-model-v1";
 
     const memory = new YobiMemory(paths, () => config);
     await memory.init();
@@ -84,9 +102,25 @@ test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => 
       ],
       "test"
     );
-    await memory.syncFactEmbeddings(changed);
 
-    config.memory.embedding.modelId = "heuristic-v2";
+    await memory.getFactEmbeddingStore().upsert([
+      {
+        fact_id: changed[0]!.id,
+        model_id: "test-model-v1",
+        vector: [1, 0],
+        updated_at: new Date().toISOString()
+      }
+    ]);
+    await memory.getFactEmbeddingStore().flushIfDirty();
+
+    config.memory.embedding.modelId = "test-model-v2";
+    (memory as any).embedder = {
+      init() {},
+      getCurrentModelId: () => "test-model-v2",
+      getStatus: () => ({ status: "ready", mode: "vector-only", downloadPending: false, message: "test" }),
+      embed: async () => ({ modelId: "test-model-v2", vector: [1, 0] })
+    };
+
     const results = await memory.searchRelevantFacts({
       queryTexts: ["我今天真的好累"],
       facts: await memory.listFacts(),

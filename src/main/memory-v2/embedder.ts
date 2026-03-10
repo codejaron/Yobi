@@ -4,18 +4,13 @@ import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { CompanionPaths } from "@main/storage/paths";
 import { appLogger as logger } from "@main/runtime/singletons";
-import type { AppConfig } from "@shared/types";
+import type { AppConfig, EmbedderRuntimeStatus } from "@shared/types";
 
 export type EmbedderStatus = "disabled" | "loading" | "ready" | "error";
 
 export interface EmbeddingResult {
   modelId: string;
   vector: number[];
-}
-
-interface ConceptDefinition {
-  label: string;
-  terms: string[];
 }
 
 interface WorkerReply {
@@ -31,51 +26,9 @@ interface PendingWorkerCall {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-const HASH_VECTOR_SIZE = 48;
-const CONCEPT_VECTOR_SIZE = 16;
-const TOTAL_VECTOR_SIZE = HASH_VECTOR_SIZE + CONCEPT_VECTOR_SIZE;
 const DEFAULT_MODEL_ID = "embeddinggemma-300m-qat-Q8_0.gguf";
 const DEFAULT_MODEL_URL = "https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/main/embeddinggemma-300m-qat-Q8_0.gguf";
 const WORKER_CALL_TIMEOUT_MS = 20_000;
-
-const CONCEPTS: ConceptDefinition[] = [
-  { label: "fatigue-workload", terms: ["累", "疲惫", "困", "忙", "压力", "加班", "工作多", "工作很满", "撑不住", "上班"] },
-  { label: "sadness", terms: ["难过", "低落", "沮丧", "伤心", "想哭"] },
-  { label: "anxiety", terms: ["焦虑", "担心", "不安", "慌", "紧张"] },
-  { label: "joy", terms: ["开心", "高兴", "快乐", "兴奋", "期待"] },
-  { label: "games", terms: ["原神", "游戏", "米哈游", "steam", "switch"] },
-  { label: "study", terms: ["学习", "考试", "作业", "论文", "上课"] },
-  { label: "sleep", terms: ["睡", "失眠", "熬夜", "困", "补觉"] },
-  { label: "food", terms: ["吃", "饭", "火锅", "奶茶", "咖啡"] }
-];
-
-function normalize(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function tokenize(text: string): string[] {
-  const normalized = normalize(text);
-  const englishTokens = normalized.match(/[a-z0-9_]{2,24}/g) ?? [];
-  const cjkChars = [...normalized].filter((char) => /[\u3400-\u9fff]/.test(char));
-  const cjkTokens: string[] = [];
-  for (const gramSize of [2, 3]) {
-    if (cjkChars.length < gramSize) {
-      continue;
-    }
-    for (let index = 0; index <= cjkChars.length - gramSize; index += 1) {
-      cjkTokens.push(cjkChars.slice(index, index + gramSize).join(""));
-    }
-  }
-  return [...englishTokens, ...cjkTokens];
-}
-
-function hashToken(token: string): number {
-  let hash = 0;
-  for (const char of token) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-  return hash;
-}
 
 function normalizeVector(vector: number[]): number[] {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
@@ -83,24 +36,6 @@ function normalizeVector(vector: number[]): number[] {
     return vector;
   }
   return vector.map((value) => value / norm);
-}
-
-function heuristicEmbed(text: string): number[] {
-  const vector = new Array<number>(TOTAL_VECTOR_SIZE).fill(0);
-  const normalized = normalize(text);
-  for (const token of tokenize(normalized)) {
-    const bucket = hashToken(token) % HASH_VECTOR_SIZE;
-    vector[bucket] += token.length >= 3 ? 0.5 : 0.3;
-  }
-
-  CONCEPTS.slice(0, CONCEPT_VECTOR_SIZE).forEach((concept, index) => {
-    const matched = concept.terms.some((term) => normalized.includes(term));
-    if (matched) {
-      vector[HASH_VECTOR_SIZE + index] += 6;
-    }
-  });
-
-  return normalizeVector(vector);
 }
 
 function resolveModelPath(paths: CompanionPaths, modelId: string): string | null {
@@ -135,7 +70,6 @@ export class EmbedderService {
   private status: EmbedderStatus = "disabled";
   private errorMessage = "";
   private initPromise: Promise<void> | null = null;
-  private backend: "heuristic" | "utility-llama" | "utility-heuristic" = "heuristic";
   private modelPath: string | null = null;
   private worker: any = null;
   private pending = new Map<string, PendingWorkerCall>();
@@ -153,10 +87,12 @@ export class EmbedderService {
     this.initPromise = this.initialize();
   }
 
-  getStatus(): { status: EmbedderStatus; message: string } {
+  getStatus(): EmbedderRuntimeStatus {
     const suffix = this.modelPath ? ` (${path.basename(this.modelPath)})` : "";
     return {
       status: this.status,
+      mode: this.status === "ready" ? "vector-only" : this.status === "disabled" ? "disabled" : "bm25-only",
+      downloadPending: this.downloadPromise !== null,
       message: `${this.errorMessage}${suffix}`.trim()
     };
   }
@@ -173,7 +109,7 @@ export class EmbedderService {
 
     if (!this.getConfig().memory.embedding.enabled) {
       this.status = "disabled";
-      this.backend = "heuristic";
+      this.errorMessage = "embedding disabled";
       return null;
     }
 
@@ -182,25 +118,27 @@ export class EmbedderService {
     }
     await this.initPromise;
 
-    if (this.worker) {
-      try {
-        const result = await this.callWorker("embed", { text: trimmed }) as EmbeddingResult;
-        return {
-          modelId: result.modelId,
-          vector: normalizeVector(result.vector ?? [])
-        };
-      } catch (error) {
-        logger.warn("embedder", "embed-call-fallback", { modelId: this.getCurrentModelId() }, error);
-        this.backend = "heuristic";
-        this.status = "ready";
-        this.errorMessage = error instanceof Error ? `heuristic fallback: ${error.message}` : "heuristic fallback";
-      }
+    if (!this.worker || this.status !== "ready") {
+      return null;
     }
 
-    return {
-      modelId: this.getCurrentModelId(),
-      vector: heuristicEmbed(trimmed)
-    };
+    try {
+      const result = await this.callWorker("embed", { text: trimmed }) as EmbeddingResult;
+      const vector = normalizeVector(result.vector ?? []);
+      if (vector.length === 0) {
+        return null;
+      }
+      return {
+        modelId: result.modelId,
+        vector
+      };
+    } catch (error) {
+      logger.warn("embedder", "embed-call-failed", { modelId: this.getCurrentModelId() }, error);
+      this.disposeWorker();
+      this.status = "error";
+      this.errorMessage = error instanceof Error ? error.message : "vector-unavailable";
+      return null;
+    }
   }
 
   private async initialize(): Promise<void> {
@@ -215,21 +153,19 @@ export class EmbedderService {
     this.modelPath = resolveModelPath(this.paths, this.getCurrentModelId());
 
     if (!process.versions.electron) {
-      this.backend = "heuristic";
-      this.status = "ready";
-      this.errorMessage = "heuristic-local-embedder";
+      this.status = "error";
+      this.errorMessage = "vector embedder unavailable in node runtime";
       return;
     }
 
     if (!this.modelPath) {
-      this.backend = "heuristic";
-      this.status = "ready";
       const downloadUrl = resolveDownloadUrl(this.getCurrentModelId());
+      this.status = "error";
       if (downloadUrl) {
-        this.errorMessage = "正在后台下载 GGUF，当前使用 heuristic fallback";
+        this.errorMessage = "正在后台下载 GGUF，当前仅词法检索";
         this.downloadPromise ??= this.downloadModelInBackground(downloadUrl);
       } else {
-        this.errorMessage = "未找到本地 GGUF，当前使用 heuristic fallback";
+        this.errorMessage = "未找到本地 GGUF，当前仅词法检索";
       }
       return;
     }
@@ -274,9 +210,8 @@ export class EmbedderService {
           code: code ?? "unknown"
         }, exitError);
         this.rejectPendingCalls(exitError);
-        this.backend = "heuristic";
-        this.status = "ready";
-        this.errorMessage = `heuristic fallback: ${exitError.message}`;
+        this.status = "error";
+        this.errorMessage = exitError.message;
       });
 
       const childWithLooseEvents = child as {
@@ -292,9 +227,8 @@ export class EmbedderService {
           modelPath: this.modelPath
         }, normalizedError);
         this.rejectPendingCalls(normalizedError);
-        this.backend = "heuristic";
-        this.status = "ready";
-        this.errorMessage = `heuristic fallback: ${normalizedError.message}`;
+        this.status = "error";
+        this.errorMessage = normalizedError.message;
       });
 
       this.worker = child;
@@ -302,27 +236,22 @@ export class EmbedderService {
       const nodeLlamaModuleUrl = pathToFileURL(
         path.join(electron.app.getAppPath(), "node_modules", "node-llama-cpp", "dist", "index.js")
       ).href;
-      const initResult = await this.callWorker("init", {
+      await this.callWorker("init", {
         modelId: this.getCurrentModelId(),
         modelPath: this.modelPath,
         nodeLlamaModuleUrl,
         preferredGpu: process.platform === "darwin" ? "metal" : "auto"
-      }) as { backend?: string; message?: string };
-      this.backend = initResult.backend === "llama" ? "utility-llama" : "utility-heuristic";
+      });
       this.status = "ready";
-      this.errorMessage =
-        initResult.message ||
-        (this.backend === "utility-llama" ? "llama-local-embedder" : "heuristic-local-embedder");
-      return;
+      this.errorMessage = "llama-local-embedder";
     } catch (error) {
       logger.error("embedder", "worker-init-failed", {
         modelId: this.getCurrentModelId(),
         modelPath: this.modelPath
       }, error);
       this.disposeWorker();
-      this.backend = "heuristic";
-      this.status = "ready";
-      this.errorMessage = error instanceof Error ? `heuristic fallback: ${error.message}` : "heuristic fallback";
+      this.status = "error";
+      this.errorMessage = error instanceof Error ? error.message : "vector-unavailable";
     }
   }
 
@@ -346,16 +275,15 @@ export class EmbedderService {
       });
       await fs.promises.rename(tempPath, targetPath);
       this.modelPath = targetPath;
-      this.errorMessage = "GGUF 下载完成，正在切换到 llama embedder";
+      this.errorMessage = "GGUF 下载完成，正在切换到向量检索";
       await this.initializeWorkerBackend();
     } catch (error) {
       logger.error("embedder", "gguf-download-failed", {
         modelId: this.getCurrentModelId(),
         downloadUrl
       }, error);
+      this.status = "error";
       this.errorMessage = error instanceof Error ? `GGUF 下载失败：${error.message}` : "GGUF 下载失败";
-      this.backend = "heuristic";
-      this.status = "ready";
     } finally {
       this.downloadPromise = null;
     }

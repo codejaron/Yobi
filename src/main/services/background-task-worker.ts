@@ -102,12 +102,26 @@ export class BackgroundTaskWorkerService {
 
   async runDailyEpisode(input: {
     date: string;
-    todayItems: Array<{ role: string; text: string }>;
+    dayItems: Array<{ role: string; text: string }>;
     userMessageCount: number;
     fallbackSummary: string;
     config: AppConfig;
-  }): Promise<{ summary: string; unresolved: string[]; significance: number; tokenUsage?: unknown }> {
-    return this.call("daily-episode", input) as Promise<{ summary: string; unresolved: string[]; significance: number; tokenUsage?: unknown }>;
+  }): Promise<{
+    summary: string;
+    unresolved: string[];
+    significance: number;
+    user_mood: string;
+    yobi_mood: string;
+    tokenUsage?: unknown;
+  }> {
+    return this.call("daily-episode", input) as Promise<{
+      summary: string;
+      unresolved: string[];
+      significance: number;
+      user_mood: string;
+      yobi_mood: string;
+      tokenUsage?: unknown;
+    }>;
   }
 
   async runProfileSemantic(input: {

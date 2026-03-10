@@ -1,4 +1,4 @@
-import type { AppConfig } from "@shared/types";
+import type { AppConfig, AppStatus } from "@shared/types";
 import {
   Card,
   CardContent,
@@ -12,6 +12,7 @@ import { Switch } from "@renderer/components/ui/switch";
 
 interface MemorySettingsCardProps {
   config: AppConfig;
+  status: AppStatus | null;
   setConfig: (next: AppConfig) => void;
 }
 
@@ -25,8 +26,13 @@ function toInt(raw: string, fallback: number, min: number, max: number): number 
 
 export function MemorySettingsCard({
   config,
+  status,
   setConfig
 }: MemorySettingsCardProps) {
+  const showFallbackWarning =
+    (status?.embedder.mode === "bm25-only" || status?.embedder.mode === "vector-only") &&
+    config.memory.embedding.enabled;
+
   return (
     <Card>
       <CardHeader>
@@ -36,6 +42,12 @@ export function MemorySettingsCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {showFallbackWarning ? (
+          <div className="rounded-md border border-amber-300/80 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            当前检索处于回退模式；请检查本地 GGUF 模型或词法索引状态是否可用。
+          </div>
+        ) : null}
+
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
           <Label>启用 Kernel V2</Label>
           <Switch

@@ -6,7 +6,6 @@ import type {
   RelationshipStage,
   UserProfile
 } from "@shared/types";
-import { extractQueryTerms, matchEpisodes, matchFacts } from "./retrieval";
 import { estimateTokenCount } from "./token-utils";
 
 export interface ContextAssemblerInput {
@@ -38,37 +37,28 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   const stateBlock = buildStateBlock(input.state, input.profile);
   const stateTokens = estimateTokenCount(stateBlock);
 
-  const queryTerms = extractQueryTerms(
-    input.buffer
-      .filter((item) => item.role === "user")
-      .slice(-3)
-      .map((item) => item.text)
-  );
-
   const rawRemaining = Math.max(0, maxTokens - block1Tokens - stateTokens - RESERVED_RESPONSE_TOKENS);
-  const memoryBudget = Math.min(rawRemaining, Math.max(200, input.memoryFloorTokens));
-  const factsMatched = matchFacts(input.facts, queryTerms, 20);
-  const episodesMatched = matchEpisodes(input.episodes, queryTerms, 8);
+  const memoryBudget = Math.max(0, rawRemaining);
 
   const selectedFacts: Fact[] = [];
   const selectedEpisodes: Episode[] = [];
   let memoryTokens = 0;
-  for (const row of factsMatched) {
-    const line = `- ${row.fact.entity}/${row.fact.key}: ${row.fact.value}`;
+  for (const fact of input.facts) {
+    const line = `- ${fact.entity}/${fact.key}: ${fact.value}`;
     const tokens = estimateTokenCount(line) + 6;
     if (memoryTokens + tokens > memoryBudget) {
       break;
     }
-    selectedFacts.push(row.fact);
+    selectedFacts.push(fact);
     memoryTokens += tokens;
   }
-  for (const row of episodesMatched) {
-    const line = `- ${row.episode.date}: ${row.episode.summary}`;
+  for (const episode of input.episodes) {
+    const line = `- ${episode.date}: ${episode.summary}`;
     const tokens = estimateTokenCount(line) + 6;
     if (memoryTokens + tokens > memoryBudget) {
       break;
     }
-    selectedEpisodes.push(row.episode);
+    selectedEpisodes.push(episode);
     memoryTokens += tokens;
   }
 

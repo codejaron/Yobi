@@ -37,7 +37,8 @@ export class StateStore {
         ...this.state.relationship
       },
       sessionReentry: this.state.sessionReentry ? { ...this.state.sessionReentry } : null,
-      lastDecayAt: this.state.lastDecayAt
+      lastDecayAt: this.state.lastDecayAt,
+      lastDailyTaskDayKey: this.state.lastDailyTaskDayKey
     };
   }
 
@@ -139,6 +140,10 @@ function normalizeState(input: KernelStateDocument): KernelStateDocument {
     lastDecayAt:
       typeof input.lastDecayAt === "string" && Number.isFinite(new Date(input.lastDecayAt).getTime())
         ? new Date(input.lastDecayAt).toISOString()
+        : null,
+    lastDailyTaskDayKey:
+      typeof input.lastDailyTaskDayKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.lastDailyTaskDayKey)
+        ? input.lastDailyTaskDayKey
         : null,
     sessionReentry: input.sessionReentry
       ? {

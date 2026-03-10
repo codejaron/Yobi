@@ -24,7 +24,6 @@ import { EpisodesStore } from "@main/memory-v2/episodes-store";
 import { TopicStore } from "@main/memory-v2/topic-store";
 import { FactEmbeddingStore, type SemanticFactMatch } from "@main/memory-v2/fact-embeddings-store";
 import { EmbedderService } from "@main/memory-v2/embedder";
-import { extractQueryTerms, matchFacts } from "@main/memory-v2/retrieval";
 
 interface MemoryResourceContext {
   threadId: string;
@@ -44,12 +43,10 @@ interface CursorHistoryInput extends MemoryResourceContext {
 
 interface PendingTopic extends TopicPoolItem {}
 
-interface BufferCompactionSignal {
-  removed: BufferMessage[];
-  sourceRanges: string[];
-}
-
 export interface RelevantFactMatch extends SemanticFactMatch {
+  finalScore: number;
+  textScore: number;
+  vectorScore: number;
   lexicalHit: boolean;
   lexicalScore: number;
   semanticHit: boolean;
@@ -87,7 +84,6 @@ export class YobiMemory {
   private readonly factEmbeddingStore: FactEmbeddingStore;
   private readonly embedder: EmbedderService;
   private initialized = false;
-  private compactionSignals: BufferCompactionSignal[] = [];
 
   constructor(
     private readonly paths: CompanionPaths,
@@ -135,17 +131,8 @@ export class YobiMemory {
       lowWatermark: kernel.buffer.lowWatermark
     });
     if (compaction.compacted && compaction.removed.length > 0) {
-      this.compactionSignals.push({
-        removed: compaction.removed,
-        sourceRanges: compaction.sourceRanges
-      });
+      await this.profileStore.updateFromStatSignals(compaction.removed);
     }
-  }
-
-  drainCompactionSignals(): BufferCompactionSignal[] {
-    const current = this.compactionSignals;
-    this.compactionSignals = [];
-    return current;
   }
 
   async recall(input: MemoryResourceContext): Promise<{
@@ -247,7 +234,7 @@ export class YobiMemory {
       : mapped;
     const offset = Math.max(0, input.offset ?? 0);
     const limit = Math.max(1, Math.min(1000, input.limit ?? 100));
-    return filtered.slice(offset, offset + limit);
+    return filtered.slice().reverse().slice(offset, offset + limit).reverse();
   }
 
   async listHistoryByCursor(input: CursorHistoryInput): Promise<{
@@ -337,6 +324,11 @@ export class YobiMemory {
     return this.bufferStore.consumeUnprocessed();
   }
 
+  async queuePendingBufferExtractions(minMessages: number): Promise<BufferMessage[]> {
+    await this.init();
+    return this.bufferStore.queueUnextractedMessages(minMessages);
+  }
+
   async listFacts(): Promise<Fact[]> {
     await this.init();
     return this.factsStore.listActive();
@@ -372,7 +364,7 @@ export class YobiMemory {
 
   async syncFactEmbeddings(facts: Fact[]): Promise<void> {
     await this.init();
-    if (facts.length === 0 || !this.getConfig().memory.embedding.enabled) {
+    if (facts.length === 0 || !this.getConfig().memory.embedding.enabled || !this.isVectorAvailable()) {
       return;
     }
 
@@ -400,7 +392,7 @@ export class YobiMemory {
 
   async backfillFactEmbeddings(limit = 10): Promise<void> {
     await this.init();
-    if (!this.getConfig().memory.embedding.enabled) {
+    if (!this.getConfig().memory.embedding.enabled || !this.isVectorAvailable()) {
       return;
     }
 
@@ -429,34 +421,47 @@ export class YobiMemory {
       return [];
     }
 
-    const lexicalTerms = extractQueryTerms(input.queryTexts);
-    const lexicalMatches = matchFacts(facts, lexicalTerms, limit);
+    const allowedIds = new Set(facts.map((fact) => fact.id));
+    const retrievalConfig = this.getConfig().memory.retrieval;
+    const candidateLimit = Math.max(limit, limit * retrievalConfig.candidateMultiplier);
+    const lexicalMatches = (await this.factsStore.searchLexical(input.queryTexts, candidateLimit)).filter((row) =>
+      allowedIds.has(row.fact.id)
+    );
     const merged = new Map<string, RelevantFactMatch>();
 
-    for (const row of lexicalMatches) {
+    const lexicalScores = normalizeLexicalScores(lexicalMatches.map((row) => row.bm25Raw));
+
+    lexicalMatches.forEach((row, index) => {
       merged.set(row.fact.id, {
         fact: row.fact,
+        finalScore: 0,
+        textScore: lexicalScores[index] ?? 0,
+        vectorScore: 0,
         semanticHit: false,
         semanticScore: 0,
         lexicalHit: true,
-        lexicalScore: row.score
+        lexicalScore: row.bm25Raw
       });
-    }
+    });
 
+    const vectorAvailable = this.isVectorAvailable();
     const embeddedQuery = await this.embedder.embed(input.queryTexts.join("\n"));
-    if (embeddedQuery) {
+    if (vectorAvailable && embeddedQuery && embeddedQuery.vector.length > 0) {
       const semanticMatches = await this.factEmbeddingStore.search(
         facts,
         embeddedQuery.modelId,
         embeddedQuery.vector,
         this.getConfig().memory.embedding.similarityThreshold,
-        limit
+        candidateLimit
       );
 
       for (const row of semanticMatches) {
         const existing = merged.get(row.fact.id);
         merged.set(row.fact.id, {
           fact: row.fact,
+          finalScore: existing?.finalScore ?? 0,
+          textScore: existing?.textScore ?? 0,
+          vectorScore: row.semanticScore,
           semanticHit: true,
           semanticScore: row.semanticScore,
           lexicalHit: existing?.lexicalHit ?? false,
@@ -465,19 +470,35 @@ export class YobiMemory {
       }
     }
 
+    const vectorWeight = retrievalConfig.vectorWeight;
+    const textWeight = retrievalConfig.textWeight;
     return [...merged.values()]
+      .map((row) => ({
+        ...row,
+        finalScore: computeFinalScore({
+          textScore: row.textScore,
+          vectorScore: row.vectorScore,
+          lexicalHit: row.lexicalHit,
+          semanticHit: row.semanticHit,
+          textWeight,
+          vectorWeight
+        })
+      }))
       .sort((left, right) => {
+        if (left.finalScore !== right.finalScore) {
+          return right.finalScore - left.finalScore;
+        }
         if (left.semanticHit !== right.semanticHit) {
           return left.semanticHit ? -1 : 1;
         }
-        if (left.semanticScore !== right.semanticScore) {
-          return right.semanticScore - left.semanticScore;
+        if (left.vectorScore !== right.vectorScore) {
+          return right.vectorScore - left.vectorScore;
         }
         if (left.lexicalHit !== right.lexicalHit) {
           return left.lexicalHit ? -1 : 1;
         }
-        if (left.lexicalScore !== right.lexicalScore) {
-          return right.lexicalScore - left.lexicalScore;
+        if (left.textScore !== right.textScore) {
+          return right.textScore - left.textScore;
         }
         if (left.fact.confidence !== right.fact.confidence) {
           return right.fact.confidence - left.fact.confidence;
@@ -492,7 +513,43 @@ export class YobiMemory {
   }
 
   getEmbedderStatus(): EmbedderRuntimeStatus {
-    return this.embedder.getStatus();
+    const embedderStatus = this.embedder.getStatus();
+    const lexicalStatus = this.factsStore.getLexicalStatus();
+    const vectorAvailable = embedderStatus.status === "ready";
+    if (lexicalStatus.available && vectorAvailable) {
+      return {
+        status: "ready",
+        mode: "hybrid",
+        downloadPending: embedderStatus.downloadPending,
+        message: embedderStatus.message
+      };
+    }
+    if (lexicalStatus.available) {
+      return {
+        status: "ready",
+        mode: "bm25-only",
+        downloadPending: embedderStatus.downloadPending,
+        message: embedderStatus.message || lexicalStatus.message
+      };
+    }
+    if (vectorAvailable) {
+      return {
+        status: "ready",
+        mode: "vector-only",
+        downloadPending: embedderStatus.downloadPending,
+        message: lexicalStatus.message || embedderStatus.message
+      };
+    }
+    return {
+      status: embedderStatus.status,
+      mode: embedderStatus.status === "disabled" ? "disabled" : "bm25-only",
+      downloadPending: embedderStatus.downloadPending,
+      message: lexicalStatus.message || embedderStatus.message
+    };
+  }
+
+  isVectorAvailable(): boolean {
+    return this.embedder.getStatus().status === "ready";
   }
 
   getFactsStore(): FactsStore {
@@ -586,4 +643,36 @@ function normalizeBufferMessage(raw: BufferMessage): BufferMessage | null {
     meta: raw.meta ? { ...raw.meta } : undefined,
     extracted: Boolean(raw.extracted)
   };
+}
+
+function normalizeLexicalScores(values: number[]): number[] {
+  if (values.length === 0) {
+    return [];
+  }
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  if (values.length >= 2 && max - min > 1e-9) {
+    return values.map((value) => (value - min) / (max - min));
+  }
+  return values.map((value) => value / (1 + value));
+}
+
+function computeFinalScore(input: {
+  textScore: number;
+  vectorScore: number;
+  lexicalHit: boolean;
+  semanticHit: boolean;
+  textWeight: number;
+  vectorWeight: number;
+}): number {
+  if (input.lexicalHit && input.semanticHit) {
+    return input.textScore * input.textWeight + input.vectorScore * input.vectorWeight;
+  }
+  if (input.semanticHit) {
+    return input.vectorScore;
+  }
+  if (input.lexicalHit) {
+    return input.textScore;
+  }
+  return 0;
 }

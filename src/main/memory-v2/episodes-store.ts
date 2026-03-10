@@ -64,6 +64,7 @@ export class EpisodesStore {
 
   buildEpisode(input: EpisodeInput): Episode {
     const now = new Date().toISOString();
+    const sourceRanges = [...new Set((input.sourceRanges ?? []).map((item) => item.trim()).filter(Boolean))].slice(0, 30);
     return {
       id: randomUUID(),
       date: input.date,
@@ -74,10 +75,7 @@ export class EpisodesStore {
       },
       unresolved: (input.unresolved ?? []).map((item) => item.trim()).filter(Boolean).slice(0, 10),
       significance: clampScore(input.significance ?? 0.4),
-      source_ranges: [...new Set((input.sourceRanges ?? []).map((item) => item.trim()).filter(Boolean))].slice(
-        0,
-        30
-      ),
+      source_ranges: sourceRanges.length > 0 ? sourceRanges : [`day:${input.date}`],
       updated_at: now
     };
   }
