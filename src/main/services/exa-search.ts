@@ -1,7 +1,8 @@
 import type { AppConfig } from "@shared/types";
 import { appLogger as logger } from "@main/runtime/singletons";
 
-type ExaUpstreamTool = "web_search_exa" | "get_code_context_exa";
+type ExaUpstreamTool = "web_search_exa" | "get_code_context_exa" | "crawling_exa";
+type ExaDiscoveredTool = ExaUpstreamTool | "crawling";
 
 interface McpSdkModules {
   Client: any;
@@ -25,13 +26,20 @@ export interface CodeSearchItem {
   content: string;
 }
 
+export interface WebFetchResult {
+  title: string;
+  url: string;
+  content: string;
+  summary: string;
+}
+
 interface SearchResponse<TItem> {
   items: TItem[];
   rawText?: string;
   upstreamTool: ExaUpstreamTool;
 }
 
-const EXA_ENDPOINT = "https://mcp.exa.ai/mcp?tools=web_search_exa,get_code_context_exa";
+const EXA_ENDPOINT = "https://mcp.exa.ai/mcp?tools=web_search_exa,get_code_context_exa,crawling_exa";
 const EXA_CONNECT_TIMEOUT_MS = 20_000;
 const EXA_TOOL_TIMEOUT_MS = 20_000;
 
@@ -268,6 +276,49 @@ function toCodeItem(record: SearchItemRecord): CodeSearchItem {
   };
 }
 
+function normalizeWebFetchResult(result: unknown): SearchResponse<WebFetchResult> {
+  const structured = extractStructuredPayload(result) ?? result;
+  const items = pickBestItemArray(structured, "web");
+
+  if (items.length > 0) {
+    const first = items[0];
+    return {
+      items: [
+        {
+          title: readString(first.title) || readString(first.name) || readString(first.path) || "未命名页面",
+          url: readString(first.url) || readString(first.href) || readString(first.link),
+          content:
+            readString(first.content) ||
+            readString(first.text) ||
+            readString(first.snippet) ||
+            readString(first.summary),
+          summary:
+            readString(first.summary) ||
+            readString(first.snippet) ||
+            readString(first.description) ||
+            readString(first.text)
+        }
+      ],
+      rawText: resultToText(result) || undefined,
+      upstreamTool: "crawling_exa"
+    };
+  }
+
+  const rawText = resultToText(result);
+  return {
+    items: [
+      {
+        title: "未命名页面",
+        url: "",
+        content: rawText,
+        summary: rawText.slice(0, 300)
+      }
+    ],
+    rawText: rawText || undefined,
+    upstreamTool: "crawling_exa"
+  };
+}
+
 function normalizeWebSearchResult(result: unknown): SearchResponse<WebSearchItem> {
   const structured = extractStructuredPayload(result) ?? result;
   const items = pickBestItemArray(structured, "web").map((item) => toWebItem(item));
@@ -315,7 +366,7 @@ export class ExaSearchService {
   private sdkPromise: Promise<McpSdkModules> | null = null;
   private connectPromise: Promise<any> | null = null;
   private client: any | null = null;
-  private availableToolSchemas = new Map<ExaUpstreamTool, unknown>();
+  private availableToolSchemas = new Map<ExaDiscoveredTool, unknown>();
 
   constructor(
     private readonly getConfig: () => AppConfig,
@@ -332,6 +383,11 @@ export class ExaSearchService {
   async searchCode(query: string): Promise<SearchResponse<CodeSearchItem>> {
     const result = await this.callTool("get_code_context_exa", query);
     return normalizeCodeSearchResult(result);
+  }
+
+  async fetchWeb(url: string): Promise<SearchResponse<WebFetchResult>> {
+    const result = await this.callTool("crawling_exa", url);
+    return normalizeWebFetchResult(result);
   }
 
   async dispose(): Promise<void> {
@@ -361,7 +417,7 @@ export class ExaSearchService {
   private async callTool(toolName: ExaUpstreamTool, query: string): Promise<unknown> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
-      throw new Error("搜索查询不能为空");
+      throw new Error(toolName === "crawling_exa" ? "网页 URL 不能为空" : "搜索查询不能为空");
     }
 
     if (!this.getConfig().tools.exa.enabled) {
@@ -375,10 +431,14 @@ export class ExaSearchService {
         throw new Error(`missing tool ${toolName}`);
       }
 
+      const runtimeToolName = toolName === "crawling_exa" && this.availableToolSchemas.has("crawling")
+        ? "crawling"
+        : toolName;
+
       return await this.withTimeout(
         Promise.resolve(
           client.callTool({
-            name: toolName,
+            name: runtimeToolName,
             arguments: this.buildArgs(toolName, normalizedQuery, schema)
           })
         ),
@@ -391,7 +451,7 @@ export class ExaSearchService {
   }
 
   private buildArgs(toolName: ExaUpstreamTool, query: string, schema: unknown): Record<string, unknown> {
-    const args: Record<string, unknown> = { query };
+    const args: Record<string, unknown> = toolName === "crawling_exa" ? {} : { query };
     const propertyNames = collectPropertyNames(schema);
 
     if (toolName === "web_search_exa") {
@@ -407,6 +467,19 @@ export class ExaSearchService {
           args[candidate] = true;
           break;
         }
+      }
+    }
+
+    if (toolName === "crawling_exa") {
+      for (const candidate of ["url", "urls"]) {
+        if (propertyNames.has(candidate)) {
+          args[candidate] = candidate === "urls" ? [query] : query;
+          break;
+        }
+      }
+
+      if (Object.keys(args).length === 0) {
+        args.url = query;
       }
     }
 
@@ -449,14 +522,14 @@ export class ExaSearchService {
         ? listed
         : [];
 
-    const discovered = new Map<ExaUpstreamTool, unknown>();
+    const discovered = new Map<ExaDiscoveredTool, unknown>();
     for (const tool of rawTools) {
       if (!isRecord(tool)) {
         continue;
       }
 
       const name = tool.name;
-      if (name !== "web_search_exa" && name !== "get_code_context_exa") {
+      if (name !== "web_search_exa" && name !== "get_code_context_exa" && name !== "crawling_exa" && name !== "crawling") {
         continue;
       }
 
@@ -464,7 +537,11 @@ export class ExaSearchService {
     }
 
     this.availableToolSchemas = discovered;
-    if (!this.availableToolSchemas.has("web_search_exa") || !this.availableToolSchemas.has("get_code_context_exa")) {
+    if (
+      !discovered.has("web_search_exa") ||
+      !discovered.has("get_code_context_exa") ||
+      (!discovered.has("crawling_exa") && !discovered.has("crawling"))
+    ) {
       throw new Error("Exa MCP 缺少预期工具");
     }
 

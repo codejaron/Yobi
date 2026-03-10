@@ -538,7 +538,9 @@ test("FactsStore.cleanupExpired: applies soft cap after expiry cleanup", async (
     );
 
     const facts = await memory.listFacts();
-    await memory.touchFacts([facts[1]!.id]);
+    const factTwo = facts.find((fact) => fact.key === "事实.二");
+    assert.ok(factTwo);
+    await memory.touchFacts([factTwo.id]);
     await memory.getFactsStore().cleanupExpired(new Date().toISOString(), 1);
 
     const active = await memory.listFacts();

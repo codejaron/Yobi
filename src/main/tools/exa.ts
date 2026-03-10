@@ -6,11 +6,16 @@ const exaParamsSchema = z.object({
   query: z.string().min(1)
 });
 
+const fetchParamsSchema = z.object({
+  url: z.string().url()
+});
+
 type ExaParams = z.infer<typeof exaParamsSchema>;
+type FetchParams = z.infer<typeof fetchParamsSchema>;
 
 export function createExaTools(input: {
   exaSearchService: ExaSearchService;
-}): Array<ToolDefinition<ExaParams>> {
+}): Array<ToolDefinition<any>> {
   const webSearchTool: ToolDefinition<ExaParams> = {
     name: "web_search",
     source: "builtin",
@@ -44,5 +49,20 @@ export function createExaTools(input: {
     }
   };
 
-  return [webSearchTool, codeSearchTool];
+  const webFetchTool: ToolDefinition<FetchParams> = {
+    name: "web_fetch",
+    source: "builtin",
+    description: "抓取指定网页 URL 的正文内容和摘要。",
+    parameters: fetchParamsSchema,
+    isEnabled: (config) => config.tools.exa.enabled,
+    async execute({ url }) {
+      const data = await input.exaSearchService.fetchWeb(url);
+      return {
+        success: true,
+        data
+      };
+    }
+  };
+
+  return [webSearchTool, codeSearchTool, webFetchTool];
 }

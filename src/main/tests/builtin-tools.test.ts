@@ -17,10 +17,11 @@ test("createBuiltinTools: registers native tools and Exa tools", () => {
     exaSearchService: {
       searchWeb: async () => ({ items: [], upstreamTool: "web_search_exa" }),
       searchCode: async () => ({ items: [], upstreamTool: "get_code_context_exa" }),
+      fetchWeb: async () => ({ items: [], upstreamTool: "crawling_exa" }),
       dispose: async () => undefined
     } as any
   });
 
   const toolNames = builtins.map((tool) => tool.name).sort();
-  assert.deepEqual(toolNames, ["browser", "code_search", "file", "reminder", "system", "web_search"]);
+  assert.deepEqual(toolNames, ["browser", "code_search", "file", "reminder", "system", "web_fetch", "web_search"]);
 });

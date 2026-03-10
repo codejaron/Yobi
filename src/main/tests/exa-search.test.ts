@@ -36,6 +36,15 @@ test("ExaSearchService: maps web search results and injects supported params", a
                 query: { type: "string" }
               }
             }
+          },
+          {
+            name: "crawling_exa",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: { type: "string" }
+              }
+            }
           }
         ]
       };
@@ -108,6 +117,15 @@ test("ExaSearchService: maps code search results", async () => {
                 query: { type: "string" }
               }
             }
+          },
+          {
+            name: "crawling_exa",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: { type: "string" }
+              }
+            }
           }
         ]
       };
@@ -174,6 +192,15 @@ test("ExaSearchService: translates free-tier rate limit errors", async () => {
                 query: { type: "string" }
               }
             }
+          },
+          {
+            name: "crawling_exa",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: { type: "string" }
+              }
+            }
           }
         ]
       };
@@ -194,5 +221,76 @@ test("ExaSearchService: translates free-tier rate limit errors", async () => {
   });
 
   await assert.rejects(() => service.searchWeb("yobi"), /Exa 免费额度限流，请稍后再试/);
+  await service.dispose();
+});
+
+test("ExaSearchService: maps web fetch results and passes URL args", async () => {
+  const config = cloneConfig();
+  let toolCallName = "";
+  let toolCallArgs: Record<string, unknown> | null = null;
+
+  class FakeClient {
+    async connect(): Promise<void> {}
+
+    async listTools(): Promise<unknown> {
+      return {
+        tools: [
+          {
+            name: "web_search_exa",
+            inputSchema: { type: "object", properties: { query: { type: "string" } } }
+          },
+          {
+            name: "get_code_context_exa",
+            inputSchema: { type: "object", properties: { query: { type: "string" } } }
+          },
+          {
+            name: "crawling_exa",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: { type: "string" }
+              }
+            }
+          }
+        ]
+      };
+    }
+
+    async callTool(input: { name: string; arguments: Record<string, unknown> }): Promise<unknown> {
+      toolCallName = input.name;
+      toolCallArgs = input.arguments;
+      return {
+        structuredContent: {
+          pages: [
+            {
+              title: "Fetched",
+              url: "https://example.com/page",
+              content: "full page content",
+              summary: "page summary"
+            }
+          ]
+        }
+      };
+    }
+
+    async close(): Promise<void> {}
+  }
+
+  const service = new ExaSearchService(() => config, {
+    loadSdk: async () => ({
+      Client: FakeClient,
+      StreamableHTTPClientTransport: class {}
+    })
+  });
+
+  const result = await service.fetchWeb("https://example.com/page");
+  assert.equal(toolCallName, "crawling_exa");
+  assert.deepEqual(toolCallArgs, {
+    url: "https://example.com/page"
+  });
+  assert.equal(result.items[0]?.title, "Fetched");
+  assert.equal(result.items[0]?.url, "https://example.com/page");
+  assert.equal(result.items[0]?.content, "full page content");
+  assert.equal(result.items[0]?.summary, "page summary");
   await service.dispose();
 });
