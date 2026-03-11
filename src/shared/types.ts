@@ -926,7 +926,6 @@ export interface BufferMessage {
 
 export interface MindSnapshot {
   soul: string;
-  persona: string;
   state: KernelStateDocument;
   profile: UserProfile;
   recentFacts: Fact[];

@@ -9,6 +9,8 @@ import { KernelEngine } from "../kernel/engine.js";
 import { StateStore } from "../kernel/state-store.js";
 import { DailyEpisodeTaskHandler } from "../kernel/task-handlers.js";
 import { assembleContext } from "../memory-v2/context-assembler.js";
+import { RuntimeDataCoordinator } from "../runtime/data-coordinator.js";
+import { ensureKernelBootstrap } from "../kernel/init.js";
 import {
   DEFAULT_CONFIG,
   DEFAULT_KERNEL_STATE,
@@ -411,7 +413,6 @@ test("legacy facts json files are ignored by SQLite facts store", async () => {
 test("assembleContext: preserves ranked candidate order instead of re-scoring lexically", () => {
   const selected = assembleContext({
     soul: "soul",
-    persona: "persona",
     stage: "stranger",
     state: DEFAULT_KERNEL_STATE,
     profile: DEFAULT_USER_PROFILE,
@@ -463,6 +464,75 @@ test("assembleContext: preserves ranked candidate order instead of re-scoring le
     selected.selectedFacts.map((fact) => fact.id),
     ["fact-semantic", "fact-lexical"]
   );
+});
+
+test("assembleContext: emits a single SOUL block without PERSONA", () => {
+  const selected = assembleContext({
+    soul: "只保留 soul",
+    stage: "stranger",
+    state: DEFAULT_KERNEL_STATE,
+    profile: DEFAULT_USER_PROFILE,
+    buffer: [],
+    facts: [],
+    episodes: [],
+    maxTokens: 6000,
+    memoryFloorTokens: 1200
+  });
+
+  assert.match(selected.system, /\[SOUL\]/);
+  assert.doesNotMatch(selected.system, /\[PERSONA\]/);
+  assert.match(selected.system, /只保留 soul/);
+  assert.match(selected.system, /当前关系阶段: stranger/);
+});
+
+test("ensureKernelBootstrap: creates soul.md without persona.md", async () => {
+  const paths = await createTempPaths("yobi-soul-bootstrap-");
+  try {
+    await ensureKernelBootstrap(paths);
+
+    await fs.access(paths.soulPath);
+    await assert.rejects(() => fs.access(path.join(paths.baseDir, "persona.md")));
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeDataCoordinator.getMindSnapshot: returns soul-only snapshot", async () => {
+  const paths = await createTempPaths("yobi-soul-snapshot-");
+  try {
+    const config = cloneConfig();
+    const memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    const stateStore = new StateStore(paths);
+    await stateStore.init();
+
+    await fs.writeFile(paths.soulPath, "# Soul only\n", "utf8");
+    await fs.writeFile(path.join(paths.baseDir, "persona.md"), "# Ignored persona\n", "utf8");
+
+    const coordinator = new RuntimeDataCoordinator({
+      paths,
+      memory,
+      stateStore,
+      kernel: {
+        runDailyNow: async () => undefined,
+        runTickNow: async () => undefined
+      } as unknown as KernelEngine,
+      bilibiliBrowse: {} as any,
+      bilibiliSyncCoordinator: {} as any,
+      systemPermissionsService: {} as any,
+      resourceId: "main",
+      threadId: "main",
+      emitStatus: async () => undefined
+    });
+
+    const snapshot = await coordinator.getMindSnapshot();
+
+    assert.equal(snapshot.soul, "# Soul only\n");
+    assert.equal("persona" in snapshot, false);
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
 });
 
 test("touchFacts: updates access time without mutating updated_at", async () => {

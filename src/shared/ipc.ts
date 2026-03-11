@@ -56,12 +56,10 @@ export interface CompanionApi {
   getMindSnapshot(): Promise<MindSnapshot>;
   getSoul(): Promise<{ markdown: string; updatedAt: string }>;
   saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }>;
-  getPersona(): Promise<{ markdown: string; updatedAt: string }>;
-  savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }>;
   patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument>;
   patchProfile(input: { patch: Partial<UserProfile> }): Promise<UserProfile>;
   resetMindSection(input: {
-    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }>;
   triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }>;
 

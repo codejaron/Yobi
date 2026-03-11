@@ -15,31 +15,25 @@ export function MemoryPage({
   snapshot,
   onRefresh,
   onSaveSoul,
-  onSavePersona,
   onTriggerKernelTask,
   onResetMindSection
 }: {
   snapshot: MindSnapshot | null;
   onRefresh: () => Promise<void>;
   onSaveSoul: (markdown: string) => Promise<void>;
-  onSavePersona: (markdown: string) => Promise<void>;
   onTriggerKernelTask: (taskType: "tick-now" | "daily-now") => Promise<{ accepted: boolean; message: string }>;
   onResetMindSection: (input: {
-    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "state" | "profile" | "facts" | "episodes";
   }) => Promise<{ accepted: boolean; message: string }>;
 }) {
   const [soulDraft, setSoulDraft] = useState(snapshot?.soul ?? "");
-  const [personaDraft, setPersonaDraft] = useState(snapshot?.persona ?? "");
-  const [saving, setSaving] = useState<"soul" | "persona" | null>(null);
-  const [resetting, setResetting] = useState<
-    "soul" | "persona" | "state" | "profile" | "facts" | "episodes" | null
-  >(null);
+  const [saving, setSaving] = useState<"soul" | null>(null);
+  const [resetting, setResetting] = useState<"soul" | "state" | "profile" | "facts" | "episodes" | null>(null);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
     setSoulDraft(snapshot?.soul ?? "");
-    setPersonaDraft(snapshot?.persona ?? "");
-  }, [snapshot?.soul, snapshot?.persona]);
+  }, [snapshot?.soul]);
 
   const stateJson = useMemo(
     () => (snapshot ? JSON.stringify(snapshot.state, null, 2) : "{}"),
@@ -59,7 +53,7 @@ export function MemoryPage({
   );
 
   const resetSection = async (
-    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes",
+    section: "soul" | "state" | "profile" | "facts" | "episodes",
     label: string
   ) => {
     const ok = window.confirm(`确认${label}吗？`);
@@ -84,7 +78,7 @@ export function MemoryPage({
         <CardHeader>
           <CardTitle>Mind Center</CardTitle>
           <CardDescription>
-            编辑 SOUL / PERSONA，查看 STATE / PROFILE / FACTS / EPISODES 快照。
+            编辑 SOUL，查看 STATE / PROFILE / FACTS / EPISODES 快照。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -123,77 +117,38 @@ export function MemoryPage({
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>SOUL (可编辑)</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Textarea rows={16} value={soulDraft} onChange={(event) => setSoulDraft(event.target.value)} />
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                disabled={saving !== null || resetting !== null}
-                onClick={async () => {
-                  setSaving("soul");
-                  try {
-                    await onSaveSoul(soulDraft);
-                    setNotice("SOUL 已保存");
-                    await onRefresh();
-                  } finally {
-                    setSaving(null);
-                  }
-                }}
-              >
-                {saving === "soul" ? "保存中..." : "保存 SOUL"}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={saving !== null || resetting !== null}
-                onClick={() => void resetSection("soul", "恢复 SOUL 默认内容")}
-              >
-                {resetting === "soul" ? "处理中..." : "恢复默认"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>PERSONA (可编辑)</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Textarea
-              rows={16}
-              value={personaDraft}
-              onChange={(event) => setPersonaDraft(event.target.value)}
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                disabled={saving !== null || resetting !== null}
-                onClick={async () => {
-                  setSaving("persona");
-                  try {
-                    await onSavePersona(personaDraft);
-                    setNotice("PERSONA 已保存");
-                    await onRefresh();
-                  } finally {
-                    setSaving(null);
-                  }
-                }}
-              >
-                {saving === "persona" ? "保存中..." : "保存 PERSONA"}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={saving !== null || resetting !== null}
-                onClick={() => void resetSection("persona", "恢复 PERSONA 默认内容")}
-              >
-                {resetting === "persona" ? "处理中..." : "恢复默认"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>SOUL (可编辑)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Textarea rows={18} value={soulDraft} onChange={(event) => setSoulDraft(event.target.value)} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              disabled={saving !== null || resetting !== null}
+              onClick={async () => {
+                setSaving("soul");
+                try {
+                  await onSaveSoul(soulDraft);
+                  setNotice("SOUL 已保存");
+                  await onRefresh();
+                } finally {
+                  setSaving(null);
+                }
+              }}
+            >
+              {saving === "soul" ? "保存中..." : "保存 SOUL"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={saving !== null || resetting !== null}
+              onClick={() => void resetSection("soul", "恢复 SOUL 默认内容")}
+            >
+              {resetting === "soul" ? "处理中..." : "恢复默认"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">

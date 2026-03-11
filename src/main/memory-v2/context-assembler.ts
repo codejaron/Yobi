@@ -10,7 +10,6 @@ import { estimateTokenCount } from "./token-utils";
 
 export interface ContextAssemblerInput {
   soul: string;
-  persona: string;
   stage: RelationshipStage;
   state: KernelStateDocument;
   profile: UserProfile;
@@ -32,7 +31,7 @@ const RESERVED_RESPONSE_TOKENS = 500;
 
 export function assembleContext(input: ContextAssemblerInput): ContextAssemblerOutput {
   const maxTokens = Math.max(2000, input.maxTokens);
-  const block1 = buildIdentityBlock(input.soul, input.persona, input.stage);
+  const block1 = buildIdentityBlock(input.soul, input.stage);
   const block1Tokens = estimateTokenCount(block1);
   const stateBlock = buildStateBlock(input.state, input.profile);
   const stateTokens = estimateTokenCount(stateBlock);
@@ -92,10 +91,8 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   };
 }
 
-function buildIdentityBlock(soul: string, persona: string, stage: RelationshipStage): string {
-  return [`[SOUL]`, soul.trim(), "", "[PERSONA]", persona.trim(), "", `当前关系阶段: ${stage}`]
-    .filter(Boolean)
-    .join("\n");
+function buildIdentityBlock(soul: string, stage: RelationshipStage): string {
+  return [`[SOUL]`, soul.trim(), "", `当前关系阶段: ${stage}`].filter(Boolean).join("\n");
 }
 
 function buildStateBlock(state: KernelStateDocument, profile: UserProfile): string {

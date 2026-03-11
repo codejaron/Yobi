@@ -118,9 +118,8 @@ export class ConversationEngine {
       }
     });
 
-    const [soul, persona, profile, facts, episodes] = await Promise.all([
+    const [soul, profile, facts, episodes] = await Promise.all([
       readFile(this.paths.soulPath, "utf8").catch(() => ""),
-      readFile(this.paths.personaPath, "utf8").catch(() => ""),
       this.memory.getProfile(),
       this.memory.listFacts(),
       this.memory.listRecentEpisodes(30)
@@ -141,7 +140,6 @@ export class ConversationEngine {
     ]);
     const assembled = assembleContext({
       soul: soul.trim(),
-      persona: persona.trim(),
       stage: stateSnapshot.relationship.stage,
       state: stateSnapshot,
       profile,

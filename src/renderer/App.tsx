@@ -292,11 +292,6 @@ export default function App() {
               await refreshMindSnapshot();
               setNotice("SOUL 已更新");
             }}
-            onSavePersona={async (markdown) => {
-              await window.companion.savePersona({ markdown });
-              await refreshMindSnapshot();
-              setNotice("PERSONA 已更新");
-            }}
             onResetMindSection={async (input) => {
               const result = await window.companion.resetMindSection(input);
               await refreshMindSnapshot();

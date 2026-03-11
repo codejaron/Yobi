@@ -25,10 +25,6 @@ export class CompanionPaths {
     return path.join(this.baseDir, "scheduled-task-runs.jsonl");
   }
 
-  get personaPath(): string {
-    return path.join(this.baseDir, "persona.md");
-  }
-
   get statePath(): string {
     return path.join(this.baseDir, "state.json");
   }

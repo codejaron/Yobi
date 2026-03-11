@@ -325,14 +325,6 @@ export class CompanionRuntime {
     return this.dataCoordinator.saveSoul(input);
   }
 
-  async getPersona(): Promise<{ markdown: string; updatedAt: string }> {
-    return this.dataCoordinator.getPersona();
-  }
-
-  async savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
-    return this.dataCoordinator.savePersona(input);
-  }
-
   async patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument> {
     return this.dataCoordinator.patchState(input);
   }
@@ -342,7 +334,7 @@ export class CompanionRuntime {
   }
 
   async resetMindSection(input: {
-    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }> {
     return this.dataCoordinator.resetMindSection(input);
   }

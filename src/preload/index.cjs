@@ -37,12 +37,6 @@ const api = {
   saveSoul(input) {
     return ipcRenderer.invoke('mind:soul:save', input);
   },
-  getPersona() {
-    return ipcRenderer.invoke('mind:persona:get');
-  },
-  savePersona(input) {
-    return ipcRenderer.invoke('mind:persona:save', input);
-  },
   patchState(input) {
     return ipcRenderer.invoke('mind:state:patch', input);
   },

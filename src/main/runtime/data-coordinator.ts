@@ -7,7 +7,7 @@ import {
   type UserProfile
 } from "@shared/types";
 import { readTextFile, writeTextFileAtomic } from "@main/storage/fs";
-import { DEFAULT_PERSONA_TEXT, DEFAULT_SOUL_TEXT } from "@main/kernel/init";
+import { DEFAULT_SOUL_TEXT } from "@main/kernel/init";
 import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { StateStore } from "@main/kernel/state-store";
@@ -57,9 +57,8 @@ export class RuntimeDataCoordinator {
   }
 
   async getMindSnapshot(): Promise<MindSnapshot> {
-    const [soul, persona, profile, facts, episodes] = await Promise.allSettled([
+    const [soul, profile, facts, episodes] = await Promise.allSettled([
       readTextFile(this.input.paths.soulPath, ""),
-      readTextFile(this.input.paths.personaPath, ""),
       this.input.memory.getProfile(),
       this.input.memory.listFacts(),
       this.input.memory.listRecentEpisodes(20)
@@ -67,7 +66,6 @@ export class RuntimeDataCoordinator {
 
     return {
       soul: soul.status === "fulfilled" ? soul.value : "",
-      persona: persona.status === "fulfilled" ? persona.value : "",
       state: this.input.stateStore.getSnapshot(),
       profile:
         profile.status === "fulfilled"
@@ -88,22 +86,6 @@ export class RuntimeDataCoordinator {
   async saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
     const markdown = input.markdown.trim();
     await writeTextFileAtomic(this.input.paths.soulPath, `${markdown}\n`);
-    return {
-      markdown,
-      updatedAt: new Date().toISOString()
-    };
-  }
-
-  async getPersona(): Promise<{ markdown: string; updatedAt: string }> {
-    return {
-      markdown: await readTextFile(this.input.paths.personaPath, ""),
-      updatedAt: new Date().toISOString()
-    };
-  }
-
-  async savePersona(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
-    const markdown = input.markdown.trim();
-    await writeTextFileAtomic(this.input.paths.personaPath, `${markdown}\n`);
     return {
       markdown,
       updatedAt: new Date().toISOString()
@@ -164,16 +146,12 @@ export class RuntimeDataCoordinator {
   }
 
   async resetMindSection(input: {
-    section: "soul" | "persona" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }> {
     const section = input.section;
     if (section === "soul") {
       await writeTextFileAtomic(this.input.paths.soulPath, `${DEFAULT_SOUL_TEXT.trim()}\n`);
       return { accepted: true, message: "SOUL 已恢复默认。" };
-    }
-    if (section === "persona") {
-      await writeTextFileAtomic(this.input.paths.personaPath, `${DEFAULT_PERSONA_TEXT.trim()}\n`);
-      return { accepted: true, message: "PERSONA 已恢复默认。" };
     }
     if (section === "state") {
       this.input.stateStore.mutate((state) => {
