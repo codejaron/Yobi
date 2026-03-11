@@ -13,10 +13,6 @@ const DashboardPage = lazy(async () => {
   const module = await import("@renderer/pages/Dashboard");
   return { default: module.DashboardPage };
 });
-const TopicPoolPage = lazy(async () => {
-  const module = await import("@renderer/pages/TopicPool");
-  return { default: module.TopicPoolPage };
-});
 const ConsoleChatPage = lazy(async () => {
   const module = await import("@renderer/pages/ConsoleChat");
   return { default: module.ConsoleChatPage };
@@ -50,8 +46,6 @@ function pageTitle(page: PageId): string {
   switch (page) {
     case "dashboard":
       return "运行仪表盘";
-    case "topics":
-      return "话题池";
     case "providers":
       return "Provider 与模型路由";
     case "console":
@@ -266,14 +260,6 @@ export default function App() {
       );
     }
 
-    if (activePage === "topics") {
-      return (
-        <Suspense fallback={loading}>
-          <TopicPoolPage status={status} refreshStatus={refreshStatus} />
-        </Suspense>
-      );
-    }
-
     if (activePage === "providers") {
       return (
         <Suspense fallback={loading}>
@@ -326,8 +312,7 @@ export default function App() {
     );
   }, [activePage, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
 
-  const showPageHeader =
-    activePage !== "console" && activePage !== "topics" && activePage !== "dashboard";
+  const showPageHeader = activePage !== "console" && activePage !== "dashboard";
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">

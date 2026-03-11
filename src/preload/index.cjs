@@ -61,20 +61,11 @@ const api = {
   saveBilibiliCookie(input) {
     return ipcRenderer.invoke('browse:bili:cookie:save', input);
   },
-  triggerTopicRecall() {
-    return ipcRenderer.invoke('topic:recall:trigger');
-  },
   triggerBilibiliSync() {
     return ipcRenderer.invoke('browse:bili:sync:trigger');
   },
   openBilibiliAccount() {
     return ipcRenderer.invoke('browse:bili:account:open');
-  },
-  deleteTopicPoolItem(topicId) {
-    return ipcRenderer.invoke('topic-pool:item:delete', { topicId });
-  },
-  clearTopicPool() {
-    return ipcRenderer.invoke('topic-pool:clear');
   },
   openSystemPermissionSettings(permission) {
     return ipcRenderer.invoke('system:permissions:open-settings', permission);

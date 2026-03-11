@@ -103,7 +103,7 @@ export class CompanionRuntime {
     registry.bindCallbacks({
       emitStatus: () => this.emitStatus(),
       withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
-      handleKernelProactive: (message, topicId) => this.handleKernelProactive(message, topicId),
+      handleKernelProactive: (message) => this.handleKernelProactive(message),
       recordUserActivity: (input) => this.recordUserActivity(input),
       getConfig: () => this.getConfig()
     });
@@ -388,24 +388,12 @@ export class CompanionRuntime {
     return this.dataCoordinator.saveBilibiliCookie(input);
   }
 
-  async triggerTopicRecall(): Promise<{ accepted: boolean; message: string }> {
-    return this.dataCoordinator.triggerTopicRecall();
-  }
-
   async triggerBilibiliSync(): Promise<{ accepted: boolean; message: string }> {
     return this.dataCoordinator.triggerBilibiliSync();
   }
 
   async openBilibiliAccount(): Promise<{ opened: boolean; message: string }> {
     return this.dataCoordinator.openBilibiliAccount();
-  }
-
-  async deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {
-    return this.dataCoordinator.deleteTopicPoolItem(topicId);
-  }
-
-  async clearTopicPool(): Promise<{ accepted: boolean; message: string }> {
-    return this.dataCoordinator.clearTopicPool();
   }
 
   async openSystemPermissionSettings(
@@ -702,10 +690,9 @@ export class CompanionRuntime {
     await this.activityCoordinator.recordProactiveActivity();
   }
 
-  private async handleKernelProactive(message: string, topicId?: string): Promise<void> {
+  private async handleKernelProactive(message: string): Promise<void> {
     await this.dispatchAssistantAutomationMessage({
       message,
-      topicId,
       metadata: {
         proactive: true,
         source: "yobi"
@@ -734,7 +721,6 @@ export class CompanionRuntime {
 
   private async dispatchAssistantAutomationMessage(input: {
     message: string;
-    topicId?: string;
     metadata: {
       proactive?: boolean;
       source: "yobi";
@@ -766,9 +752,6 @@ export class CompanionRuntime {
       metadata: input.metadata
     });
     await this.kernel.onAssistantMessage();
-    if (input.topicId) {
-      await this.memory.markUsed(input.topicId);
-    }
 
     this.consoleChannel.emitExternalAssistantMessage({
       text: normalizedMessage,

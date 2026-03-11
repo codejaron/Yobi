@@ -5,7 +5,6 @@ import type {
 
 export type PageId =
   | "dashboard"
-  | "topics"
   | "console"
   | "scheduler"
   | "skills"

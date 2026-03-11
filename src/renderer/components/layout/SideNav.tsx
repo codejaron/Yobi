@@ -3,7 +3,6 @@ import {
   Brain,
   Clock3,
   Gauge,
-  ListChecks,
   MessageSquare,
   Plug,
   Sparkles,
@@ -19,7 +18,6 @@ const items: Array<{
   icon: ComponentType<{ className?: string }>;
 }> = [
   { id: "dashboard", label: "仪表盘", icon: Gauge },
-  { id: "topics", label: "话题池", icon: ListChecks },
   { id: "console", label: "聊天", icon: MessageSquare },
   { id: "scheduler", label: "定时任务", icon: Clock3 },
   { id: "skills", label: "Skills", icon: Sparkles },

@@ -70,15 +70,6 @@ export async function ensureKernelBootstrap(paths: CompanionPaths): Promise<void
   await ensureJsonFile(paths.profilePath, DEFAULT_USER_PROFILE);
   await ensureJsonFile(paths.reflectionQueuePath, [] as ReflectionProposal[]);
   await ensureJsonFile(paths.reflectionLogPath, [] as ReflectionProposal[]);
-  await ensureJsonFile(paths.topicPoolPath, []);
-  await ensureJsonFile(paths.topicInterestProfilePath, {
-    games: [],
-    creators: [],
-    domains: [],
-    dislikes: [],
-    keywords: [],
-    updatedAt: new Date(0).toISOString()
-  });
 
   await ensureJsonlFile(paths.pendingTasksPath);
   await ensureJsonlFile(paths.bufferPath);

@@ -1,4 +1,4 @@
-import type { BrowseTopComment, BrowseTopicMaterial } from "@shared/types";
+import type { BrowseTopComment } from "@shared/types";
 
 const NOISE_PATTERNS: RegExp[] = [
   /^(nice|漂亮|好看|厉害|牛|666|支持|nb|卧槽)$/i,
@@ -23,7 +23,7 @@ function isNoiseComment(text: string): boolean {
 export function selectTopComments(
   comments: Array<{ text: string; likes: number }>,
   limit = 5
-): BrowseTopicMaterial["topComments"] {
+): BrowseTopComment[] {
   const deduped = new Map<string, number>();
 
   for (const item of comments) {

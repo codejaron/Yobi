@@ -701,29 +701,6 @@ export interface BrowseTopComment {
   likes: number;
 }
 
-export interface BrowseTopicMaterial {
-  bvid: string;
-  title: string;
-  up: string;
-  tags: string[];
-  plays?: number;
-  duration?: string;
-  publishedAt?: string;
-  desc?: string;
-  topComments: BrowseTopComment[];
-  url: string;
-}
-
-export interface TopicPoolItem {
-  id: string;
-  text: string;
-  source: string;
-  createdAt: string;
-  expiresAt: string | null;
-  used: boolean;
-  material?: BrowseTopicMaterial;
-}
-
 export interface BrowseStatus {
   authState: BrowseAuthState;
   lastNavCheckAt: string | null;
@@ -1006,7 +983,6 @@ export interface AppStatus {
   lastProactiveAt: string | null;
   historyCount: number;
   keepAwakeActive: boolean;
-  topicPool: TopicPoolItem[];
   petOnline: boolean;
   browseStatus: BrowseStatus;
   tokenStats: TokenStatsStatus;
@@ -1023,15 +999,6 @@ export interface ScheduledTasksDocument {
 export const DEFAULT_SCHEDULED_TASKS: ScheduledTasksDocument = {
   tasks: []
 };
-
-export interface InterestProfile {
-  games: string[];
-  creators: string[];
-  domains: string[];
-  dislikes: string[];
-  keywords: string[];
-  updatedAt: string;
-}
 
 export const DEFAULT_EMOTIONAL_STATE: EmotionalState = {
   mood: 0,

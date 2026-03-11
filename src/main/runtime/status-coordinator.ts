@@ -27,14 +27,13 @@ export class RuntimeStatusCoordinator {
 
   async collectStatus(): Promise<AppStatus> {
     this.input.systemPermissionsService.refreshSystemPermissions();
-    const [browseStatus, tokenStats, historyCount, topicPool] = await Promise.allSettled([
+    const [browseStatus, tokenStats, historyCount] = await Promise.allSettled([
       this.input.bilibiliBrowse.getStatus(),
       this.input.tokenStatsService.getStatus(),
       this.input.memory.countHistory({
         resourceId: this.input.resourceId,
         threadId: this.input.threadId
-      }),
-      this.input.memory.listTopicPool(50)
+      })
     ]);
     const activity = this.input.activityCoordinator.getSnapshot();
     return {
@@ -46,7 +45,6 @@ export class RuntimeStatusCoordinator {
       lastProactiveAt: activity.lastProactiveAt,
       historyCount: historyCount.status === "fulfilled" ? historyCount.value : 0,
       keepAwakeActive: this.input.lifecycleCoordinator.isKeepAwakeActive(),
-      topicPool: topicPool.status === "fulfilled" ? topicPool.value : [],
       petOnline: this.input.lifecycleCoordinator.isPetOnline(),
       browseStatus:
         browseStatus.status === "fulfilled"

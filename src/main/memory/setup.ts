@@ -3,13 +3,10 @@ import { promises as fs } from "node:fs";
 import type {
   AppConfig,
   BufferMessage,
-  BrowseTopicMaterial,
   EmbedderRuntimeStatus,
   Episode,
   Fact,
   HistoryMessage,
-  InterestProfile,
-  TopicPoolItem,
   UserProfile
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
@@ -21,7 +18,6 @@ import { BufferStore } from "@main/memory-v2/buffer-store";
 import { FactsStore } from "@main/memory-v2/facts-store";
 import { ProfileStore } from "@main/memory-v2/profile-store";
 import { EpisodesStore } from "@main/memory-v2/episodes-store";
-import { TopicStore } from "@main/memory-v2/topic-store";
 import { FactEmbeddingStore, type SemanticFactMatch } from "@main/memory-v2/fact-embeddings-store";
 import { EmbedderService } from "@main/memory-v2/embedder";
 
@@ -40,8 +36,6 @@ interface CursorHistoryInput extends MemoryResourceContext {
   beforeId?: string;
   limit?: number;
 }
-
-interface PendingTopic extends TopicPoolItem {}
 
 export interface RelevantFactMatch extends SemanticFactMatch {
   finalScore: number;
@@ -80,7 +74,6 @@ export class YobiMemory {
   private readonly factsStore: FactsStore;
   private readonly profileStore: ProfileStore;
   private readonly episodesStore: EpisodesStore;
-  private readonly topicStore: TopicStore;
   private readonly factEmbeddingStore: FactEmbeddingStore;
   private readonly embedder: EmbedderService;
   private initialized = false;
@@ -93,7 +86,6 @@ export class YobiMemory {
     this.factsStore = new FactsStore(paths);
     this.profileStore = new ProfileStore(paths);
     this.episodesStore = new EpisodesStore(paths);
-    this.topicStore = new TopicStore(paths);
     this.factEmbeddingStore = new FactEmbeddingStore(paths);
     this.embedder = new EmbedderService(paths, getConfig);
   }
@@ -105,7 +97,6 @@ export class YobiMemory {
     await this.bufferStore.init();
     await this.factsStore.init();
     await this.profileStore.init();
-    await this.topicStore.init();
     await this.factEmbeddingStore.init();
     this.embedder.init();
     this.initialized = true;
@@ -157,71 +148,6 @@ export class YobiMemory {
         }
       }))
     };
-  }
-
-  async addTopic(input: {
-    text: string;
-    source: string;
-    expiresAt?: string | null;
-    material?: BrowseTopicMaterial;
-  }): Promise<boolean> {
-    await this.init();
-    return this.topicStore.addTopic({
-      text: input.text,
-      source: input.source,
-      expiresAt: input.expiresAt,
-      material: input.material
-    });
-  }
-
-  async listActive(limit = 3): Promise<PendingTopic[]> {
-    await this.init();
-    return this.topicStore.listActive(limit);
-  }
-
-  async listTopicPool(limit = 20): Promise<TopicPoolItem[]> {
-    await this.init();
-    return this.topicStore.listTopicPool(limit);
-  }
-
-  async deleteTopic(topicId: string): Promise<boolean> {
-    await this.init();
-    return this.topicStore.deleteTopic(topicId.trim());
-  }
-
-  async clearTopicPool(): Promise<number> {
-    await this.init();
-    return this.topicStore.clearTopicPool();
-  }
-
-  async clearTopicsBySourcePrefixes(prefixes: string[]): Promise<number> {
-    await this.init();
-    return this.topicStore.clearBySourcePrefixes(prefixes);
-  }
-
-  async markUsed(topicId: string): Promise<void> {
-    await this.init();
-    await this.topicStore.markUsed(topicId.trim());
-  }
-
-  async countUnusedTopics(): Promise<number> {
-    await this.init();
-    return this.topicStore.countUnusedTopics();
-  }
-
-  async cleanup(): Promise<void> {
-    await this.init();
-    await this.topicStore.cleanup();
-  }
-
-  async getInterestProfile(): Promise<InterestProfile> {
-    await this.init();
-    return this.topicStore.getInterestProfile();
-  }
-
-  async saveInterestProfile(input: InterestProfile): Promise<InterestProfile> {
-    await this.init();
-    return this.topicStore.saveInterestProfile(input);
   }
 
   async listHistory(input: ListHistoryInput): Promise<HistoryMessage[]> {

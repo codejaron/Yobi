@@ -111,13 +111,8 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       cookie: payload?.cookie ?? ""
     })
   );
-  ipcMain.handle("topic:recall:trigger", () => runtime.triggerTopicRecall());
   ipcMain.handle("browse:bili:sync:trigger", () => runtime.triggerBilibiliSync());
   ipcMain.handle("browse:bili:account:open", () => runtime.openBilibiliAccount());
-  ipcMain.handle("topic-pool:item:delete", (_, payload: { topicId?: string }) =>
-    runtime.deleteTopicPoolItem(payload?.topicId ?? "")
-  );
-  ipcMain.handle("topic-pool:clear", () => runtime.clearTopicPool());
   ipcMain.handle(
     "system:permissions:open-settings",
     (

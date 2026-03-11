@@ -53,7 +53,7 @@ export interface RuntimeRegistryBuildInput {
 export interface RuntimeRegistryCallbacks {
   emitStatus: () => Promise<void>;
   withTimeout: <T>(promise: Promise<T>, timeoutMs: number, label: string) => Promise<T>;
-  handleKernelProactive: (message: string, topicId?: string) => Promise<void>;
+  handleKernelProactive: (message: string) => Promise<void>;
   recordUserActivity: (input: {
     channel: RuntimeInboundChannel;
     chatId?: string;
@@ -159,8 +159,8 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     backgroundWorker,
     queueHandlers,
     proactiveRewriteHandler,
-    onProactiveMessage: async ({ message, topicId }) => {
-      await callbackBridge.handleKernelProactive(message, topicId);
+    onProactiveMessage: async ({ message }) => {
+      await callbackBridge.handleKernelProactive(message);
     }
   });
 

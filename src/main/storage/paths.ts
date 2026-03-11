@@ -101,18 +101,6 @@ export class CompanionPaths {
     return path.join(this.mainSessionDir, "archive");
   }
 
-  get topicsDir(): string {
-    return path.join(this.baseDir, "topics");
-  }
-
-  get topicPoolPath(): string {
-    return path.join(this.topicsDir, "pool.json");
-  }
-
-  get topicInterestProfilePath(): string {
-    return path.join(this.topicsDir, "interest-profile.json");
-  }
-
   get modelsDir(): string {
     return path.join(this.baseDir, "models");
   }
@@ -176,7 +164,6 @@ export class CompanionPaths {
     mkdirSync(this.sessionsDir, { recursive: true });
     mkdirSync(this.mainSessionDir, { recursive: true });
     mkdirSync(this.sessionArchiveDir, { recursive: true });
-    mkdirSync(this.topicsDir, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     mkdirSync(this.modelsDir, { recursive: true });
     mkdirSync(this.embeddingModelsDir, { recursive: true });

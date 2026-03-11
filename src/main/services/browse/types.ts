@@ -69,22 +69,3 @@ export interface BilibiliBrowseState {
       }
     | null;
 }
-
-
-export interface MatchedCandidate {
-  item: BilibiliVideoItem;
-  score: number;
-  matches: string[];
-  isEvent: boolean;
-}
-
-export interface DigestInputCandidate extends MatchedCandidate {
-  detail?: {
-    desc?: string;
-    tags?: string[];
-    cid?: number;
-    durationSec?: number;
-    pubTs?: number;
-  };
-  topComments?: Array<{ text: string; likes: number }>;
-}

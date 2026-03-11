@@ -214,13 +214,6 @@ export class RuntimeDataCoordinator {
     return result;
   }
 
-  async triggerTopicRecall(): Promise<{ accepted: boolean; message: string }> {
-    await this.input.kernel.runTickNow();
-    const result = { accepted: true, message: "内核已执行一次即时回想检查。" };
-    await this.input.emitStatus();
-    return result;
-  }
-
   async triggerBilibiliSync(): Promise<{ accepted: boolean; message: string }> {
     const result = await this.input.bilibiliSyncCoordinator.triggerNow();
     await this.input.emitStatus();
@@ -243,24 +236,6 @@ export class RuntimeDataCoordinator {
 
   async openBilibiliAccount(): Promise<{ opened: boolean; message: string }> {
     return this.input.bilibiliBrowse.openAccountPage();
-  }
-
-  async deleteTopicPoolItem(topicId: string): Promise<{ accepted: boolean; message: string }> {
-    const removed = await this.input.memory.deleteTopic(topicId);
-    await this.input.emitStatus();
-    return {
-      accepted: removed,
-      message: removed ? "话题已删除。" : "未找到该话题，可能已被清理。"
-    };
-  }
-
-  async clearTopicPool(): Promise<{ accepted: boolean; message: string }> {
-    const removedCount = await this.input.memory.clearTopicPool();
-    await this.input.emitStatus();
-    return {
-      accepted: true,
-      message: removedCount > 0 ? `已清空话题池，共删除 ${removedCount} 条。` : "话题池已经是空的。"
-    };
   }
 
   async openSystemPermissionSettings(

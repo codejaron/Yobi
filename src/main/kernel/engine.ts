@@ -18,7 +18,6 @@ import {
   computeMessageCadenceScale,
   clamp01
 } from "./emotion-utils";
-import { selectBestProactiveTopic } from "./proactive-utils";
 import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, isWithinQuietHours, toDayKey } from "./relationship-utils";
 import type { KernelQueueTaskHandler, ProactiveRewriteHandler } from "./task-handlers";
 
@@ -29,7 +28,6 @@ export {
   computeSignalAgeScale,
   applyEmotionalSignalsToState
 } from "./emotion-utils";
-export { selectBestProactiveTopic } from "./proactive-utils";
 
 interface KernelEngineInput {
   paths: CompanionPaths;
@@ -41,7 +39,7 @@ interface KernelEngineInput {
   backgroundWorker: BackgroundTaskWorkerService;
   queueHandlers: KernelQueueTaskHandler[];
   proactiveRewriteHandler: ProactiveRewriteHandler;
-  onProactiveMessage?: (input: { message: string; topicId?: string }) => Promise<void>;
+  onProactiveMessage?: (input: { message: string }) => Promise<void>;
 }
 
 export class KernelEngine {
@@ -476,7 +474,7 @@ export class KernelEngine {
       limit: 10
     });
 
-    const tryEmit = async (message: string, topicId?: string): Promise<boolean> => {
+    const tryEmit = async (message: string): Promise<boolean> => {
       const rewritten = await this.input.proactiveRewriteHandler.rewrite({
         message,
         stage: snapshot.relationship.stage,
@@ -495,8 +493,7 @@ export class KernelEngine {
         return false;
       }
       await callback({
-        message: rewritten.trim(),
-        topicId
+        message: rewritten.trim()
       });
       this.lastProactiveAt = new Date().toISOString();
       return true;
@@ -515,18 +512,7 @@ export class KernelEngine {
       return;
     }
 
-    const activeTopics = await this.input.memory.listActive(5);
-    const interestProfile = await this.input.memory.getInterestProfile();
-    const topic = selectBestProactiveTopic(activeTopics, interestProfile, snapshot.emotional.curiosity);
-    if (!topic) {
-      await tryEmit("想找你随便聊聊");
-      return;
-    }
-
-    const message = topic.material
-      ? `${topic.text}`
-      : `${topic.text}`;
-    await tryEmit(message, topic.id);
+    await tryEmit("想找你随便聊聊");
   }
 
   private async evaluateRelationshipTransition(): Promise<void> {

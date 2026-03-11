@@ -294,13 +294,10 @@ export class BilibiliBrowseService {
   }
 
   async clearManagedContent(): Promise<void> {
-    await Promise.all([
-      this.memory.getFactsStore().removeBySource({
-        source: MANAGED_SOURCE,
-        entity: MANAGED_ENTITY
-      }),
-      this.memory.clearTopicsBySourcePrefixes(["browse:"])
-    ]);
+    await this.memory.getFactsStore().removeBySource({
+      source: MANAGED_SOURCE,
+      entity: MANAGED_ENTITY
+    });
     await this.store.clearManagedMetadata();
   }
 
@@ -402,7 +399,6 @@ export class BilibiliBrowseService {
         entity: MANAGED_ENTITY,
         facts: [...preferenceFacts, ...recentFacts]
       });
-      await this.memory.clearTopicsBySourcePrefixes(["browse:"]);
       await this.store.setSyncSummary({
         preferenceFactCount: preferenceFacts.length,
         recentFactCount: recentFacts.length,
