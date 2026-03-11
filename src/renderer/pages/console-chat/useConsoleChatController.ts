@@ -10,7 +10,13 @@ import {
   appendRecognizedText,
   historyRoleToMessageRole
 } from "./types";
-import type { ActionItem, ConsoleMessage, PendingApproval } from "./types";
+import type {
+  ActionItem,
+  ConsoleActivatedSkill,
+  ConsoleMessage,
+  ConsoleSkillsCatalogState,
+  PendingApproval
+} from "./types";
 
 export interface ConsoleChatController {
   messages: ConsoleMessage[];
@@ -24,6 +30,8 @@ export interface ConsoleChatController {
   micHint: string;
   activeRequestId: string | null;
   pendingApproval: PendingApproval | null;
+  skillsCatalog: ConsoleSkillsCatalogState | null;
+  activatedSkills: ConsoleActivatedSkill[];
   approvalIndex: number;
   setApprovalIndex: (index: number) => void;
   expandedActions: Record<string, boolean>;
@@ -71,6 +79,8 @@ export function useConsoleChatController(): ConsoleChatController {
   );
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [skillsCatalog, setSkillsCatalog] = useState<ConsoleSkillsCatalogState | null>(null);
+  const [activatedSkills, setActivatedSkills] = useState<ConsoleActivatedSkill[]>([]);
   const [approvalIndex, setApprovalIndex] = useState(0);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
 
@@ -190,6 +200,49 @@ export function useConsoleChatController(): ConsoleChatController {
               ? "已同意一次"
               : "已拒绝",
         detail: `审批单 ${event.approvalId.slice(0, 8)}`,
+        timestamp: event.timestamp
+      });
+      return;
+    }
+
+    if (event.type === "skills-catalog") {
+      setSkillsCatalog({
+        enabledCount: event.enabledCount,
+        truncated: event.truncated,
+        truncatedDescriptions: event.truncatedDescriptions,
+        omittedSkills: event.omittedSkills
+      });
+      setActivatedSkills([]);
+      appendAction({
+        requestId: event.requestId,
+        kind: "status",
+        label: event.truncated ? "Skill catalog 已裁剪" : "Skill catalog 已加载",
+        detail: `已启用 ${event.enabledCount} 个 skill`,
+        timestamp: event.timestamp
+      });
+      return;
+    }
+
+    if (event.type === "skill-activated") {
+      setActivatedSkills((current) => {
+        if (current.some((item) => item.skillId === event.skillId)) {
+          return current;
+        }
+
+        return [
+          ...current,
+          {
+            skillId: event.skillId,
+            name: event.name,
+            compatibility: event.compatibility
+          }
+        ];
+      });
+      appendAction({
+        requestId: event.requestId,
+        kind: "status",
+        label: `激活 skill · ${event.name}`,
+        detail: event.compatibility.status,
         timestamp: event.timestamp
       });
       return;
@@ -577,6 +630,8 @@ export function useConsoleChatController(): ConsoleChatController {
     }
 
     setDraft("");
+    setSkillsCatalog(null);
+    setActivatedSkills([]);
     setLiveMessages((prev) => [
       ...prev,
       {
@@ -708,6 +763,8 @@ export function useConsoleChatController(): ConsoleChatController {
     micHint,
     activeRequestId,
     pendingApproval,
+    skillsCatalog,
+    activatedSkills,
     approvalIndex,
     setApprovalIndex,
     expandedActions,

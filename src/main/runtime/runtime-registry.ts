@@ -37,6 +37,7 @@ import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
 import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
 import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import { SkillManager } from "@main/skills/manager";
 import { appLogger, companionPaths } from "@main/runtime/singletons";
 import {
   buildKernelQueueTaskHandlers,
@@ -74,6 +75,7 @@ export interface RuntimeRegistry {
   stateStore: StateStore;
   approvalGuard: ApprovalGuard;
   toolRegistry: DefaultToolRegistry;
+  skillManager: SkillManager;
   mcpManager: McpManager;
   backgroundWorker: BackgroundTaskWorkerService;
   conversation: ConversationEngine;
@@ -121,6 +123,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     () => configStore.getConfig(),
     approvalGuard
   );
+  const skillManager = new SkillManager(paths);
   const mcpManager = new McpManager(() => configStore.getConfig());
   const backgroundWorker = new BackgroundTaskWorkerService();
 
@@ -165,6 +168,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     memory,
     modelFactory,
     toolRegistry,
+    skillManager,
     stateStore,
     paths,
     () => configStore.getConfig(),
@@ -328,6 +332,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     stateStore,
     approvalGuard,
     toolRegistry,
+    skillManager,
     mcpManager,
     backgroundWorker,
     conversation,

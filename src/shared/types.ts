@@ -547,6 +547,44 @@ export type ScheduledTaskInput = z.infer<typeof scheduledTaskInputSchema>;
 export type ChatRole = "system" | "user" | "assistant";
 export type CommandApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+export interface SkillCompatibility {
+  status: "compatible" | "partial" | "invalid";
+  issues: string[];
+}
+
+export interface SkillResourceEntry {
+  kind: "script" | "reference" | "asset" | "template";
+  relativePath: string;
+}
+
+export interface SkillCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  version: string | null;
+  tags: string[];
+  enabled: boolean;
+  directoryPath: string;
+  markdownPath: string;
+  compatibility: SkillCompatibility;
+  resourceEntries: SkillResourceEntry[];
+  metadata: Record<string, unknown>;
+  markdownPreview: string | null;
+}
+
+export interface SkillsCatalogSummary {
+  enabledCount: number;
+  truncated: boolean;
+  truncatedDescriptions: number;
+  omittedSkills: number;
+}
+
+export interface SkillActivatedEventPayload {
+  skillId: string;
+  name: string;
+  compatibility: SkillCompatibility;
+}
+
 export type ConsoleRunEventV2 =
   | {
       requestId: string;
@@ -613,6 +651,23 @@ export type ConsoleRunEventV2 =
       messageId: string;
       text: string;
       source: "yobi";
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "skills-catalog";
+      enabledCount: number;
+      truncated: boolean;
+      truncatedDescriptions: number;
+      omittedSkills: number;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "skill-activated";
+      skillId: string;
+      name: string;
+      compatibility: SkillCompatibility;
       timestamp: string;
     };
 

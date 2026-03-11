@@ -165,6 +165,14 @@ export class CompanionPaths {
     return path.join(this.baseDir, "browser-profile");
   }
 
+  get skillsDir(): string {
+    return path.join(this.baseDir, "skills");
+  }
+
+  get skillsRegistryPath(): string {
+    return path.join(this.baseDir, "skills-registry.json");
+  }
+
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.memoryDir, { recursive: true });
@@ -181,5 +189,6 @@ export class CompanionPaths {
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });
     mkdirSync(this.tokenStatsDir, { recursive: true });
     mkdirSync(this.petBrowserProfileDir, { recursive: true });
+    mkdirSync(this.skillsDir, { recursive: true });
   }
 }

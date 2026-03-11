@@ -152,6 +152,38 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     };
   });
 
+  ipcMain.handle("skills:list", () => runtime.listSkills());
+  ipcMain.handle("skills:rescan", () => runtime.rescanSkills());
+  ipcMain.handle("skills:set-enabled", (_, payload: { skillId?: string; enabled?: boolean }) =>
+    runtime.setSkillEnabled({
+      skillId: payload?.skillId ?? "",
+      enabled: payload?.enabled === true
+    })
+  );
+  ipcMain.handle("skills:delete", (_, payload: { skillId?: string }) =>
+    runtime.deleteSkill(payload?.skillId ?? "")
+  );
+  ipcMain.handle("skills:import-folder", async (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions: OpenDialogOptions = {
+      title: "选择 Skill 文件夹",
+      properties: ["openDirectory"]
+    };
+    const picked = senderWindow
+      ? await dialog.showOpenDialog(senderWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return { canceled: true };
+    }
+
+    const skill = await runtime.importSkillDirectory(picked.filePaths[0]);
+    return {
+      canceled: false,
+      skill
+    };
+  });
+
   ipcMain.handle("pet:chat:send", (_, payload: { text?: string }) =>
     runtime.chatFromPet(payload?.text ?? "")
   );

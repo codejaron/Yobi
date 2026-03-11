@@ -25,6 +25,10 @@ const SchedulerPage = lazy(async () => {
   const module = await import("@renderer/pages/Scheduler");
   return { default: module.SchedulerPage };
 });
+const SkillsPage = lazy(async () => {
+  const module = await import("@renderer/pages/Skills");
+  return { default: module.SkillsPage };
+});
 const ProvidersPage = lazy(async () => {
   const module = await import("@renderer/pages/Providers");
   return { default: module.ProvidersPage };
@@ -54,6 +58,8 @@ function pageTitle(page: PageId): string {
       return "聊天控制台";
     case "scheduler":
       return "定时任务";
+    case "skills":
+      return "Skills";
     case "memory":
       return "Mind Center";
     case "mcp":
@@ -248,6 +254,14 @@ export default function App() {
       return (
         <Suspense fallback={loading}>
           <SchedulerPage config={config} />
+        </Suspense>
+      );
+    }
+
+    if (activePage === "skills") {
+      return (
+        <Suspense fallback={loading}>
+          <SkillsPage />
         </Suspense>
       );
     }

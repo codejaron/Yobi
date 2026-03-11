@@ -13,6 +13,8 @@ export function ConsoleChatPage() {
     sttReady,
     micHint,
     pendingApproval,
+    skillsCatalog,
+    activatedSkills,
     approvalIndex,
     setApprovalIndex,
     expandedActions,
@@ -54,6 +56,8 @@ export function ConsoleChatPage() {
         chatBottomRef={chatBottomRef}
         onChatScroll={handleChatScroll}
         pendingApproval={pendingApproval}
+        skillsCatalog={skillsCatalog}
+        activatedSkills={activatedSkills}
         approvalIndex={approvalIndex}
         setApprovalIndex={setApprovalIndex}
         submitApproval={submitApproval}

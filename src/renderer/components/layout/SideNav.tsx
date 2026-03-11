@@ -6,6 +6,7 @@ import {
   ListChecks,
   MessageSquare,
   Plug,
+  Sparkles,
   Settings2
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -21,6 +22,7 @@ const items: Array<{
   { id: "topics", label: "话题池", icon: ListChecks },
   { id: "console", label: "聊天", icon: MessageSquare },
   { id: "scheduler", label: "定时任务", icon: Clock3 },
+  { id: "skills", label: "Skills", icon: Sparkles },
   { id: "providers", label: "Provider", icon: Bot },
   { id: "memory", label: "记忆", icon: Brain },
   { id: "mcp", label: "MCP", icon: Plug },

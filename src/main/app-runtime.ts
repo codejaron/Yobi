@@ -19,6 +19,7 @@ import { ExaSearchService } from "@main/services/exa-search";
 import { ScheduledTaskService } from "@main/services/scheduled-tasks";
 import { ScheduledTaskStore } from "@main/storage/scheduled-task-store";
 import { createBuiltinTools } from "@main/tools/builtin";
+import { createSkillTools } from "@main/tools/skills";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
   ensureKernelBootstrap
@@ -47,6 +48,7 @@ export class CompanionRuntime {
   private readonly stateStore: RuntimeRegistry["stateStore"];
   private readonly approvalGuard: RuntimeRegistry["approvalGuard"];
   private readonly toolRegistry: RuntimeRegistry["toolRegistry"];
+  private readonly skillManager: RuntimeRegistry["skillManager"];
   private readonly mcpManager: RuntimeRegistry["mcpManager"];
   private readonly conversation: RuntimeRegistry["conversation"];
   private readonly kernel: RuntimeRegistry["kernel"];
@@ -74,6 +76,7 @@ export class CompanionRuntime {
     this.stateStore = registry.stateStore;
     this.approvalGuard = registry.approvalGuard;
     this.toolRegistry = registry.toolRegistry;
+    this.skillManager = registry.skillManager;
     this.mcpManager = registry.mcpManager;
     this.conversation = registry.conversation;
     this.kernel = registry.kernel;
@@ -116,6 +119,7 @@ export class CompanionRuntime {
     await this.configStore.init();
     this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
     await ensureKernelBootstrap(this.paths);
+    await this.skillManager.init();
     await this.scheduledTaskService.init();
     await this.runtimeContextStore.init();
     await this.stateStore.init();
@@ -268,6 +272,26 @@ export class CompanionRuntime {
 
   async importPetModelDirectory(sourceDir: string): Promise<{ modelDir: string }> {
     return this.petService.importPetModelDirectory(sourceDir);
+  }
+
+  async importSkillDirectory(sourceDir: string) {
+    return this.skillManager.importSkillDirectory(sourceDir);
+  }
+
+  async listSkills() {
+    return this.skillManager.listSkills();
+  }
+
+  async rescanSkills() {
+    return this.skillManager.rescan();
+  }
+
+  async setSkillEnabled(input: { skillId: string; enabled: boolean }) {
+    return this.skillManager.setSkillEnabled(input.skillId, input.enabled);
+  }
+
+  async deleteSkill(skillId: string) {
+    return this.skillManager.deleteSkill(skillId);
   }
 
   async saveConfig(nextConfig: AppConfig): Promise<AppConfig> {
@@ -480,6 +504,10 @@ export class CompanionRuntime {
     })) {
       this.toolRegistry.register(builtin);
     }
+
+    for (const skillTool of createSkillTools(this.skillManager)) {
+      this.toolRegistry.register(skillTool);
+    }
   }
 
   private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
@@ -504,6 +532,17 @@ export class CompanionRuntime {
           resourceId: PRIMARY_RESOURCE_ID,
           threadId: PRIMARY_THREAD_ID,
           stream: {
+            onSkillsCatalog: (payload) => {
+              this.consoleChannel.emit({
+                requestId,
+                type: "skills-catalog",
+                enabledCount: payload.enabledCount,
+                truncated: payload.truncated,
+                truncatedDescriptions: payload.truncatedDescriptions,
+                omittedSkills: payload.omittedSkills,
+                timestamp: new Date().toISOString()
+              });
+            },
             onTextDelta: (delta) => {
               const visibleDelta = deltaStripper.push(delta);
               if (!visibleDelta) {
@@ -539,6 +578,33 @@ export class CompanionRuntime {
                 success: payload.success,
                 timestamp: new Date().toISOString()
               });
+
+              if (
+                payload.toolName === "activate_skill" &&
+                payload.success &&
+                payload.output &&
+                typeof payload.output === "object"
+              ) {
+                const output = payload.output as Record<string, unknown>;
+                const skillId = typeof output.skillId === "string" ? output.skillId : "";
+                const name = typeof output.name === "string" ? output.name : skillId;
+                const compatibility = output.compatibility;
+                if (
+                  skillId &&
+                  compatibility &&
+                  typeof compatibility === "object" &&
+                  typeof (compatibility as { status?: unknown }).status === "string"
+                ) {
+                  this.consoleChannel.emit({
+                    requestId,
+                    type: "skill-activated",
+                    skillId,
+                    name,
+                    compatibility: compatibility as any,
+                    timestamp: new Date().toISOString()
+                  });
+                }
+              }
             }
           },
           requestApproval: this.consoleChannel.makeApprovalHandler(requestId)

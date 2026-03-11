@@ -7,6 +7,7 @@ import type {
   HistoryMessage,
   KernelStateDocument,
   MindSnapshot,
+  SkillCatalogItem,
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskRun,
@@ -119,4 +120,10 @@ export interface CompanionApi {
   resumeScheduledTask(taskId: string): Promise<ScheduledTask>;
   deleteScheduledTask(taskId: string): Promise<{ removed: boolean }>;
   runScheduledTaskNow(taskId: string): Promise<ScheduledTaskRun>;
+
+  listSkills(): Promise<SkillCatalogItem[]>;
+  rescanSkills(): Promise<SkillCatalogItem[]>;
+  importSkillFolder(): Promise<{ canceled: boolean; skill?: SkillCatalogItem }>;
+  setSkillEnabled(input: { skillId: string; enabled: boolean }): Promise<SkillCatalogItem>;
+  deleteSkill(skillId: string): Promise<{ removed: boolean; skillId: string }>;
 }

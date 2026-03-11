@@ -91,6 +91,21 @@ const api = {
   importPetModelFromDialog() {
     return ipcRenderer.invoke('pet:model:import');
   },
+  listSkills() {
+    return ipcRenderer.invoke('skills:list');
+  },
+  rescanSkills() {
+    return ipcRenderer.invoke('skills:rescan');
+  },
+  importSkillFolder() {
+    return ipcRenderer.invoke('skills:import-folder');
+  },
+  setSkillEnabled(input) {
+    return ipcRenderer.invoke('skills:set-enabled', input);
+  },
+  deleteSkill(skillId) {
+    return ipcRenderer.invoke('skills:delete', { skillId });
+  },
   onStatus(listener) {
     const channel = 'runtime:status';
     const wrapped = (_event, status) => listener(status);

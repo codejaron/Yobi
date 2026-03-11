@@ -1,4 +1,9 @@
-import type { CommandApprovalDecision, HistoryMessage } from "@shared/types";
+import type {
+  CommandApprovalDecision,
+  HistoryMessage,
+  SkillActivatedEventPayload,
+  SkillsCatalogSummary
+} from "@shared/types";
 
 export type MessageRole = "user" | "assistant";
 export type MessageState = "streaming" | "done" | "error";
@@ -28,6 +33,9 @@ export interface PendingApproval {
   toolName: string;
   description: string;
 }
+
+export type ConsoleSkillsCatalogState = SkillsCatalogSummary;
+export type ConsoleActivatedSkill = SkillActivatedEventPayload;
 
 export const CONSOLE_HISTORY_PAGE_SIZE = 20;
 export const LIVE_MESSAGE_LIMIT = 90;

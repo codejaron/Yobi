@@ -8,6 +8,7 @@ export type PageId =
   | "topics"
   | "console"
   | "scheduler"
+  | "skills"
   | "providers"
   | "memory"
   | "mcp"

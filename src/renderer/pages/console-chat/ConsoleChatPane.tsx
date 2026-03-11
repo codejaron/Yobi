@@ -12,7 +12,12 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { APPROVAL_OPTIONS } from "./types";
-import type { ConsoleMessage, PendingApproval } from "./types";
+import type {
+  ConsoleActivatedSkill,
+  ConsoleMessage,
+  ConsoleSkillsCatalogState,
+  PendingApproval
+} from "./types";
 
 interface ConsoleChatPaneProps {
   busy: boolean;
@@ -25,6 +30,8 @@ interface ConsoleChatPaneProps {
   chatBottomRef: RefObject<HTMLDivElement | null>;
   onChatScroll: (event: UIEvent<HTMLDivElement>) => void;
   pendingApproval: PendingApproval | null;
+  skillsCatalog: ConsoleSkillsCatalogState | null;
+  activatedSkills: ConsoleActivatedSkill[];
   approvalIndex: number;
   setApprovalIndex: (index: number) => void;
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
@@ -55,6 +62,8 @@ export function ConsoleChatPane({
   chatBottomRef,
   onChatScroll,
   pendingApproval,
+  skillsCatalog,
+  activatedSkills,
   approvalIndex,
   setApprovalIndex,
   submitApproval,
@@ -90,6 +99,32 @@ export function ConsoleChatPane({
         </Button>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+        {skillsCatalog ? (
+          <div className="rounded-xl border border-violet-200 bg-violet-50/70 px-4 py-3 text-sm text-violet-950">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className="border-violet-300 bg-violet-100 text-violet-800">Skills</Badge>
+              <span>已启用 {skillsCatalog.enabledCount} 个</span>
+              {skillsCatalog.truncated ? (
+                <Badge className="border-amber-300 bg-amber-50 text-amber-700">Catalog 已截断</Badge>
+              ) : null}
+            </div>
+            {skillsCatalog.truncated ? (
+              <p className="mt-2 text-xs text-violet-900/80">
+                已裁剪 {skillsCatalog.truncatedDescriptions} 条描述，省略 {skillsCatalog.omittedSkills} 个 skill。
+              </p>
+            ) : null}
+            {activatedSkills.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {activatedSkills.map((skill) => (
+                  <Badge key={skill.skillId} className="border-violet-300 bg-white text-violet-800">
+                    {skill.name} · {skill.compatibility.status}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <div
           ref={chatListRef}
           className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2"

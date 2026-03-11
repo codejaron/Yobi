@@ -1,10 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { streamText, stepCountIs, type ToolSet } from "ai";
-import type { AppConfig, RealtimeEmotionalSignals, TokenUsageSource } from "@shared/types";
+import type {
+  AppConfig,
+  RealtimeEmotionalSignals,
+  SkillsCatalogSummary,
+  TokenUsageSource
+} from "@shared/types";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { extractEmotionTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
+import type { SkillManager } from "@main/skills/manager";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { assembleContext } from "@main/memory-v2/context-assembler";
@@ -29,6 +35,7 @@ export interface ChatReplyStreamListener {
     output?: unknown;
     error?: string;
   }) => void;
+  onSkillsCatalog?: (payload: SkillsCatalogSummary) => void;
 }
 
 function tokenSourceFromChannel(channel: "telegram" | "console" | "qq" | "feishu"): TokenUsageSource {
@@ -77,6 +84,7 @@ export class ConversationEngine {
     private readonly memory: YobiMemory,
     private readonly modelFactory: ModelFactory,
     private readonly toolRegistry: ToolRegistry,
+    private readonly skillManager: SkillManager,
     private readonly stateStore: StateStore,
     private readonly paths: CompanionPaths,
     private readonly getConfig: () => AppConfig,
@@ -148,8 +156,14 @@ export class ConversationEngine {
       await this.memory.touchFacts(assembled.selectedFacts.map((fact) => fact.id));
     }
 
+    const skillCatalog = this.skillManager.getCatalogPrompt(10_000);
+    if (skillCatalog.summary.enabledCount > 0) {
+      input.stream?.onSkillsCatalog?.(skillCatalog.summary);
+    }
+
     const system = [
       assembled.system,
+      skillCatalog.summary.enabledCount > 0 ? skillCatalog.prompt : "",
       buildLocalNowPrompt(),
       buildRealtimeSignalContractPrompt(),
       input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""
