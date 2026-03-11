@@ -7,6 +7,9 @@ import type {
   HistoryMessage,
   KernelStateDocument,
   MindSnapshot,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskRun,
   UserProfile
 } from "./types";
 
@@ -109,4 +112,11 @@ export interface CompanionApi {
     decision: CommandApprovalDecision;
   }): Promise<{ accepted: boolean }>;
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void;
+
+  listScheduledTasks(): Promise<{ tasks: ScheduledTask[]; runs: ScheduledTaskRun[] }>;
+  saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;
+  pauseScheduledTask(taskId: string): Promise<ScheduledTask>;
+  resumeScheduledTask(taskId: string): Promise<ScheduledTask>;
+  deleteScheduledTask(taskId: string): Promise<{ removed: boolean }>;
+  runScheduledTaskNow(taskId: string): Promise<ScheduledTaskRun>;
 }

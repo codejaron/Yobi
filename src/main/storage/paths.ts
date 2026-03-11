@@ -13,12 +13,16 @@ export class CompanionPaths {
     return path.join(this.baseDir, "config.json");
   }
 
-  get remindersPath(): string {
-    return path.join(this.baseDir, "reminders.json");
-  }
-
   get soulPath(): string {
     return path.join(this.baseDir, "soul.md");
+  }
+
+  get scheduledTasksPath(): string {
+    return path.join(this.baseDir, "scheduled-tasks.json");
+  }
+
+  get scheduledTaskRunsPath(): string {
+    return path.join(this.baseDir, "scheduled-task-runs.jsonl");
   }
 
   get personaPath(): string {

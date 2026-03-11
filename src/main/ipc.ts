@@ -199,6 +199,20 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       }
     ) => runtime.resolveConsoleApproval(payload)
   );
+  ipcMain.handle("scheduler:list", () => runtime.getScheduledTasks());
+  ipcMain.handle("scheduler:save", (_, payload) => runtime.saveScheduledTask(payload));
+  ipcMain.handle("scheduler:pause", (_, payload: { taskId?: string }) =>
+    runtime.pauseScheduledTask(payload?.taskId ?? "")
+  );
+  ipcMain.handle("scheduler:resume", (_, payload: { taskId?: string }) =>
+    runtime.resumeScheduledTask(payload?.taskId ?? "")
+  );
+  ipcMain.handle("scheduler:delete", (_, payload: { taskId?: string }) =>
+    runtime.deleteScheduledTask(payload?.taskId ?? "")
+  );
+  ipcMain.handle("scheduler:run-now", (_, payload: { taskId?: string }) =>
+    runtime.runScheduledTaskNow(payload?.taskId ?? "")
+  );
 
   ipcMain.on("status:subscribe", (event) => {
     subscribeToStatus(runtime, event.sender);

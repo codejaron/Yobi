@@ -27,7 +27,7 @@ export interface ToolResult {
 }
 
 export interface ToolExecutionContext {
-  channel: "telegram" | "console" | "qq" | "feishu";
+  channel: "telegram" | "console" | "qq" | "feishu" | "scheduler";
   userMessage: string;
   getConfig: () => AppConfig;
   requestApproval?: ToolApprovalHandler;

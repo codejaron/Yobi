@@ -5,6 +5,8 @@ import {
   type CommandApprovalDecision,
   type ConsoleRunEventV2,
   type MindSnapshot,
+  type ScheduledTaskInput,
+  type ScheduledTaskRun,
   type UserProfile,
   type HistoryMessage,
   type KernelStateDocument,
@@ -14,6 +16,8 @@ import {
 } from "@main/storage/runtime-context-store";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
 import { ExaSearchService } from "@main/services/exa-search";
+import { ScheduledTaskService } from "@main/services/scheduled-tasks";
+import { ScheduledTaskStore } from "@main/storage/scheduled-task-store";
 import { createBuiltinTools } from "@main/tools/builtin";
 import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
@@ -38,10 +42,10 @@ export class CompanionRuntime {
   private readonly logger: RuntimeRegistry["logger"];
   private readonly tokenStatsService: RuntimeRegistry["tokenStatsService"];
   private readonly configStore: RuntimeRegistry["configStore"];
-  private readonly reminderStore: RuntimeRegistry["reminderStore"];
   private readonly runtimeContextStore: RuntimeRegistry["runtimeContextStore"];
   private readonly memory: RuntimeRegistry["memory"];
   private readonly stateStore: RuntimeRegistry["stateStore"];
+  private readonly approvalGuard: RuntimeRegistry["approvalGuard"];
   private readonly toolRegistry: RuntimeRegistry["toolRegistry"];
   private readonly mcpManager: RuntimeRegistry["mcpManager"];
   private readonly conversation: RuntimeRegistry["conversation"];
@@ -52,22 +56,23 @@ export class CompanionRuntime {
   private readonly voiceRouter: RuntimeRegistry["voiceRouter"];
   private readonly pet: RuntimeRegistry["pet"];
   private readonly petService: RuntimeRegistry["petService"];
-  private readonly reminderService: RuntimeRegistry["reminderService"];
   private readonly activityCoordinator: RuntimeRegistry["activityCoordinator"];
   private readonly channelCoordinator: RuntimeRegistry["channelCoordinator"];
   private readonly lifecycleCoordinator: RuntimeRegistry["lifecycleCoordinator"];
   private readonly dataCoordinator: RuntimeRegistry["dataCoordinator"];
   private readonly statusCoordinator: RuntimeRegistry["statusCoordinator"];
+  private readonly scheduledTaskStore: ScheduledTaskStore;
+  private readonly scheduledTaskService: ScheduledTaskService;
 
   constructor(registry: RuntimeRegistry) {
     this.paths = registry.paths;
     this.logger = registry.logger;
     this.tokenStatsService = registry.tokenStatsService;
     this.configStore = registry.configStore;
-    this.reminderStore = registry.reminderStore;
     this.runtimeContextStore = registry.runtimeContextStore;
     this.memory = registry.memory;
     this.stateStore = registry.stateStore;
+    this.approvalGuard = registry.approvalGuard;
     this.toolRegistry = registry.toolRegistry;
     this.mcpManager = registry.mcpManager;
     this.conversation = registry.conversation;
@@ -78,12 +83,19 @@ export class CompanionRuntime {
     this.voiceRouter = registry.voiceRouter;
     this.pet = registry.pet;
     this.petService = registry.petService;
-    this.reminderService = registry.reminderService;
     this.activityCoordinator = registry.activityCoordinator;
     this.channelCoordinator = registry.channelCoordinator;
     this.lifecycleCoordinator = registry.lifecycleCoordinator;
     this.dataCoordinator = registry.dataCoordinator;
     this.statusCoordinator = registry.statusCoordinator;
+    this.scheduledTaskStore = new ScheduledTaskStore(this.paths);
+    this.scheduledTaskService = new ScheduledTaskService({
+      store: this.scheduledTaskStore,
+      toolRegistry: this.toolRegistry,
+      approvalGuard: this.approvalGuard,
+      getConfig: () => this.getConfig(),
+      notify: (input) => this.dispatchScheduledNotification(input)
+    });
 
     registry.bindCallbacks({
       emitStatus: () => this.emitStatus(),
@@ -104,7 +116,7 @@ export class CompanionRuntime {
     await this.configStore.init();
     this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
     await ensureKernelBootstrap(this.paths);
-    await this.reminderStore.init();
+    await this.scheduledTaskService.init();
     await this.runtimeContextStore.init();
     await this.stateStore.init();
     await this.memory.init();
@@ -123,6 +135,7 @@ export class CompanionRuntime {
     await this.startFeishu();
     await this.startQQ();
     this.kernel.start();
+    await this.scheduledTaskService.start();
 
     await this.emitStatus();
     this.logger.info("runtime", "start:ready");
@@ -133,6 +146,7 @@ export class CompanionRuntime {
     await this.memory.dumpUnprocessedBuffer();
 
     this.lifecycleCoordinator.stop();
+    await this.scheduledTaskService.stop();
     await this.kernel.stop();
     await this.memory.stop();
     await this.mcpManager.dispose();
@@ -317,6 +331,35 @@ export class CompanionRuntime {
     return this.statusCoordinator.collectStatus();
   }
 
+  async getScheduledTasks(): Promise<{ tasks: ReturnType<ScheduledTaskService["listTasks"]>; runs: ScheduledTaskRun[] }> {
+    return this.scheduledTaskService.getSnapshot();
+  }
+
+  async saveScheduledTask(
+    input: ScheduledTaskInput,
+    requestApproval?: (request: Parameters<RuntimeRegistry["approvalGuard"]["ensureApproved"]>[0]) => Promise<CommandApprovalDecision>
+  ) {
+    return this.scheduledTaskService.saveTask(input, {
+      requestApproval: requestApproval as any
+    });
+  }
+
+  async pauseScheduledTask(taskId: string) {
+    return this.scheduledTaskService.pauseTask(taskId);
+  }
+
+  async resumeScheduledTask(taskId: string) {
+    return this.scheduledTaskService.resumeTask(taskId);
+  }
+
+  async deleteScheduledTask(taskId: string) {
+    return this.scheduledTaskService.deleteTask(taskId);
+  }
+
+  async runScheduledTaskNow(taskId: string) {
+    return this.scheduledTaskService.runTaskNow(taskId);
+  }
+
   async startBilibiliQrAuth() {
     return this.dataCoordinator.startBilibiliQrAuth();
   }
@@ -431,9 +474,9 @@ export class CompanionRuntime {
     const exaSearchService = new ExaSearchService(() => this.getConfig());
 
     for (const builtin of createBuiltinTools({
-      reminderService: this.reminderService,
       getConfig: () => this.getConfig(),
-      exaSearchService
+      exaSearchService,
+      scheduledTaskService: this.scheduledTaskService
     })) {
       this.toolRegistry.register(builtin);
     }
@@ -602,9 +645,51 @@ export class CompanionRuntime {
   }
 
   private async handleKernelProactive(message: string, topicId?: string): Promise<void> {
-    const parsedMessage = extractEmotionTag(message);
-    const proactiveMessage = parsedMessage.cleanedText.trim() || message.trim();
-    if (!proactiveMessage) {
+    await this.dispatchAssistantAutomationMessage({
+      message,
+      topicId,
+      metadata: {
+        proactive: true,
+        source: "yobi"
+      },
+      pushTargets: this.getConfig().proactive.pushTargets,
+      recordProactive: true
+    });
+  }
+
+  private async dispatchScheduledNotification(input: {
+    text: string;
+    pushTargets?: {
+      telegram: boolean;
+      feishu: boolean;
+    };
+  }): Promise<void> {
+    await this.dispatchAssistantAutomationMessage({
+      message: input.text,
+      metadata: {
+        source: "yobi"
+      },
+      pushTargets: input.pushTargets ?? this.getConfig().proactive.pushTargets,
+      recordProactive: false
+    });
+  }
+
+  private async dispatchAssistantAutomationMessage(input: {
+    message: string;
+    topicId?: string;
+    metadata: {
+      proactive?: boolean;
+      source: "yobi";
+    };
+    pushTargets: {
+      telegram: boolean;
+      feishu: boolean;
+    };
+    recordProactive: boolean;
+  }): Promise<void> {
+    const parsedMessage = extractEmotionTag(input.message);
+    const normalizedMessage = parsedMessage.cleanedText.trim() || input.message.trim();
+    if (!normalizedMessage) {
       return;
     }
 
@@ -619,30 +704,27 @@ export class CompanionRuntime {
       threadId: PRIMARY_THREAD_ID,
       resourceId: PRIMARY_RESOURCE_ID,
       channel: "console",
-      text: proactiveMessage,
-      metadata: {
-        proactive: true,
-        source: "yobi"
-      }
+      text: normalizedMessage,
+      metadata: input.metadata
     });
     await this.kernel.onAssistantMessage();
-    if (topicId) {
-      await this.memory.markUsed(topicId);
+    if (input.topicId) {
+      await this.memory.markUsed(input.topicId);
     }
 
     this.consoleChannel.emitExternalAssistantMessage({
-      text: proactiveMessage,
+      text: normalizedMessage,
       source: "yobi"
     });
 
-    const config = this.getConfig();
-    if (config.proactive.pushTargets.telegram || config.proactive.pushTargets.feishu) {
-      await this.pushToConfiguredChannels(proactiveMessage, config.proactive.pushTargets);
+    if (input.pushTargets.telegram || input.pushTargets.feishu) {
+      await this.pushToConfiguredChannels(normalizedMessage, input.pushTargets);
     }
 
+    const config = this.getConfig();
     try {
       const audio = await this.voiceRouter.synthesize({
-        text: proactiveMessage,
+        text: normalizedMessage,
         edgeConfig: {
           voice: config.voice.ttsVoice,
           rate: config.voice.ttsRate,
@@ -664,7 +746,9 @@ export class CompanionRuntime {
       type: "talking",
       value: "talking"
     });
-    await this.recordProactiveActivity();
+    if (input.recordProactive) {
+      await this.recordProactiveActivity();
+    }
     await this.emitStatus();
   }
 

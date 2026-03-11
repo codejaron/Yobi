@@ -68,6 +68,110 @@ const proactivePushTargetsSchema = z
   })
   .strict();
 
+export const scheduledTaskPushTargetsSchema = proactivePushTargetsSchema;
+
+export const scheduledTaskToolNameSchema = z.enum([
+  "browser",
+  "system",
+  "file",
+  "web_search",
+  "code_search",
+  "web_fetch"
+]);
+
+export const scheduledTaskTriggerSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("once"),
+      runAt: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, "执行时间必须是本地时间格式 YYYY-MM-DDTHH:mm[:ss]")
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cron"),
+      expression: z.string().min(1),
+      timezone: z.literal("local").default("local")
+    })
+    .strict()
+]);
+
+export const scheduledTaskActionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("notify"),
+      text: z.string().min(1),
+      pushTargets: scheduledTaskPushTargetsSchema.optional()
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("tool"),
+      toolName: scheduledTaskToolNameSchema,
+      params: z.record(z.string(), z.unknown())
+    })
+    .strict()
+]);
+
+export const scheduledTaskStatusSchema = z.enum([
+  "enabled",
+  "paused",
+  "completed",
+  "failed",
+  "missed"
+]);
+
+export const scheduledTaskRunStatusSchema = z.enum([
+  "success",
+  "failed",
+  "missed",
+  "skipped"
+]);
+
+export const scheduledTaskSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    trigger: scheduledTaskTriggerSchema,
+    action: scheduledTaskActionSchema,
+    status: scheduledTaskStatusSchema,
+    nextRunAt: z.string().nullable(),
+    lastRunAt: z.string().datetime().nullable(),
+    lastRunStatus: scheduledTaskRunStatusSchema.nullable(),
+    lastRunMessage: z.string().nullable(),
+    pauseReason: z.string().nullable(),
+    consecutiveFailures: z.number().int().min(0),
+    approvalRequiredAtCreation: z.boolean().default(false),
+    approvalSignature: z.string().nullable(),
+    approvedAt: z.string().datetime().nullable(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .strict();
+
+export const scheduledTaskRunSchema = z
+  .object({
+    id: z.string().min(1),
+    taskId: z.string().min(1),
+    taskName: z.string().min(1),
+    status: scheduledTaskRunStatusSchema,
+    scheduledFor: z.string().nullable(),
+    startedAt: z.string().datetime(),
+    finishedAt: z.string().datetime(),
+    message: z.string().nullable(),
+    error: z.string().nullable()
+  })
+  .strict();
+
+export const scheduledTaskInputSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+    trigger: scheduledTaskTriggerSchema,
+    action: scheduledTaskActionSchema,
+    enabled: z.boolean().optional()
+  })
+  .strict();
+
 const browseAuthStateSchema = z.enum(["missing", "pending", "active", "expired", "error"]);
 
 const kernelTickSchema = z
@@ -431,6 +535,14 @@ export type ModelRoute = z.infer<typeof modelRouteSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type BrowseAuthState = z.infer<typeof browseAuthStateSchema>;
+export type ScheduledTaskToolName = z.infer<typeof scheduledTaskToolNameSchema>;
+export type ScheduledTaskTrigger = z.infer<typeof scheduledTaskTriggerSchema>;
+export type ScheduledTaskAction = z.infer<typeof scheduledTaskActionSchema>;
+export type ScheduledTaskStatus = z.infer<typeof scheduledTaskStatusSchema>;
+export type ScheduledTaskRunStatus = z.infer<typeof scheduledTaskRunStatusSchema>;
+export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
+export type ScheduledTaskRun = z.infer<typeof scheduledTaskRunSchema>;
+export type ScheduledTaskInput = z.infer<typeof scheduledTaskInputSchema>;
 
 export type ChatRole = "system" | "user" | "assistant";
 export type CommandApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -850,6 +962,14 @@ export interface AppStatus {
   kernel?: KernelStatus;
 }
 
+export interface ScheduledTasksDocument {
+  tasks: ScheduledTask[];
+}
+
+export const DEFAULT_SCHEDULED_TASKS: ScheduledTasksDocument = {
+  tasks: []
+};
+
 export interface InterestProfile {
   games: string[];
   creators: string[];
@@ -857,18 +977,6 @@ export interface InterestProfile {
   dislikes: string[];
   keywords: string[];
   updatedAt: string;
-}
-
-export interface ReminderItem {
-  id: string;
-  text: string;
-  at: string;
-  createdAt: string;
-  sourceMessageId?: string;
-}
-
-export interface ReminderDocument {
-  items: ReminderItem[];
 }
 
 export const DEFAULT_EMOTIONAL_STATE: EmotionalState = {
@@ -1147,10 +1255,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       )
     }
   }
-};
-
-export const DEFAULT_REMINDERS: ReminderDocument = {
-  items: []
 };
 
 export const DEFAULT_CONTEXT: RuntimeContext = {

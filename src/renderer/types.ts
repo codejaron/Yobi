@@ -7,6 +7,7 @@ export type PageId =
   | "dashboard"
   | "topics"
   | "console"
+  | "scheduler"
   | "providers"
   | "memory"
   | "mcp"

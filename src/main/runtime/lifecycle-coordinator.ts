@@ -1,13 +1,11 @@
 import type { AppConfig } from "@shared/types";
 import { KeepAwakeService } from "@main/services/keep-awake";
 import { PetService } from "@main/services/pet-service";
-import { ReminderService } from "@main/services/reminders";
 import { BilibiliSyncCoordinator } from "@main/services/browse/bilibili-sync-coordinator";
 
 interface LifecycleCoordinatorInput {
   keepAwake: KeepAwakeService;
   petService: PetService;
-  reminderService: ReminderService;
   bilibiliSyncCoordinator: BilibiliSyncCoordinator;
   getConfig: () => AppConfig;
 }
@@ -16,7 +14,6 @@ export class LifecycleCoordinator {
   constructor(private readonly input: LifecycleCoordinatorInput) {}
 
   async start(): Promise<void> {
-    await this.input.reminderService.init();
     this.applyConfigEffects();
     await this.input.bilibiliSyncCoordinator.start();
   }

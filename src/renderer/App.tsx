@@ -21,6 +21,10 @@ const ConsoleChatPage = lazy(async () => {
   const module = await import("@renderer/pages/ConsoleChat");
   return { default: module.ConsoleChatPage };
 });
+const SchedulerPage = lazy(async () => {
+  const module = await import("@renderer/pages/Scheduler");
+  return { default: module.SchedulerPage };
+});
 const ProvidersPage = lazy(async () => {
   const module = await import("@renderer/pages/Providers");
   return { default: module.ProvidersPage };
@@ -48,6 +52,8 @@ function pageTitle(page: PageId): string {
       return "Provider 与模型路由";
     case "console":
       return "聊天控制台";
+    case "scheduler":
+      return "定时任务";
     case "memory":
       return "Mind Center";
     case "mcp":
@@ -234,6 +240,14 @@ export default function App() {
       return (
         <Suspense fallback={loading}>
           <ConsoleChatPage />
+        </Suspense>
+      );
+    }
+
+    if (activePage === "scheduler") {
+      return (
+        <Suspense fallback={loading}>
+          <SchedulerPage config={config} />
         </Suspense>
       );
     }

@@ -122,6 +122,24 @@ const api = {
     ipcRenderer.on(channel, wrapped);
     ipcRenderer.send('console:chat:subscribe');
     return () => ipcRenderer.removeListener(channel, wrapped);
+  },
+  listScheduledTasks() {
+    return ipcRenderer.invoke('scheduler:list');
+  },
+  saveScheduledTask(input) {
+    return ipcRenderer.invoke('scheduler:save', input);
+  },
+  pauseScheduledTask(taskId) {
+    return ipcRenderer.invoke('scheduler:pause', { taskId });
+  },
+  resumeScheduledTask(taskId) {
+    return ipcRenderer.invoke('scheduler:resume', { taskId });
+  },
+  deleteScheduledTask(taskId) {
+    return ipcRenderer.invoke('scheduler:delete', { taskId });
+  },
+  runScheduledTaskNow(taskId) {
+    return ipcRenderer.invoke('scheduler:run-now', { taskId });
   }
 };
 

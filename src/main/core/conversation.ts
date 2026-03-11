@@ -57,6 +57,21 @@ function buildRealtimeSignalContractPrompt(): string {
   ].join("\n");
 }
 
+function padTwo(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function buildLocalNowPrompt(now = new Date()): string {
+  const localDateTime = `${now.getFullYear()}-${padTwo(now.getMonth() + 1)}-${padTwo(now.getDate())} ${padTwo(now.getHours())}:${padTwo(now.getMinutes())}:${padTwo(now.getSeconds())}`;
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+  return [
+    `[LOCAL TIME]`,
+    `当前本机时间：${localDateTime}`,
+    `当前本机时区：${timeZone}`
+  ].join("\n");
+}
+
 export class ConversationEngine {
   constructor(
     private readonly memory: YobiMemory,
@@ -135,6 +150,7 @@ export class ConversationEngine {
 
     const system = [
       assembled.system,
+      buildLocalNowPrompt(),
       buildRealtimeSignalContractPrompt(),
       input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""
     ]

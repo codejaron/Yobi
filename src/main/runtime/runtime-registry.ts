@@ -1,7 +1,6 @@
 import type { AppConfig } from "@shared/types";
 import type { CompanionPaths } from "@main/storage/paths";
 import { ConfigStore } from "@main/storage/config";
-import { ReminderStore } from "@main/storage/reminder-store";
 import {
   RuntimeContextStore,
   type RuntimeInboundChannel
@@ -19,7 +18,6 @@ import { FeishuChannel } from "@main/channels/feishu";
 import { VoiceService } from "@main/services/voice";
 import { VoiceProviderRouter } from "@main/services/voice-router";
 import { KeepAwakeService } from "@main/services/keep-awake";
-import { ReminderService } from "@main/services/reminders";
 import { McpManager } from "@main/services/mcp-manager";
 import { PetWindowController } from "@main/pet/pet-window";
 import { RealtimeVoiceService } from "@main/services/realtime-voice";
@@ -70,7 +68,6 @@ export interface RuntimeRegistry {
   tokenStatsStore: TokenStatsStore;
   tokenStatsService: TokenStatsService;
   configStore: ConfigStore;
-  reminderStore: ReminderStore;
   runtimeContextStore: RuntimeContextStore;
   memory: YobiMemory;
   modelFactory: ModelFactory;
@@ -95,7 +92,6 @@ export interface RuntimeRegistry {
   globalPtt: GlobalPetPushToTalkService;
   systemPermissionsService: SystemPermissionsService;
   petService: PetService;
-  reminderService: ReminderService;
   activityCoordinator: RuntimeActivityCoordinator;
   channelCoordinator: ChannelCoordinator;
   lifecycleCoordinator: LifecycleCoordinator;
@@ -111,7 +107,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   const tokenStatsStore = new TokenStatsStore(paths);
   const tokenStatsService = new TokenStatsService(tokenStatsStore);
   const configStore = new ConfigStore(paths);
-  const reminderStore = new ReminderStore(paths);
   const runtimeContextStore = new RuntimeContextStore(paths);
 
   const memory = new YobiMemory(
@@ -238,15 +233,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     }
   });
 
-  const reminderService = new ReminderService(reminderStore, {
-    sendReminder: async (item) => {
-      await telegram.send({
-        kind: "text",
-        text: `⏰ 提醒：${item.text}`
-      });
-    }
-  });
-
   let channelCoordinatorRef: ChannelCoordinator | null = null;
   const activityCoordinator = new RuntimeActivityCoordinator({
     runtimeContextStore,
@@ -298,7 +284,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   const lifecycleCoordinator = new LifecycleCoordinator({
     keepAwake,
     petService,
-    reminderService,
     bilibiliSyncCoordinator,
     getConfig: () => configStore.getConfig()
   });
@@ -337,7 +322,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     tokenStatsStore,
     tokenStatsService,
     configStore,
-    reminderStore,
     runtimeContextStore,
     memory,
     modelFactory,
@@ -362,7 +346,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     globalPtt,
     systemPermissionsService,
     petService,
-    reminderService,
     activityCoordinator,
     channelCoordinator,
     lifecycleCoordinator,
