@@ -56,6 +56,22 @@ function formatTokenCount(value: number): string {
   return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
 }
 
+function statusBadgeClass(active: boolean | undefined): string {
+  return active ? "status-badge status-badge--success" : "status-badge status-badge--warn";
+}
+
+function noticeTextClass(type: "success" | "info" | "error"): string {
+  if (type === "success") {
+    return "text-[hsl(var(--status-success-foreground))]";
+  }
+
+  if (type === "info") {
+    return "text-muted-foreground";
+  }
+
+  return "text-[hsl(var(--status-danger-foreground))]";
+}
+
 const TOKEN_PERIOD_ITEMS: Array<{
   value: TokenPeriod;
   label: string;
@@ -319,7 +335,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
+            <Badge className={statusBadgeClass(status?.qqConnected)}>
               {status?.qqConnected ? "Bot 在线" : "等待配置"}
             </Badge>
           </CardContent>
@@ -334,7 +350,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Badge className={status?.feishuConnected ? "border-emerald-300" : "border-amber-300"}>
+            <Badge className={statusBadgeClass(status?.feishuConnected)}>
               {status?.feishuConnected ? "Bot 在线" : "等待配置"}
             </Badge>
           </CardContent>
@@ -349,7 +365,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
+            <Badge className={statusBadgeClass(status?.telegramConnected)}>
               {status?.telegramConnected ? "Bot 在线" : "等待配置"}
             </Badge>
           </CardContent>
@@ -416,7 +432,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
                 使用概览
               </CardTitle>
             </div>
-            <div className="inline-flex rounded-full border border-border/70 bg-white/75 p-1">
+            <div className="surface-panel inline-flex rounded-full p-1">
               {TOKEN_PERIOD_ITEMS.map((item) => (
                 <button
                   key={item.value}
@@ -436,20 +452,20 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-border/70 bg-white/75 px-4 py-3">
+            <div className="surface-panel-strong px-4 py-3">
               <p className="text-xs text-muted-foreground">{currentPeriodLabel}总消耗</p>
               <p className="text-3xl font-semibold tracking-tight">{formatTokenCount(tokenAggregate.totalTokens)}</p>
               <p className="text-xs text-muted-foreground">单位：Tokens</p>
             </div>
-            <div className="rounded-xl border border-border/70 bg-white/75 px-4 py-3 text-xs text-muted-foreground">
+            <div className="surface-panel-strong px-4 py-3 text-xs text-muted-foreground">
               <p>统计口径：优先 provider usage，缺失时回退估算。</p>
               <p>最后更新：{formatDateTime(tokenAggregate.lastUpdatedAt)}</p>
               {tokenAggregate.hasEstimated ? (
-                <p className="text-amber-700">
+                <p className="text-[hsl(var(--status-warn-foreground))]">
                   本周期含估算值 {formatTokenCount(tokenAggregate.estimatedTokens)}
                 </p>
               ) : (
-                <p className="text-emerald-700">本周期全部为 provider 实际 usage。</p>
+                <p className="text-[hsl(var(--status-success-foreground))]">本周期全部为 provider 实际 usage。</p>
               )}
             </div>
           </div>
@@ -556,7 +572,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
                 type="button"
                 onClick={() => openPermissionSettings(item.key)}
                 disabled={openingPermission !== null}
-                className="flex w-full items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2 text-sm transition-colors hover:bg-secondary/40"
+                className="surface-panel flex w-full items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-secondary/40"
               >
                 <span>{item.label}</span>
                 <span className="text-muted-foreground">
@@ -566,13 +582,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
             ))}
             {permissionActionNotice ? (
               <p
-                className={`text-xs ${
-                  permissionActionNotice.type === "success"
-                    ? "text-emerald-700"
-                    : permissionActionNotice.type === "info"
-                      ? "text-slate-700"
-                      : "text-rose-700"
-                }`}
+                className={`text-xs ${noticeTextClass(permissionActionNotice.type)}`}
               >
                 {permissionActionNotice.message}
               </p>
@@ -583,9 +593,7 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
               </Button>
               {resetPermissionsNotice ? (
                 <span
-                  className={`text-xs ${
-                    resetPermissionsNotice.type === "success" ? "text-emerald-700" : "text-rose-700"
-                  }`}
+                  className={`text-xs ${noticeTextClass(resetPermissionsNotice.type === "success" ? "success" : "error")}`}
                 >
                   {resetPermissionsNotice.message}
                 </span>

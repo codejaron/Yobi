@@ -2,11 +2,13 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import type {
   AppConfig,
   AppStatus,
-  MindSnapshot
+  MindSnapshot,
+  ThemeMode
 } from "@shared/types";
 import { SideNav } from "@renderer/components/layout/SideNav";
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
+import { applyThemeMode, subscribeSystemTheme, writeCachedThemeMode } from "@renderer/lib/theme";
 import type { PageId } from "./types";
 
 const DashboardPage = lazy(async () => {
@@ -65,12 +67,30 @@ function pageTitle(page: PageId): string {
   }
 }
 
+function themeModeLabel(mode: ThemeMode): string {
+  if (mode === "dark") {
+    return "暗黑";
+  }
+
+  if (mode === "light") {
+    return "浅色";
+  }
+
+  return "跟随系统";
+}
+
+function connectionBadgeClass(connected: boolean | undefined): string {
+  return connected ? "status-badge status-badge--success" : "status-badge status-badge--warn";
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState<PageId>("dashboard");
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [committedConfig, setCommittedConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [mindSnapshot, setMindSnapshot] = useState<MindSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
+  const [themeSaving, setThemeSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
 
   const loadWithTimeout = useCallback(async <T,>(promise: Promise<T>, label: string, timeoutMs = 5000): Promise<T> => {
@@ -119,6 +139,7 @@ export default function App() {
       try {
         const nextConfig = await loadWithTimeout(window.companion.getConfig(), "配置加载");
         setConfig(nextConfig);
+        setCommittedConfig(nextConfig);
       } catch (error) {
         console.error("[app] initial config load failed:", error);
         setNotice(error instanceof Error ? `配置加载失败：${error.message}` : "配置加载失败");
@@ -168,6 +189,19 @@ export default function App() {
             }
           };
         });
+        setCommittedConfig((current) => {
+          if (!current || current.pet.enabled === enabled) {
+            return current;
+          }
+
+          return {
+            ...current,
+            pet: {
+              ...current.pet,
+              enabled
+            }
+          };
+        });
         if (!enabled) {
           setNotice("桌宠已退出（开关已同步关闭）");
         }
@@ -196,6 +230,24 @@ export default function App() {
     };
   }, [refreshStatus]);
 
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+
+    const mode = config.appearance.themeMode;
+    writeCachedThemeMode(mode);
+    applyThemeMode(mode);
+
+    if (mode !== "system") {
+      return;
+    }
+
+    return subscribeSystemTheme((prefersDark) => {
+      applyThemeMode("system", prefersDark);
+    });
+  }, [config?.appearance.themeMode]);
+
   const saveConfig = useCallback(async () => {
     if (!config) {
       return;
@@ -205,12 +257,82 @@ export default function App() {
     try {
       const saved = await window.companion.saveConfig(config);
       setConfig(saved);
+      setCommittedConfig(saved);
+      writeCachedThemeMode(saved.appearance.themeMode);
       setNotice(`已保存 (${new Date().toLocaleTimeString()})`);
       await refreshStatus();
     } finally {
       setSaving(false);
     }
   }, [config, refreshStatus]);
+
+  const handleThemeModeChange = useCallback(
+    async (mode: ThemeMode) => {
+      if (!config || !committedConfig || themeSaving || config.appearance.themeMode === mode) {
+        return;
+      }
+
+      const previousThemeMode = config.appearance.themeMode;
+      const nextVisibleConfig: AppConfig = {
+        ...config,
+        appearance: {
+          ...config.appearance,
+          themeMode: mode
+        }
+      };
+      const nextCommittedConfig: AppConfig = {
+        ...committedConfig,
+        appearance: {
+          ...committedConfig.appearance,
+          themeMode: mode
+        }
+      };
+
+      setConfig(nextVisibleConfig);
+      setCommittedConfig(nextCommittedConfig);
+      writeCachedThemeMode(mode);
+      applyThemeMode(mode);
+      setThemeSaving(true);
+
+      try {
+        const saved = await window.companion.saveConfig(nextCommittedConfig);
+        setCommittedConfig(saved);
+        setConfig((current) =>
+          current
+            ? {
+                ...current,
+                appearance: {
+                  ...current.appearance,
+                  themeMode: saved.appearance.themeMode
+                }
+              }
+            : current
+        );
+        writeCachedThemeMode(saved.appearance.themeMode);
+        applyThemeMode(saved.appearance.themeMode);
+        setNotice(`主题已切换为${themeModeLabel(saved.appearance.themeMode)}`);
+      } catch (error) {
+        setCommittedConfig(committedConfig);
+        setConfig((current) =>
+          current
+            ? {
+                ...current,
+                appearance: {
+                  ...current.appearance,
+                  themeMode: previousThemeMode
+                }
+              }
+            : current
+        );
+        writeCachedThemeMode(previousThemeMode);
+        applyThemeMode(previousThemeMode);
+        setNotice(error instanceof Error ? `主题保存失败：${error.message}` : "主题保存失败");
+      } finally {
+        setThemeSaving(false);
+      }
+    },
+    [committedConfig, config, themeSaving]
+  );
 
   const content = useMemo(() => {
     if (!config) {
@@ -307,20 +429,32 @@ export default function App() {
 
     return (
       <Suspense fallback={loading}>
-        <SettingsPage config={config} status={status} setConfig={setConfig} />
+        <SettingsPage
+          config={config}
+          status={status}
+          setConfig={setConfig}
+          themeSaving={themeSaving}
+          onThemeModeChange={handleThemeModeChange}
+        />
       </Suspense>
     );
-  }, [activePage, config, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
+  }, [activePage, config, handleThemeModeChange, refreshStatus, status, mindSnapshot, refreshMindSnapshot, themeSaving]);
 
   const showPageHeader = activePage !== "console" && activePage !== "dashboard";
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">
-      <SideNav active={activePage} onSelect={setActivePage} />
+      <SideNav
+        active={activePage}
+        onSelect={setActivePage}
+        themeMode={config?.appearance.themeMode ?? "system"}
+        onThemeModeChange={handleThemeModeChange}
+        themeSaving={themeSaving}
+      />
 
       <main className={showPageHeader ? "space-y-6" : undefined}>
         {showPageHeader ? (
-          <section className="flex flex-wrap items-center justify-between gap-4 rounded-[32px] border border-white/60 bg-white/70 px-8 py-6 shadow-[0_24px_60px_rgba(53,38,21,0.08)] backdrop-blur">
+          <section className="page-hero flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="font-display text-3xl tracking-tight text-foreground">
                 {pageTitle(activePage)}
@@ -329,13 +463,13 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-3">
-              <Badge className={status?.telegramConnected ? "border-emerald-300" : "border-amber-300"}>
+              <Badge className={connectionBadgeClass(status?.telegramConnected)}>
                 Telegram {status?.telegramConnected ? "Online" : "Offline"}
               </Badge>
-              <Badge className={status?.qqConnected ? "border-emerald-300" : "border-amber-300"}>
+              <Badge className={connectionBadgeClass(status?.qqConnected)}>
                 QQ {status?.qqConnected ? "Online" : "Offline"}
               </Badge>
-              <Badge className={status?.feishuConnected ? "border-emerald-300" : "border-amber-300"}>
+              <Badge className={connectionBadgeClass(status?.feishuConnected)}>
                 Feishu {status?.feishuConnected ? "Online" : "Offline"}
               </Badge>
               {config ? (

@@ -55,7 +55,7 @@ export function ConsoleActionPane({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
+            className="h-8 w-8 p-0 text-muted-foreground hover:text-[hsl(var(--status-danger-foreground))]"
             onClick={clearActionLogs}
             disabled={actions.length === 0}
             aria-label="清空动作日志"
@@ -68,7 +68,7 @@ export function ConsoleActionPane({
       <CardContent className="min-h-0 flex-1 overflow-hidden">
         <div className="h-full min-h-0 space-y-2 overflow-y-auto pr-1">
           {actions.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-3 text-xs text-muted-foreground">
+            <p className="surface-dashed px-3 py-3 text-xs text-muted-foreground">
               等待模型动作...
             </p>
           ) : (

@@ -54,3 +54,27 @@ test("ConfigStore: migrates legacy context budget and embedded Exa MCP config", 
     await fs.rm(baseDir, { recursive: true, force: true });
   }
 });
+
+test("ConfigStore: fills appearance defaults for config without theme settings", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-theme-"));
+
+  try {
+    const paths = new CompanionPaths(baseDir);
+    paths.ensureLayout();
+
+    const legacyConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Record<string, unknown>;
+    delete legacyConfig.appearance;
+
+    await fs.writeFile(paths.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, "utf8");
+
+    const store = new ConfigStore(paths);
+    await store.init();
+    const config = store.getConfig();
+
+    assert.deepEqual(config.appearance, {
+      themeMode: "system"
+    });
+  } finally {
+    await fs.rm(baseDir, { recursive: true, force: true });
+  }
+});

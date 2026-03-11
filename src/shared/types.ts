@@ -127,6 +127,8 @@ export const scheduledTaskRunStatusSchema = z.enum([
   "skipped"
 ]);
 
+export const themeModeSchema = z.enum(["system", "light", "dark"]);
+
 export const scheduledTaskSchema = z
   .object({
     id: z.string().min(1),
@@ -352,6 +354,11 @@ export const appConfigSchema = z
         keepAwake: z.boolean().default(true)
       })
       .strict(),
+    appearance: z
+      .object({
+        themeMode: themeModeSchema.default("system")
+      })
+      .strict(),
     pet: z
       .object({
         enabled: z.boolean().default(false),
@@ -534,6 +541,8 @@ export type ProviderConfig = z.infer<typeof providerSchema>;
 export type ModelRoute = z.infer<typeof modelRouteSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;
+export type ThemeMode = z.infer<typeof themeModeSchema>;
+export type ResolvedTheme = Exclude<ThemeMode, "system">;
 export type BrowseAuthState = z.infer<typeof browseAuthStateSchema>;
 export type ScheduledTaskToolName = z.infer<typeof scheduledTaskToolNameSchema>;
 export type ScheduledTaskTrigger = z.infer<typeof scheduledTaskTriggerSchema>;
@@ -1134,6 +1143,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   background: {
     keepAwake: true
+  },
+  appearance: {
+    themeMode: "system"
   },
   pet: {
     enabled: false,

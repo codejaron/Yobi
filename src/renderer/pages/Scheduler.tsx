@@ -47,15 +47,15 @@ function fromDateTimeLocalValue(value: string): string {
 
 function statusTone(status: ScheduledTask["status"]): string {
   if (status === "enabled") {
-    return "border-emerald-300 bg-emerald-50 text-emerald-700";
+    return "status-badge status-badge--success";
   }
   if (status === "paused") {
-    return "border-amber-300 bg-amber-50 text-amber-700";
+    return "status-badge status-badge--warn";
   }
   if (status === "completed") {
-    return "border-sky-300 bg-sky-50 text-sky-700";
+    return "status-badge status-badge--info";
   }
-  return "border-rose-300 bg-rose-50 text-rose-700";
+  return "status-badge status-badge--danger";
 }
 
 export function SchedulerPage({ config }: SchedulerPageProps) {
@@ -362,7 +362,7 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
                     <p className="font-medium">{run.taskName}</p>
                     <p className="text-xs text-muted-foreground">计划时间：{formatDateTime(run.scheduledFor)}</p>
                   </div>
-                  <Badge className={run.status === "success" ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-amber-300 bg-amber-50 text-amber-700"}>
+                  <Badge className={run.status === "success" ? "status-badge status-badge--success" : "status-badge status-badge--warn"}>
                     {run.status}
                   </Badge>
                 </div>

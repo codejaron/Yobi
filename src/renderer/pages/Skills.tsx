@@ -9,12 +9,12 @@ import { Switch } from "@renderer/components/ui/switch";
 
 function compatibilityTone(status: SkillCatalogItem["compatibility"]["status"]): string {
   if (status === "compatible") {
-    return "border-emerald-300 bg-emerald-50 text-emerald-700";
+    return "status-badge status-badge--success";
   }
   if (status === "partial") {
-    return "border-amber-300 bg-amber-50 text-amber-700";
+    return "status-badge status-badge--warn";
   }
-  return "border-rose-300 bg-rose-50 text-rose-700";
+  return "status-badge status-badge--danger";
 }
 
 function resourceSummary(skill: SkillCatalogItem): Array<{ key: string; count: number }> {
@@ -174,7 +174,7 @@ export function SkillsPage() {
                       <Badge className={compatibilityTone(skill.compatibility.status)}>
                         {skill.compatibility.status}
                       </Badge>
-                      {skill.version ? <Badge className="border-border/80 bg-white/80">v{skill.version}</Badge> : null}
+                      {skill.version ? <Badge className="status-badge status-badge--neutral">v{skill.version}</Badge> : null}
                     </div>
                     <p className="line-clamp-2 text-sm text-muted-foreground">{skill.description}</p>
                   </div>
@@ -192,7 +192,7 @@ export function SkillsPage() {
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-8 w-8 border-rose-200 p-0 text-rose-700 hover:border-rose-300 hover:bg-rose-50"
+                      className="theme-danger-button h-8 w-8 p-0"
                       onClick={(event) => {
                         event.stopPropagation();
                         void handleDelete(skill);
@@ -209,7 +209,7 @@ export function SkillsPage() {
                 {skill.tags.length > 0 ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {skill.tags.map((tag) => (
-                      <Badge key={tag} className="border-border/80 bg-white/80">{tag}</Badge>
+                      <Badge key={tag} className="status-badge status-badge--neutral">{tag}</Badge>
                     ))}
                   </div>
                 ) : null}
@@ -231,14 +231,14 @@ export function SkillsPage() {
                 <Badge className={compatibilityTone(selected.compatibility.status)}>
                   {selected.compatibility.status}
                 </Badge>
-                <Badge className="border-border/80 bg-white/80">{selected.enabled ? "已启用" : "已停用"}</Badge>
+                <Badge className="status-badge status-badge--neutral">{selected.enabled ? "已启用" : "已停用"}</Badge>
                 {resourceSummary(selected).map((item) => (
-                  <Badge key={item.key} className="border-border/80 bg-white/80">{item.key}: {item.count}</Badge>
+                  <Badge key={item.key} className="status-badge status-badge--neutral">{item.key}: {item.count}</Badge>
                 ))}
               </div>
 
               {selected.compatibility.issues.length > 0 ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900">
+                <div className="status-surface status-surface--warn rounded-xl px-4 py-3 text-sm">
                   <p className="font-medium">兼容提示</p>
                   <ul className="mt-2 list-disc space-y-1 pl-5">
                     {selected.compatibility.issues.map((issue) => (

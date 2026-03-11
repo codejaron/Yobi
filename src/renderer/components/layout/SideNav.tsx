@@ -9,6 +9,8 @@ import {
   Settings2
 } from "lucide-react";
 import type { ComponentType } from "react";
+import type { ThemeMode } from "@shared/types";
+import { ThemeModeSelect } from "@renderer/components/theme/ThemeModeSelect";
 import { cn } from "@renderer/lib/utils";
 import type { PageId } from "@renderer/types";
 
@@ -29,10 +31,16 @@ const items: Array<{
 
 export function SideNav({
   active,
-  onSelect
+  onSelect,
+  themeMode,
+  onThemeModeChange,
+  themeSaving
 }: {
   active: PageId;
   onSelect: (pageId: PageId) => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  themeSaving: boolean;
 }) {
   return (
     <aside className="glass-panel sticky top-6 h-fit p-3">
@@ -64,6 +72,19 @@ export function SideNav({
           );
         })}
       </nav>
+
+      <div className="mt-5 border-t border-border/70 px-2 pt-4">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-foreground/85">主题</p>
+          <span className="text-[11px] text-muted-foreground">即时生效</span>
+        </div>
+        <ThemeModeSelect
+          value={themeMode}
+          onChange={onThemeModeChange}
+          disabled={themeSaving}
+          className="h-9 text-xs"
+        />
+      </div>
     </aside>
   );
 }

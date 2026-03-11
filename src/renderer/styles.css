@@ -21,7 +21,49 @@
     --border: 32 33% 82%;
     --input: 32 33% 82%;
     --ring: 195 65% 26%;
+    --status-success-border: 145 45% 54%;
+    --status-success-bg: 145 52% 94%;
+    --status-success-foreground: 148 58% 25%;
+    --status-warn-border: 36 72% 58%;
+    --status-warn-bg: 38 95% 93%;
+    --status-warn-foreground: 24 74% 30%;
+    --status-info-border: 201 70% 56%;
+    --status-info-bg: 199 90% 94%;
+    --status-info-foreground: 202 74% 31%;
+    --status-danger-border: 352 65% 62%;
+    --status-danger-bg: 355 100% 95%;
+    --status-danger-foreground: 352 58% 34%;
     --radius: 0.8rem;
+  }
+
+  .dark {
+    --background: 220 24% 10%;
+    --foreground: 210 20% 94%;
+    --card: 220 20% 14%;
+    --card-foreground: 210 20% 94%;
+    --primary: 196 74% 62%;
+    --primary-foreground: 222 30% 10%;
+    --secondary: 220 16% 20%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 220 16% 18%;
+    --muted-foreground: 214 15% 69%;
+    --accent: 24 76% 62%;
+    --accent-foreground: 222 30% 10%;
+    --border: 220 13% 29%;
+    --input: 220 13% 29%;
+    --ring: 196 74% 62%;
+    --status-success-border: 148 38% 42%;
+    --status-success-bg: 149 34% 18%;
+    --status-success-foreground: 145 54% 76%;
+    --status-warn-border: 31 70% 47%;
+    --status-warn-bg: 31 58% 18%;
+    --status-warn-foreground: 38 92% 78%;
+    --status-info-border: 202 63% 48%;
+    --status-info-bg: 205 48% 18%;
+    --status-info-foreground: 198 86% 79%;
+    --status-danger-border: 352 52% 46%;
+    --status-danger-bg: 353 40% 18%;
+    --status-danger-foreground: 350 82% 81%;
   }
 
   * {
@@ -36,12 +78,174 @@
       linear-gradient(140deg, rgba(255, 255, 255, 0.75), rgba(255, 248, 240, 0.9));
     min-height: 100vh;
   }
+
+  .dark body {
+    background-image:
+      radial-gradient(circle at 12% 10%, rgba(66, 153, 184, 0.16), transparent 35%),
+      radial-gradient(circle at 84% 18%, rgba(241, 138, 64, 0.1), transparent 38%),
+      linear-gradient(160deg, rgba(18, 24, 37, 0.98), rgba(12, 17, 28, 1));
+  }
 }
 
 @layer components {
   .glass-panel {
-    @apply rounded-2xl border border-white/40 bg-white/70 backdrop-blur-md;
+    @apply rounded-2xl border backdrop-blur-md;
+    border-color: hsl(var(--border) / 0.62);
+    background: hsl(var(--card) / 0.76);
     box-shadow: 0 24px 80px rgba(20, 58, 74, 0.12);
+  }
+
+  .dark .glass-panel {
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+  }
+
+  .page-hero {
+    @apply rounded-[32px] border px-8 py-6 backdrop-blur;
+    border-color: hsl(var(--border) / 0.62);
+    background: hsl(var(--card) / 0.76);
+    box-shadow: 0 24px 60px rgba(53, 38, 21, 0.08);
+  }
+
+  .dark .page-hero {
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  }
+
+  .surface-panel {
+    @apply rounded-md border border-border/70 bg-card/70;
+  }
+
+  .surface-panel-strong {
+    @apply rounded-xl border border-border/80 bg-card/80 shadow-sm;
+  }
+
+  .surface-dashed {
+    @apply rounded-lg border border-dashed border-border/70 bg-card/55;
+  }
+
+  .status-badge {
+    @apply border;
+  }
+
+  .status-badge--neutral {
+    border-color: hsl(var(--border) / 0.8);
+    background: hsl(var(--card) / 0.82);
+    color: hsl(var(--foreground) / 0.9);
+  }
+
+  .status-badge--success {
+    border-color: hsl(var(--status-success-border));
+    background: hsl(var(--status-success-bg));
+    color: hsl(var(--status-success-foreground));
+  }
+
+  .status-badge--warn {
+    border-color: hsl(var(--status-warn-border));
+    background: hsl(var(--status-warn-bg));
+    color: hsl(var(--status-warn-foreground));
+  }
+
+  .status-badge--info {
+    border-color: hsl(var(--status-info-border));
+    background: hsl(var(--status-info-bg));
+    color: hsl(var(--status-info-foreground));
+  }
+
+  .status-badge--danger {
+    border-color: hsl(var(--status-danger-border));
+    background: hsl(var(--status-danger-bg));
+    color: hsl(var(--status-danger-foreground));
+  }
+
+  .status-surface {
+    @apply border;
+  }
+
+  .status-surface--neutral {
+    border-color: hsl(var(--border) / 0.75);
+    background: hsl(var(--card) / 0.78);
+    color: hsl(var(--foreground));
+  }
+
+  .status-surface--success {
+    border-color: hsl(var(--status-success-border));
+    background: hsl(var(--status-success-bg));
+    color: hsl(var(--status-success-foreground));
+  }
+
+  .status-surface--warn {
+    border-color: hsl(var(--status-warn-border));
+    background: hsl(var(--status-warn-bg));
+    color: hsl(var(--status-warn-foreground));
+  }
+
+  .status-surface--info {
+    border-color: hsl(var(--status-info-border));
+    background: hsl(var(--status-info-bg));
+    color: hsl(var(--status-info-foreground));
+  }
+
+  .status-surface--danger {
+    border-color: hsl(var(--status-danger-border));
+    background: hsl(var(--status-danger-bg));
+    color: hsl(var(--status-danger-foreground));
+  }
+
+  .theme-danger-button {
+    border-color: hsl(var(--status-danger-border));
+    color: hsl(var(--status-danger-foreground));
+  }
+
+  .theme-danger-button:hover {
+    background: hsl(var(--status-danger-bg));
+    border-color: hsl(var(--status-danger-border));
+  }
+
+  .theme-recording-button {
+    border-color: hsl(var(--status-danger-border));
+    color: hsl(var(--status-danger-foreground));
+  }
+
+  .theme-recording-button:hover {
+    background: hsl(var(--status-danger-bg));
+    border-color: hsl(var(--status-danger-border));
+  }
+
+  .approval-option {
+    @apply rounded-md border px-2 py-1.5 text-left text-xs transition;
+    border-color: hsl(var(--status-warn-border));
+    background: hsl(var(--card) / 0.88);
+    color: hsl(var(--status-warn-foreground));
+  }
+
+  .approval-option:hover {
+    background: hsl(var(--status-warn-bg));
+  }
+
+  .approval-option--active {
+    border-color: hsl(var(--status-warn-border));
+    background: hsl(var(--status-warn-bg));
+    color: hsl(var(--status-warn-foreground));
+  }
+
+  .dark .bg-white\/55,
+  .dark .bg-white\/60,
+  .dark .bg-white\/70,
+  .dark .bg-white\/75,
+  .dark .bg-white\/80,
+  .dark .bg-white\/88,
+  .dark .bg-white\/90,
+  .dark .bg-white {
+    background-color: hsl(var(--card) / 0.78);
+  }
+
+  .dark .border-white\/40,
+  .dark .border-white\/60 {
+    border-color: hsl(var(--border) / 0.62);
+  }
+
+  .dark .hover\:bg-white:hover,
+  .dark .hover\:bg-white\/80:hover {
+    background-color: hsl(var(--card));
   }
 
   .yobi-markdown {

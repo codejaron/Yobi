@@ -104,7 +104,9 @@ export function PetRuntimeCard({
           {modelImportNotice ? (
             <p
               className={`text-xs ${
-                modelImportNotice.type === "success" ? "text-emerald-700" : "text-rose-700"
+                modelImportNotice.type === "success"
+                  ? "text-[hsl(var(--status-success-foreground))]"
+                  : "text-[hsl(var(--status-danger-foreground))]"
               }`}
             >
               {modelImportNotice.message}

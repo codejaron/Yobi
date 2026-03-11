@@ -134,27 +134,27 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
   const whisperStatusBadge = useMemo(() => {
     if (downloading) {
       return {
-        className: "border-sky-300",
+        className: "status-badge status-badge--info",
         label: `下载中 ${downloadProgress ?? 0}%`
       };
     }
 
     if (ready) {
       return {
-        className: "border-emerald-300",
+        className: "status-badge status-badge--success",
         label: "已加载"
       };
     }
 
     if (downloaded) {
       return {
-        className: "border-amber-300",
+        className: "status-badge status-badge--warn",
         label: "已下载"
       };
     }
 
     return {
-      className: "border-border/70",
+      className: "status-badge status-badge--neutral",
       label: "未下载"
     };
   }, [downloadProgress, downloaded, downloading, ready]);
@@ -465,7 +465,13 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
         </div>
 
         {notice ? (
-          <p className={`text-sm ${notice.type === "error" ? "text-rose-600" : "text-emerald-600"}`}>
+          <p
+            className={`text-sm ${
+              notice.type === "error"
+                ? "text-[hsl(var(--status-danger-foreground))]"
+                : "text-[hsl(var(--status-success-foreground))]"
+            }`}
+          >
             {notice.message}
           </p>
         ) : null}

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AppConfig, AppStatus, BrowseAuthState, EmbedderRuntimeStatus } from "@shared/types";
+import type { AppConfig, AppStatus, BrowseAuthState, EmbedderRuntimeStatus, ThemeMode } from "@shared/types";
 import { Badge } from "@renderer/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@renderer/components/ui/card";
+import { AppearanceSettingsCard } from "@renderer/pages/settings/AppearanceSettingsCard";
 import { BilibiliBrowseCard } from "@renderer/pages/settings/BilibiliBrowseCard";
 import { FeishuChannelCard } from "@renderer/pages/settings/FeishuChannelCard";
 import {
@@ -23,6 +24,7 @@ type SettingsSectionId =
   | "telegram"
   | "qq"
   | "feishu"
+  | "appearance"
   | "voice"
   | "pet"
   | "bilibili"
@@ -76,6 +78,11 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "交互",
     sections: [
       {
+        id: "appearance",
+        label: "外观",
+        description: "浅色 / 暗黑 / 跟随系统"
+      },
+      {
         id: "voice",
         label: "语音",
         description: "ASR / TTS provider 与模型状态"
@@ -127,18 +134,30 @@ function isSettingsSectionId(value: string | null): value is SettingsSectionId {
 
 function toneClassName(tone: SectionTone): string {
   if (tone === "good") {
-    return "border-emerald-300 bg-emerald-50 text-emerald-700";
+    return "status-badge status-badge--success";
   }
 
   if (tone === "warn") {
-    return "border-amber-300 bg-amber-50 text-amber-700";
+    return "status-badge status-badge--warn";
   }
 
   if (tone === "info") {
-    return "border-sky-300 bg-sky-50 text-sky-700";
+    return "status-badge status-badge--info";
   }
 
-  return "border-border/70 bg-white/80 text-foreground/80";
+  return "status-badge status-badge--neutral";
+}
+
+function themeModeDetail(themeMode: ThemeMode): string {
+  if (themeMode === "dark") {
+    return "固定暗黑模式";
+  }
+
+  if (themeMode === "light") {
+    return "固定浅色模式";
+  }
+
+  return "自动跟随系统深浅色";
 }
 
 function providerLabel(provider: AppConfig["voice"]["asrProvider"] | AppConfig["voice"]["ttsProvider"]): string {
@@ -227,6 +246,11 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
   };
 
   return {
+    appearance: {
+      badge: config.appearance.themeMode === "system" ? "跟随系统" : config.appearance.themeMode === "dark" ? "暗黑" : "浅色",
+      tone: config.appearance.themeMode === "system" ? "info" : "neutral",
+      detail: themeModeDetail(config.appearance.themeMode)
+    },
     telegram: telegramEnabled
       ? {
           badge: status?.telegramConnected ? "在线" : "待连接",
@@ -331,11 +355,15 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
 export function SettingsPage({
   config,
   status,
-  setConfig
+  setConfig,
+  onThemeModeChange,
+  themeSaving
 }: {
   config: AppConfig;
   status: AppStatus | null;
   setConfig: (next: AppConfig) => void;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  themeSaving: boolean;
 }) {
   const isMac =
     typeof navigator !== "undefined" &&
@@ -497,6 +525,14 @@ export function SettingsPage({
         return <QQChannelCard config={config} setConfig={setConfig} />;
       case "feishu":
         return <FeishuChannelCard config={config} setConfig={setConfig} />;
+      case "appearance":
+        return (
+          <AppearanceSettingsCard
+            themeMode={config.appearance.themeMode}
+            onThemeModeChange={onThemeModeChange}
+            themeSaving={themeSaving}
+          />
+        );
       case "voice":
         return <VoiceEnginesCard config={config} setConfig={setConfig} />;
       case "pet":
@@ -552,7 +588,7 @@ export function SettingsPage({
                         className={`rounded-2xl border px-4 py-3 text-left transition-all ${
                           active
                             ? "border-primary/30 bg-primary/10 shadow-[0_12px_30px_rgba(38,106,129,0.12)]"
-                            : "border-border/60 bg-white/55 hover:bg-white/80"
+                            : "surface-panel hover:bg-card/90"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">

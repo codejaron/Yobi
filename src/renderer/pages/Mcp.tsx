@@ -408,7 +408,13 @@ export function McpPage({
           </div>
 
           {notice ? (
-            <p className={notice.type === "error" ? "text-xs text-red-500" : "text-xs text-emerald-600"}>
+            <p
+              className={
+                notice.type === "error"
+                  ? "text-xs text-[hsl(var(--status-danger-foreground))]"
+                  : "text-xs text-[hsl(var(--status-success-foreground))]"
+              }
+            >
               {notice.text}
             </p>
           ) : null}

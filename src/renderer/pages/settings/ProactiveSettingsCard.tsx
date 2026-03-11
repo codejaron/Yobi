@@ -238,7 +238,7 @@ export function ProactiveSettingsCard({ config, setConfig }: ProactiveSettingsCa
         </div>
 
         <p className="text-xs text-muted-foreground">支持跨天设置，例如 23:00-07:00。</p>
-        {quietHoursNotice ? <p className="text-xs text-rose-700">{quietHoursNotice}</p> : null}
+        {quietHoursNotice ? <p className="text-xs text-[hsl(var(--status-danger-foreground))]">{quietHoursNotice}</p> : null}
       </CardContent>
     </Card>
   );

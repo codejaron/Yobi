@@ -93,30 +93,30 @@ export function ConsoleChatPane({
           size="sm"
           onClick={() => void clearHistory()}
           disabled={busy || clearingHistory || !historyLoaded}
-          className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50"
+          className="theme-danger-button"
         >
           {clearingHistory ? "清空中..." : "清空历史记录"}
         </Button>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
         {skillsCatalog ? (
-          <div className="rounded-xl border border-violet-200 bg-violet-50/70 px-4 py-3 text-sm text-violet-950">
+          <div className="status-surface status-surface--info rounded-xl px-4 py-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge className="border-violet-300 bg-violet-100 text-violet-800">Skills</Badge>
+              <Badge className="status-badge status-badge--info">Skills</Badge>
               <span>已启用 {skillsCatalog.enabledCount} 个</span>
               {skillsCatalog.truncated ? (
-                <Badge className="border-amber-300 bg-amber-50 text-amber-700">Catalog 已截断</Badge>
+                <Badge className="status-badge status-badge--warn">Catalog 已截断</Badge>
               ) : null}
             </div>
             {skillsCatalog.truncated ? (
-              <p className="mt-2 text-xs text-violet-900/80">
+              <p className="mt-2 text-xs opacity-85">
                 已裁剪 {skillsCatalog.truncatedDescriptions} 条描述，省略 {skillsCatalog.omittedSkills} 个 skill。
               </p>
             ) : null}
             {activatedSkills.length > 0 ? (
               <div className="mt-3 flex flex-wrap gap-2">
                 {activatedSkills.map((skill) => (
-                  <Badge key={skill.skillId} className="border-violet-300 bg-white text-violet-800">
+                  <Badge key={skill.skillId} className="status-badge status-badge--neutral">
                     {skill.name} · {skill.compatibility.status}
                   </Badge>
                 ))}
@@ -132,18 +132,18 @@ export function ConsoleChatPane({
         >
           {historyLoaded && historyHasMore ? (
             <div className="flex justify-center">
-              <span className="rounded-full border border-border/70 bg-white/75 px-3 py-1 text-xs text-muted-foreground">
+              <span className="surface-panel rounded-full px-3 py-1 text-xs text-muted-foreground">
                 {loadingMoreHistory ? "正在加载更早消息..." : "上滑到顶部自动加载历史消息"}
               </span>
             </div>
           ) : null}
 
           {!historyLoaded ? (
-            <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-4 text-sm text-muted-foreground">
+            <p className="surface-dashed px-3 py-4 text-sm text-muted-foreground">
               正在加载历史消息...
             </p>
           ) : messages.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border/70 bg-white/55 px-3 py-4 text-sm text-muted-foreground">
+            <p className="surface-dashed px-3 py-4 text-sm text-muted-foreground">
               暂无对话记录，发一条消息开始聊天吧。
             </p>
           ) : (
@@ -155,14 +155,14 @@ export function ConsoleChatPane({
                     ? "ml-auto w-fit max-w-[80%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground"
                     : `mr-auto w-fit max-w-[88%] rounded-2xl border px-4 py-3 text-sm ${
                         item.state === "error"
-                          ? "border-rose-200 bg-rose-50 text-rose-900"
-                          : "border-border/80 bg-white/88 text-foreground"
+                          ? "status-surface status-surface--danger"
+                          : "status-surface status-surface--neutral"
                       }`
                 }
               >
                 {item.role === "assistant" && item.source === "yobi" ? (
                   <div className="mb-2 flex items-center gap-2">
-                    <Badge className="border-sky-200 bg-sky-50 text-sky-700">Yobi</Badge>
+                    <Badge className="status-badge status-badge--info">Yobi</Badge>
                     <span className="text-[11px] text-muted-foreground">后台主动消息</span>
                   </div>
                 ) : null}
@@ -182,9 +182,9 @@ export function ConsoleChatPane({
 
         <div className="relative border-t border-border/70 pt-4">
           {pendingApproval ? (
-            <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-orange-300 bg-orange-50/95 p-3 shadow-lg">
-              <p className="text-sm font-medium text-orange-950">需要确认命令：{pendingApproval.toolName}</p>
-              <p className="mt-1 whitespace-pre-wrap text-xs text-orange-900/90">
+            <div className="status-surface status-surface--warn absolute bottom-full left-0 right-0 mb-2 rounded-xl p-3 shadow-lg">
+              <p className="text-sm font-medium">需要确认命令：{pendingApproval.toolName}</p>
+              <p className="mt-1 whitespace-pre-wrap text-xs opacity-90">
                 {pendingApproval.description}
               </p>
 
@@ -197,11 +197,7 @@ export function ConsoleChatPane({
                       setApprovalIndex(index);
                       void submitApproval(item.decision);
                     }}
-                    className={`rounded-md border px-2 py-1.5 text-left text-xs transition ${
-                      approvalIndex === index
-                        ? "border-orange-500 bg-orange-200/80 text-orange-950"
-                        : "border-orange-200 bg-white/80 text-orange-900 hover:bg-orange-100"
-                    }`}
+                    className={`approval-option ${approvalIndex === index ? "approval-option--active" : ""}`}
                   >
                     {item.label}
                   </button>
@@ -225,7 +221,7 @@ export function ConsoleChatPane({
               onClick={toggleMicRecording}
               disabled={micButtonDisabled}
               className={`h-11 min-w-[88px] shrink-0 whitespace-nowrap ${
-                recording ? "border-rose-400 text-rose-700 hover:border-rose-500 hover:bg-rose-50" : ""
+                recording ? "theme-recording-button" : ""
               }`}
               title={
                 sttReady

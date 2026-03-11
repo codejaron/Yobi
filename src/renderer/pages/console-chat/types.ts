@@ -66,20 +66,20 @@ export function appendRecognizedText(currentDraft: string, recognizedText: strin
 
 export function actionColor(kind: ActionKind): string {
   if (kind === "thinking") {
-    return "border-sky-200 bg-sky-50/90";
+    return "status-surface status-surface--info";
   }
 
   if (kind === "tool") {
-    return "border-amber-200 bg-amber-50/90";
+    return "status-surface status-surface--warn";
   }
 
   if (kind === "approval") {
-    return "border-orange-200 bg-orange-50/90";
+    return "status-surface status-surface--warn";
   }
 
   if (kind === "error") {
-    return "border-rose-200 bg-rose-50/90";
+    return "status-surface status-surface--danger";
   }
 
-  return "border-border/70 bg-white/75";
+  return "status-surface status-surface--neutral";
 }

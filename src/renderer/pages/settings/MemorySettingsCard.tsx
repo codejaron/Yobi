@@ -43,7 +43,7 @@ export function MemorySettingsCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {showFallbackWarning ? (
-          <div className="rounded-md border border-amber-300/80 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <div className="status-surface status-surface--warn rounded-md px-3 py-2 text-sm">
             当前检索处于回退模式；请检查本地 GGUF 模型或词法索引状态是否可用。
           </div>
         ) : null}
