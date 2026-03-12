@@ -18,17 +18,17 @@ const browserParamsSchema = z.object({
     "tabs",
     "open",
     "close"
-  ]),
-  url: z.string().optional(),
-  actKind: z.enum(["click", "type", "press", "hover", "select", "scroll"]).optional(),
-  ref: z.number().int().positive().optional(),
-  text: z.string().optional(),
-  key: z.string().optional(),
-  option: z.string().optional(),
-  deltaY: z.number().optional(),
-  tabId: z.number().int().min(0).optional(),
-  fullPage: z.boolean().optional(),
-  append: z.boolean().optional()
+  ]).describe("浏览器操作类型。"),
+  url: z.string().optional().describe("navigate 或 open 时访问的 URL。"),
+  actKind: z.enum(["click", "type", "press", "hover", "select", "scroll"]).optional().describe("action=act 时的具体页面交互类型。"),
+  ref: z.number().int().positive().optional().describe("页面快照中元素的 ref 编号。"),
+  text: z.string().optional().describe("type 动作时输入的文本。"),
+  key: z.string().optional().describe("press 动作时按下的按键名称。"),
+  option: z.string().optional().describe("select 动作时选择的 option 值。"),
+  deltaY: z.number().optional().describe("scroll 动作时的纵向滚动距离。"),
+  tabId: z.number().int().min(0).optional().describe("close 动作时要关闭的标签页 ID。"),
+  fullPage: z.boolean().optional().describe("screenshot 时是否截取整页。"),
+  append: z.boolean().optional().describe("type 动作时是否追加到现有输入，而不是清空重输。")
 });
 
 type BrowserParams = z.infer<typeof browserParamsSchema>;
@@ -126,7 +126,7 @@ export function createBrowserTool(deps: BrowserToolDeps): ToolDefinition<Browser
     name: "browser",
     source: "builtin",
     description:
-      "操控 Yobi 隔离浏览器。支持打开网页、页面快照、基于 ref 点击/输入、截图与标签页管理。",
+      "操控 Yobi 隔离浏览器。支持打开网页、页面快照、基于 ref 的点击/输入/选择、截图和标签页管理。",
     parameters: browserParamsSchema,
     isEnabled: (config) => config.tools.browser.enabled,
     async execute(params): Promise<ToolResult> {

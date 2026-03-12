@@ -18,15 +18,15 @@ const systemParamsSchema = z.object({
     "notify",
     "get_windows",
     "screenshot_app"
-  ]),
-  command: z.string().optional(),
-  appName: z.string().optional(),
-  text: z.string().optional(),
-  keys: z.array(z.string()).optional(),
-  title: z.string().optional(),
-  body: z.string().optional(),
-  cwd: z.string().optional(),
-  timeoutMs: z.number().int().positive().max(60_000).optional()
+  ]).describe("系统操作类型。"),
+  command: z.string().optional().describe("action=exec 时要执行的 shell 命令。"),
+  appName: z.string().optional().describe("目标应用名。用于 open_app、get_windows，或作为 screenshot_app 的截图目标。"),
+  text: z.string().optional().describe("type_text 时要输入的文本。"),
+  keys: z.array(z.string()).optional().describe("press_keys 时要按下的按键列表。"),
+  title: z.string().optional().describe("notify 时通知标题。"),
+  body: z.string().optional().describe("notify 时通知正文。"),
+  cwd: z.string().optional().describe("exec 时命令执行目录。"),
+  timeoutMs: z.number().int().positive().max(60_000).optional().describe("exec 时超时时间，毫秒。")
 });
 
 type SystemParams = z.infer<typeof systemParamsSchema>;
@@ -234,7 +234,7 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
   return {
     name: "system",
     source: "builtin",
-    description: "执行受控 shell 命令，或操控本机 App（open/type/press/notify/screenshot）。",
+    description: "执行受控系统操作。支持 shell 命令、本机应用打开、文本输入、快捷键、通知、窗口查询和应用截图。",
     parameters: systemParamsSchema,
     isEnabled: (config) => config.tools.system.enabled,
     requiresApproval(params) {

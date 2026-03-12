@@ -5,10 +5,10 @@ import { SandboxGuard } from "@main/tools/guard/sandbox";
 import type { ToolDefinition, ToolResult } from "@main/tools/types";
 
 const fileParamsSchema = z.object({
-  action: z.enum(["read", "write", "append", "list"]),
-  targetPath: z.string(),
-  content: z.string().optional(),
-  recursive: z.boolean().optional()
+  action: z.enum(["read", "write", "append", "list"]).describe("文件操作类型。"),
+  targetPath: z.string().describe("目标文件或目录路径。"),
+  content: z.string().optional().describe("写入或追加时使用的文本内容。"),
+  recursive: z.boolean().optional().describe("list 时是否递归列出子目录。")
 });
 
 type FileParams = z.infer<typeof fileParamsSchema>;
@@ -29,7 +29,7 @@ export function createFileTool(deps: FileToolDeps): ToolDefinition<FileParams> {
   return {
     name: "file",
     source: "builtin",
-    description: "受控文件读写工具。支持 read/write/append/list，受路径白名单约束。",
+    description: "受控文件工具。支持读取文件、列目录、写入文件、追加文件，受路径白名单约束。",
     parameters: fileParamsSchema,
     isEnabled: (config) => config.tools.file.readEnabled || config.tools.file.writeEnabled,
     requiresApproval(params) {

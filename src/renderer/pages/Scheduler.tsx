@@ -313,6 +313,7 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
                   onChange={(event) => setAgentPrompt(event.target.value)}
                   placeholder="例如：搜索 GitHub Trending 前十，并告诉我每个项目是做什么的。"
                 />
+                <p className="text-xs text-muted-foreground">这里填写的是 Agent 执行任务内容。</p>
               </div>
               <div className="space-y-2">
                 <Label>允许调用的工具</Label>
