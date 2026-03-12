@@ -6,6 +6,7 @@ import {
   createAssistantTurnProcess,
   hasAssistantVisibleContent
 } from "@shared/tool-trace";
+import { getNextConsoleChatAutoFollowState } from "@shared/console-chat-scroll";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
 import {
@@ -87,6 +88,14 @@ function createHistoryMessage(item: HistoryMessage): ConsoleMessage {
   };
 }
 
+function readScrollMetrics(node: HTMLDivElement) {
+  return {
+    scrollTop: node.scrollTop,
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight
+  };
+}
+
 export function useConsoleChatController(): ConsoleChatController {
   const [liveMessages, setLiveMessages] = useState<ConsoleMessage[]>([]);
   const [persistedMessages, setPersistedMessages] = useState<HistoryMessage[]>([]);
@@ -112,6 +121,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const autoFollowRef = useRef(true);
   const loadingMoreHistoryRef = useRef(false);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
 
@@ -493,6 +503,12 @@ export function useConsoleChatController(): ConsoleChatController {
       if (!event.currentTarget) {
         return;
       }
+
+      autoFollowRef.current = getNextConsoleChatAutoFollowState({
+        type: "user-scroll",
+        metrics: readScrollMetrics(event.currentTarget)
+      });
+
       maybeLoadMoreHistory();
     },
     [maybeLoadMoreHistory]
@@ -528,11 +544,18 @@ export function useConsoleChatController(): ConsoleChatController {
       return;
     }
 
+    autoFollowRef.current = getNextConsoleChatAutoFollowState({
+      type: "history-loaded"
+    });
     chatBottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [historyLoaded]);
 
   useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (!autoFollowRef.current) {
+      return;
+    }
+
+    chatBottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [liveMessages]);
 
   useEffect(() => {
@@ -583,6 +606,9 @@ export function useConsoleChatController(): ConsoleChatController {
       setDraft("");
       setSkillsCatalog(null);
       setActivatedSkills([]);
+      autoFollowRef.current = getNextConsoleChatAutoFollowState({
+        type: "submit-message"
+      });
       setLiveMessages((prev) => [
         ...prev,
         {

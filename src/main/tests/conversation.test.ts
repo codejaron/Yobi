@@ -7,6 +7,28 @@ function cloneConfig(): AppConfig {
   return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 }
 
+function assertSingleToolTrace(
+  toolTrace: unknown,
+  expected: {
+    toolName: string;
+    status: string;
+    inputPreview: string;
+  }
+) {
+  const items = (toolTrace as { items?: Array<Record<string, unknown>> } | undefined)?.items;
+
+  assert.ok(Array.isArray(items));
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.toolName, expected.toolName);
+  assert.equal(items[0]?.status, expected.status);
+  assert.equal(items[0]?.inputPreview, expected.inputPreview);
+
+  if (typeof items[0]?.durationMs !== "undefined") {
+    assert.equal(typeof items[0]?.durationMs, "number");
+    assert.ok((items[0]?.durationMs as number) > 0);
+  }
+}
+
 test("ConversationEngine: hidden scheduled prompt is not persisted but is sent to the model", async () => {
   const config = cloneConfig();
   const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
@@ -166,14 +188,10 @@ test("ConversationEngine: persists toolTrace metadata for successful tool calls"
   });
 
   assert.equal(reply, "整理好了");
-  assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
-    items: [
-      {
-        toolName: "search_web",
-        status: "success",
-        inputPreview: "搜索：GitHub Trending"
-      }
-    ]
+  assertSingleToolTrace(remembered[0]?.metadata?.toolTrace, {
+    toolName: "search_web",
+    status: "success",
+    inputPreview: "搜索：GitHub Trending"
   });
 });
 
@@ -319,14 +337,10 @@ test("ConversationEngine: persists aborted toolTrace when stream aborts mid-tool
   );
 
   assert.equal(remembered[0]?.text, "已经输出了一半");
-  assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
-    items: [
-      {
-        toolName: "web_fetch",
-        status: "aborted",
-        inputPreview: "URL：https://example.com/page"
-      }
-    ]
+  assertSingleToolTrace(remembered[0]?.metadata?.toolTrace, {
+    toolName: "web_fetch",
+    status: "aborted",
+    inputPreview: "URL：https://example.com/page"
   });
 });
 
@@ -401,14 +415,10 @@ test("ConversationEngine: persists tool-only aborted turn with empty text", asyn
   );
 
   assert.equal(remembered[0]?.text, "");
-  assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
-    items: [
-      {
-        toolName: "search_web",
-        status: "aborted",
-        inputPreview: "搜索：北京天气"
-      }
-    ]
+  assertSingleToolTrace(remembered[0]?.metadata?.toolTrace, {
+    toolName: "search_web",
+    status: "aborted",
+    inputPreview: "搜索：北京天气"
   });
 });
 
