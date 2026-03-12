@@ -7,6 +7,7 @@ import type {
   Episode,
   Fact,
   HistoryMessage,
+  HistoryMessageMeta,
   UserProfile
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
@@ -53,19 +54,34 @@ function normalizeTopicText(raw: string): string {
 function toHistoryMessage(message: BufferMessage): HistoryMessage {
   const source = message.meta?.source;
   const proactive = message.meta?.proactive;
+  const toolTrace = message.meta?.toolTrace;
+  const meta: HistoryMessageMeta = {};
+
+  if (typeof proactive === "boolean") {
+    meta.proactive = proactive;
+  }
+
+  if (source === "yobi") {
+    meta.source = "yobi";
+  }
+
+  if (
+    toolTrace &&
+    typeof toolTrace === "object" &&
+    Array.isArray((toolTrace as { items?: unknown }).items)
+  ) {
+    meta.toolTrace = {
+      items: (toolTrace as { items: NonNullable<HistoryMessageMeta["toolTrace"]>["items"] }).items
+    };
+  }
+
   return {
     id: message.id,
     role: message.role,
     text: message.text,
     channel: message.channel,
     timestamp: message.ts,
-    meta:
-      typeof proactive === "boolean" || source === "yobi"
-        ? {
-            proactive: typeof proactive === "boolean" ? proactive : undefined,
-            source: source === "yobi" ? "yobi" : undefined
-          }
-        : undefined
+    meta: Object.keys(meta).length > 0 ? meta : undefined
   };
 }
 

@@ -110,6 +110,54 @@ test("listHistory: returns newest window in chronological order", async () => {
   }
 });
 
+test("listHistory: preserves toolTrace metadata for assistant messages", async () => {
+  const paths = await createTempPaths("yobi-history-tool-trace-");
+  try {
+    const config = cloneConfig();
+    const memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "assistant",
+      text: "已完成搜索。",
+      metadata: {
+        channel: "console",
+        toolTrace: {
+          items: [
+            {
+              toolName: "search_web",
+              status: "success",
+              inputPreview: "搜索：Yobi",
+              durationMs: 820
+            }
+          ]
+        }
+      }
+    });
+
+    const recent = await memory.listHistoryByCursor({
+      threadId: "main",
+      resourceId: "main",
+      limit: 20
+    });
+
+    assert.deepEqual(recent.items[0]?.meta?.toolTrace, {
+      items: [
+        {
+          toolName: "search_web",
+          status: "success",
+          inputPreview: "搜索：Yobi",
+          durationMs: 820
+        }
+      ]
+    });
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
 test("buffer compaction: removed messages persist into unprocessed queue", async () => {
   const paths = await createTempPaths("yobi-compaction-");
   try {

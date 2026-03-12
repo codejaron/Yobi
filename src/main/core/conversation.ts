@@ -6,6 +6,12 @@ import type {
   SkillsCatalogSummary,
   TokenUsageSource
 } from "@shared/types";
+import {
+  finalizeToolTraceItems,
+  recordToolCallSettled,
+  recordToolCallStarted,
+  toPersistedToolTraceItems
+} from "@shared/tool-trace";
 import type { ModelFactory } from "./model-factory";
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { extractEmotionTag, stripEmotionTags } from "./emotion-tags";
@@ -245,7 +251,9 @@ export class ConversationEngine {
     let toolFailed = false;
     let lastToolError = "";
     let streamFailed = false;
+    let streamAborted = false;
     let lastStreamError = "";
+    let toolTrace = [] as ReturnType<typeof finalizeToolTraceItems>;
     try {
       for await (const chunk of result.fullStream) {
         if (chunk.type === "text-delta") {
@@ -255,6 +263,12 @@ export class ConversationEngine {
         }
 
         if (chunk.type === "tool-call") {
+          toolTrace = recordToolCallStarted(toolTrace, {
+            toolCallId: chunk.toolCallId,
+            toolName: chunk.toolName,
+            input: chunk.input,
+            timestamp: new Date().toISOString()
+          });
           input.stream?.onToolCall?.({
             toolCallId: chunk.toolCallId,
             toolName: chunk.toolName,
@@ -275,6 +289,15 @@ export class ConversationEngine {
             lastToolError = output?.error?.trim() || lastToolError;
           }
 
+          toolTrace = recordToolCallSettled(toolTrace, {
+            toolCallId: chunk.toolCallId,
+            toolName: chunk.toolName,
+            input: chunk.input,
+            output: output?.data,
+            error: output?.error,
+            success,
+            timestamp: new Date().toISOString()
+          });
           input.stream?.onToolResult?.({
             toolCallId: chunk.toolCallId,
             toolName: chunk.toolName,
@@ -290,6 +313,14 @@ export class ConversationEngine {
           toolFailed = true;
           const errorMessage = normalizeErrorMessage(chunk.error, "工具调用失败");
           lastToolError = errorMessage.trim() || lastToolError;
+          toolTrace = recordToolCallSettled(toolTrace, {
+            toolCallId: chunk.toolCallId,
+            toolName: chunk.toolName,
+            input: chunk.input,
+            success: false,
+            error: errorMessage,
+            timestamp: new Date().toISOString()
+          });
           input.stream?.onToolResult?.({
             toolCallId: chunk.toolCallId,
             toolName: chunk.toolName,
@@ -308,6 +339,7 @@ export class ConversationEngine {
 
         if (chunk.type === "abort") {
           streamFailed = true;
+          streamAborted = true;
           lastStreamError = lastStreamError || "LLM 回复已中断。";
           continue;
         }
@@ -322,12 +354,52 @@ export class ConversationEngine {
     }
 
     const trimmedText = fullText.trim();
+    const finalizedToolTrace = finalizeToolTraceItems(
+      toolTrace,
+      streamFailed ? (streamAborted ? "aborted" : "failed") : "completed",
+      new Date().toISOString()
+    );
+    const persistedToolTrace = toPersistedToolTraceItems(finalizedToolTrace);
+    const toolTraceMetadata =
+      persistedToolTrace.length > 0
+        ? {
+            toolTrace: {
+              items: persistedToolTrace
+            }
+          }
+        : undefined;
     if (streamFailed) {
-      throw new Error(lastStreamError || "LLM 调用失败，请稍后重试。");
+      const failureText = lastStreamError || "LLM 调用失败，请稍后重试。";
+      if (toolTraceMetadata) {
+        await this.memory.rememberMessage({
+          threadId: input.threadId,
+          resourceId: input.resourceId,
+          role: "assistant",
+          text: failureText,
+          metadata: {
+            channel: input.channel,
+            ...toolTraceMetadata
+          }
+        });
+      }
+      throw new Error(failureText);
     }
 
     if (!trimmedText && toolFailed) {
-      throw new Error(lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。");
+      const failureText = lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。";
+      if (toolTraceMetadata) {
+        await this.memory.rememberMessage({
+          threadId: input.threadId,
+          resourceId: input.resourceId,
+          role: "assistant",
+          text: failureText,
+          metadata: {
+            channel: input.channel,
+            ...toolTraceMetadata
+          }
+        });
+      }
+      throw new Error(failureText);
     }
 
     const fallbackReply = "我这次没有生成有效回复，请重试一次。";
@@ -345,22 +417,24 @@ export class ConversationEngine {
       role: "assistant",
       text: finalText,
       metadata: {
-        channel: input.channel
+        channel: input.channel,
+        ...(toolTraceMetadata ?? {})
       }
     });
 
-    try {
-      const totalUsage = await result.totalUsage;
-      reportTokenUsage({
-        source: tokenSourceFromChannel(input.channel),
-        usage: totalUsage,
-        systemText: system,
-        inputText: normalizedText,
-        outputText: finalText
+    void result.totalUsage
+      .then((totalUsage) => {
+        reportTokenUsage({
+          source: tokenSourceFromChannel(input.channel),
+          usage: totalUsage,
+          systemText: system,
+          inputText: normalizedText,
+          outputText: finalText
+        });
+      })
+      .catch((error) => {
+        logger.warn("conversation", "token-usage-capture-failed", undefined, error);
       });
-    } catch (error) {
-      logger.warn("conversation", "token-usage-capture-failed", undefined, error);
-    }
 
     return finalText;
   }

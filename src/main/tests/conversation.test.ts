@@ -88,6 +88,95 @@ test("ConversationEngine: hidden scheduled prompt is not persisted but is sent t
   assert.deepEqual(seenAllowedToolNames, ["web_search", "web_fetch"]);
 });
 
+test("ConversationEngine: persists toolTrace metadata for successful tool calls", async () => {
+  const config = cloneConfig();
+  const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async (input: { role: string; text: string; metadata?: Record<string, unknown> }) => {
+        remembered.push(input);
+      },
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    (() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "tool-call",
+          toolCallId: "tool-1",
+          toolName: "search_web",
+          input: { query: "GitHub Trending" }
+        };
+        yield {
+          type: "tool-result",
+          toolCallId: "tool-1",
+          toolName: "search_web",
+          input: { query: "GitHub Trending" },
+          output: {
+            success: true,
+            data: { total: 3 }
+          }
+        };
+        yield {
+          type: "text-delta",
+          text: "整理好了"
+        };
+      })(),
+      totalUsage: Promise.resolve(undefined)
+    })) as any
+  );
+
+  const reply = await conversation.reply({
+    text: "帮我搜索一下",
+    channel: "console",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    persistUserMessage: false
+  });
+
+  assert.equal(reply, "整理好了");
+  assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
+    items: [
+      {
+        toolName: "search_web",
+        status: "success",
+        inputPreview: "搜索：GitHub Trending"
+      }
+    ]
+  });
+});
+
 test("ConversationEngine: surfaces stream error chunks instead of falling back to empty-reply copy", async () => {
   const config = cloneConfig();
   const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
@@ -153,6 +242,154 @@ test("ConversationEngine: surfaces stream error chunks instead of falling back t
     /OpenAI 401 invalid_api_key/
   );
   assert.deepEqual(remembered, []);
+});
+
+test("ConversationEngine: persists aborted toolTrace when stream aborts mid-tool", async () => {
+  const config = cloneConfig();
+  const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async (input: { role: string; text: string; metadata?: Record<string, unknown> }) => {
+        remembered.push(input);
+      },
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    (() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "tool-call",
+          toolCallId: "tool-1",
+          toolName: "web_fetch",
+          input: { url: "https://example.com/page" }
+        };
+        yield {
+          type: "abort"
+        };
+      })(),
+      totalUsage: Promise.resolve(undefined)
+    })) as any
+  );
+
+  await assert.rejects(
+    () =>
+      conversation.reply({
+        text: "抓一下页面",
+        channel: "console",
+        resourceId: "resource-1",
+        threadId: "thread-1",
+        persistUserMessage: false
+      }),
+    /LLM 回复已中断/
+  );
+
+  assert.equal(remembered[0]?.text, "LLM 回复已中断。");
+  assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
+    items: [
+      {
+        toolName: "web_fetch",
+        status: "aborted",
+        inputPreview: "URL：https://example.com/page"
+      }
+    ]
+  });
+});
+
+test("ConversationEngine: resolves final reply without waiting for totalUsage", async () => {
+  const config = cloneConfig();
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async () => undefined,
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    (() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "text-delta",
+          text: "很快返回"
+        };
+      })(),
+      totalUsage: new Promise(() => undefined)
+    })) as any
+  );
+
+  const reply = await Promise.race([
+    conversation.reply({
+      text: "你好",
+      channel: "console",
+      resourceId: "resource-1",
+      threadId: "thread-1",
+      persistUserMessage: false
+    }),
+    new Promise<string>((_, reject) => {
+      setTimeout(() => reject(new Error("reply timed out")), 100);
+    })
+  ]);
+
+  assert.equal(reply, "很快返回");
 });
 
 test("ConversationEngine: treats finishReason=error as a real failure when no reply text is produced", async () => {

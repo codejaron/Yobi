@@ -1,13 +1,9 @@
-import { ConsoleActionPane } from "@renderer/pages/console-chat/ConsoleActionPane";
 import { ConsoleChatPane } from "@renderer/pages/console-chat/ConsoleChatPane";
 import { useConsoleChatController } from "@renderer/pages/console-chat/useConsoleChatController";
 
 export function ConsoleChatPage() {
   const {
     messages,
-    actions,
-    logEnabled,
-    setLogEnabled,
     draft,
     setDraft,
     sttReady,
@@ -17,7 +13,6 @@ export function ConsoleChatPage() {
     activatedSkills,
     approvalIndex,
     setApprovalIndex,
-    expandedActions,
     historyLoaded,
     historyHasMore,
     loadingMoreHistory,
@@ -30,21 +25,17 @@ export function ConsoleChatPage() {
     micButtonLabel,
     chatBottomRef,
     chatListRef,
-    actionBottomRef,
     inputRef,
     clearHistory,
-    clearActionLogs,
-    toggleActionExpanded,
     handleChatScroll,
     handleSubmit,
     handleInputKeyDown,
     toggleMicRecording,
-    submitApproval,
-    isToolAction
+    submitApproval
   } = useConsoleChatController();
 
   return (
-    <div className="grid h-[calc(100vh-140px)] min-h-[680px] max-h-[900px] gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="h-[calc(100vh-140px)] min-h-[680px] max-h-[900px]">
       <ConsoleChatPane
         busy={busy}
         clearingHistory={clearingHistory}
@@ -75,16 +66,6 @@ export function ConsoleChatPage() {
         micHint={micHint}
         onSubmit={handleSubmit}
         clearHistory={clearHistory}
-      />
-      <ConsoleActionPane
-        logEnabled={logEnabled}
-        setLogEnabled={setLogEnabled}
-        clearActionLogs={clearActionLogs}
-        actions={actions}
-        isToolAction={isToolAction}
-        expandedActions={expandedActions}
-        toggleActionExpanded={toggleActionExpanded}
-        actionBottomRef={actionBottomRef}
       />
     </div>
   );

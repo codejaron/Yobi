@@ -4,10 +4,10 @@ import type {
   SkillActivatedEventPayload,
   SkillsCatalogSummary
 } from "@shared/types";
+import type { AssistantTurnProcess } from "@shared/tool-trace";
 
 export type MessageRole = "user" | "assistant";
 export type MessageState = "streaming" | "done" | "error";
-export type ActionKind = "thinking" | "tool" | "approval" | "status" | "error";
 
 export interface ConsoleMessage {
   id: string;
@@ -15,16 +15,9 @@ export interface ConsoleMessage {
   role: MessageRole;
   text: string;
   state: MessageState;
+  process?: AssistantTurnProcess;
   source?: "yobi";
-}
-
-export interface ActionItem {
-  id: string;
-  requestId: string;
-  kind: ActionKind;
-  label: string;
-  detail: string;
-  timestamp: string;
+  historyMode?: boolean;
 }
 
 export interface PendingApproval {
@@ -38,7 +31,6 @@ export type ConsoleSkillsCatalogState = SkillsCatalogSummary;
 export type ConsoleActivatedSkill = SkillActivatedEventPayload;
 
 export const CONSOLE_HISTORY_PAGE_SIZE = 20;
-export const LIVE_MESSAGE_LIMIT = 90;
 
 export const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string }> = [
   { decision: "allow-once", label: "同意一次" },
@@ -62,24 +54,4 @@ export function appendRecognizedText(currentDraft: string, recognizedText: strin
   }
 
   return `${current} ${normalized}`;
-}
-
-export function actionColor(kind: ActionKind): string {
-  if (kind === "thinking") {
-    return "status-surface status-surface--info";
-  }
-
-  if (kind === "tool") {
-    return "status-surface status-surface--warn";
-  }
-
-  if (kind === "approval") {
-    return "status-surface status-surface--warn";
-  }
-
-  if (kind === "error") {
-    return "status-surface status-surface--danger";
-  }
-
-  return "status-surface status-surface--neutral";
 }

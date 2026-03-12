@@ -595,6 +595,23 @@ export interface SkillActivatedEventPayload {
   compatibility: SkillCompatibility;
 }
 
+export type ToolTraceStatus = "success" | "error" | "aborted";
+
+export interface ToolTraceItem {
+  toolName: string;
+  status: ToolTraceStatus;
+  inputPreview: string;
+  durationMs?: number;
+}
+
+export interface HistoryMessageMeta {
+  proactive?: boolean;
+  source?: "yobi";
+  toolTrace?: {
+    items: ToolTraceItem[];
+  };
+}
+
 export type ConsoleRunEventV2 =
   | {
       requestId: string;
@@ -687,10 +704,7 @@ export interface HistoryMessage {
   text: string;
   channel: "telegram" | "console" | "qq" | "feishu";
   timestamp: string;
-  meta?: {
-    proactive?: boolean;
-    source?: "yobi";
-  };
+  meta?: HistoryMessageMeta;
 }
 
 export interface RuntimeContext {

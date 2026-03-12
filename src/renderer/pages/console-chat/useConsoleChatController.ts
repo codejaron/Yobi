@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, UIEvent } from "react";
 import type { CommandApprovalDecision, ConsoleRunEventV2, HistoryMessage } from "@shared/types";
+import {
+  applyConsoleEventToAssistantProcess,
+  createAssistantTurnProcess
+} from "@shared/tool-trace";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
-import { makeClientId, summarizeUnknown } from "@renderer/pages/chat-utils";
+import { makeClientId } from "@renderer/pages/chat-utils";
 import {
   APPROVAL_OPTIONS,
   CONSOLE_HISTORY_PAGE_SIZE,
-  LIVE_MESSAGE_LIMIT,
   appendRecognizedText,
   historyRoleToMessageRole
 } from "./types";
 import type {
-  ActionItem,
   ConsoleActivatedSkill,
   ConsoleMessage,
   ConsoleSkillsCatalogState,
@@ -20,9 +22,6 @@ import type {
 
 export interface ConsoleChatController {
   messages: ConsoleMessage[];
-  actions: ActionItem[];
-  logEnabled: boolean;
-  setLogEnabled: (enabled: boolean) => void;
   draft: string;
   setDraft: (value: string) => void;
   sttReady: boolean;
@@ -34,7 +33,6 @@ export interface ConsoleChatController {
   activatedSkills: ConsoleActivatedSkill[];
   approvalIndex: number;
   setApprovalIndex: (index: number) => void;
-  expandedActions: Record<string, boolean>;
   historyLoaded: boolean;
   historyHasMore: boolean;
   loadingMoreHistory: boolean;
@@ -47,17 +45,43 @@ export interface ConsoleChatController {
   micButtonLabel: string;
   chatBottomRef: React.RefObject<HTMLDivElement | null>;
   chatListRef: React.RefObject<HTMLDivElement | null>;
-  actionBottomRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLInputElement | null>;
   clearHistory: () => Promise<void>;
-  clearActionLogs: () => void;
-  toggleActionExpanded: (id: string) => void;
   handleChatScroll: (event: UIEvent<HTMLDivElement>) => void;
   handleSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   handleInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   toggleMicRecording: () => void;
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
-  isToolAction: (item: ActionItem) => boolean;
+}
+
+function createStreamingAssistantMessage(requestId: string): ConsoleMessage {
+  const process = createAssistantTurnProcess();
+  process.thinkingVisible = true;
+
+  return {
+    id: makeClientId("assistant"),
+    requestId,
+    role: "assistant",
+    text: "",
+    state: "streaming",
+    process
+  };
+}
+
+function createHistoryMessage(item: HistoryMessage): ConsoleMessage {
+  return {
+    id: item.id,
+    requestId: `history-${item.id}`,
+    role: historyRoleToMessageRole(item.role),
+    text: item.text,
+    state: "done",
+    source: item.meta?.source,
+    historyMode: item.role === "assistant",
+    process:
+      item.role === "assistant"
+        ? createAssistantTurnProcess(item.meta?.toolTrace?.items)
+        : undefined
+  };
 }
 
 export function useConsoleChatController(): ConsoleChatController {
@@ -68,8 +92,6 @@ export function useConsoleChatController(): ConsoleChatController {
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
-  const [actions, setActions] = useState<ActionItem[]>([]);
-  const [logEnabled, setLogEnabled] = useState(false);
   const [draft, setDraft] = useState("");
   const [sttReady, setSttReady] = useState(false);
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
@@ -82,227 +104,142 @@ export function useConsoleChatController(): ConsoleChatController {
   const [skillsCatalog, setSkillsCatalog] = useState<ConsoleSkillsCatalogState | null>(null);
   const [activatedSkills, setActivatedSkills] = useState<ConsoleActivatedSkill[]>([]);
   const [approvalIndex, setApprovalIndex] = useState(0);
-  const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
-  const actionBottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const loadingMoreHistoryRef = useRef(false);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
 
-  const appendAction = useCallback((item: Omit<ActionItem, "id"> & { id?: string }) => {
-    if (!logEnabled) {
-      return;
-    }
+  const upsertAssistantMessage = useCallback(
+    (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
+      setLiveMessages((prev) => {
+        const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
 
-    setActions((prev) => {
-      const nextItem: ActionItem = {
-        ...item,
-        id: item.id ?? makeClientId("action")
-      };
+        if (index < 0) {
+          return [...prev, updater(createStreamingAssistantMessage(requestId))];
+        }
 
-      return [...prev, nextItem].slice(-LIVE_MESSAGE_LIMIT);
-    });
-  }, [logEnabled]);
+        const next = [...prev];
+        next[index] = updater(next[index]);
+        return next;
+      });
+    },
+    []
+  );
 
-  const upsertAssistantMessage = useCallback((requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
-    setLiveMessages((prev) => {
-      const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
-
-      if (index < 0) {
-        const seed: ConsoleMessage = {
-          id: makeClientId("assistant"),
-          requestId,
-          role: "assistant",
-          text: "",
-          state: "streaming"
-        };
-        return [...prev, updater(seed)];
+  const handleChatEvent = useCallback(
+    (event: ConsoleRunEventV2) => {
+      if (event.type === "thinking") {
+        upsertAssistantMessage(event.requestId, (current) => ({
+          ...current,
+          process: applyConsoleEventToAssistantProcess(current.process, event)
+        }));
+        return;
       }
 
-      const next = [...prev];
-      next[index] = updater(next[index]);
-      return next;
-    });
-  }, []);
-
-  const handleChatEvent = useCallback((event: ConsoleRunEventV2) => {
-    if (event.type === "thinking") {
-      appendAction({
-        requestId: event.requestId,
-        kind: "thinking",
-        label: event.state === "start" ? "开始思考" : "思考完成",
-        detail: event.state === "start" ? "模型开始规划动作" : "模型已结束本轮思考",
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    if (event.type === "text-delta") {
-      upsertAssistantMessage(event.requestId, (current) => ({
-        ...current,
-        text: `${current.text}${event.delta}`,
-        state: "streaming"
-      }));
-      return;
-    }
-
-    if (event.type === "tool-call") {
-      appendAction({
-        requestId: event.requestId,
-        kind: "tool",
-        label: `调用工具 · ${event.toolName}`,
-        detail: summarizeUnknown(event.input),
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    if (event.type === "tool-result") {
-      appendAction({
-        requestId: event.requestId,
-        kind: event.success ? "tool" : "error",
-        label: event.success ? `工具返回 · ${event.toolName}` : `工具失败 · ${event.toolName}`,
-        detail: event.success ? summarizeUnknown(event.output) : event.error ?? "执行失败",
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    if (event.type === "approval-request") {
-      setPendingApproval({
-        requestId: event.requestId,
-        approvalId: event.approvalId,
-        toolName: event.toolName,
-        description: event.description
-      });
-      setApprovalIndex(0);
-      appendAction({
-        requestId: event.requestId,
-        kind: "approval",
-        label: `等待授权 · ${event.toolName}`,
-        detail: event.description,
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    if (event.type === "approval-decision") {
-      setPendingApproval((current) => (current?.approvalId === event.approvalId ? null : current));
-      appendAction({
-        requestId: event.requestId,
-        kind: event.decision === "deny" ? "error" : "approval",
-        label:
-          event.decision === "allow-always"
-            ? "已同意并记住"
-            : event.decision === "allow-once"
-              ? "已同意一次"
-              : "已拒绝",
-        detail: `审批单 ${event.approvalId.slice(0, 8)}`,
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    if (event.type === "skills-catalog") {
-      setSkillsCatalog({
-        enabledCount: event.enabledCount,
-        truncated: event.truncated,
-        truncatedDescriptions: event.truncatedDescriptions,
-        omittedSkills: event.omittedSkills
-      });
-      setActivatedSkills([]);
-      appendAction({
-        requestId: event.requestId,
-        kind: "status",
-        label: event.truncated ? "Skill catalog 已裁剪" : "Skill catalog 已加载",
-        detail: `已启用 ${event.enabledCount} 个 skill`,
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    if (event.type === "skill-activated") {
-      setActivatedSkills((current) => {
-        if (current.some((item) => item.skillId === event.skillId)) {
-          return current;
-        }
-
-        return [
+      if (event.type === "text-delta") {
+        upsertAssistantMessage(event.requestId, (current) => ({
           ...current,
-          {
-            skillId: event.skillId,
-            name: event.name,
-            compatibility: event.compatibility
-          }
-        ];
-      });
-      appendAction({
-        requestId: event.requestId,
-        kind: "status",
-        label: `激活 skill · ${event.name}`,
-        detail: event.compatibility.status,
-        timestamp: event.timestamp
-      });
-      return;
-    }
+          text: `${current.text}${event.delta}`,
+          state: "streaming",
+          process: applyConsoleEventToAssistantProcess(current.process, event)
+        }));
+        return;
+      }
 
-    if (event.type === "external-assistant-message") {
-      setLiveMessages((prev) => [
-        ...prev,
-        {
-          id: event.messageId,
+      if (event.type === "tool-call" || event.type === "tool-result") {
+        upsertAssistantMessage(event.requestId, (current) => ({
+          ...current,
+          process: applyConsoleEventToAssistantProcess(current.process, event)
+        }));
+        return;
+      }
+
+      if (event.type === "approval-request") {
+        setPendingApproval({
           requestId: event.requestId,
-          role: "assistant",
-          text: event.text,
-          state: "done",
-          source: event.source
-        }
-      ]);
-      appendAction({
-        requestId: event.requestId,
-        kind: "status",
-        label: "Yobi 主动消息",
-        detail: "后台主动消息已写入当前聊天流。",
-        timestamp: event.timestamp
-      });
-      return;
-    }
+          approvalId: event.approvalId,
+          toolName: event.toolName,
+          description: event.description
+        });
+        setApprovalIndex(0);
+        return;
+      }
 
-    if (event.type === "final") {
+      if (event.type === "approval-decision") {
+        setPendingApproval((current) => (current?.approvalId === event.approvalId ? null : current));
+        return;
+      }
+
+      if (event.type === "skills-catalog") {
+        setSkillsCatalog({
+          enabledCount: event.enabledCount,
+          truncated: event.truncated,
+          truncatedDescriptions: event.truncatedDescriptions,
+          omittedSkills: event.omittedSkills
+        });
+        setActivatedSkills([]);
+        return;
+      }
+
+      if (event.type === "skill-activated") {
+        setActivatedSkills((current) => {
+          if (current.some((item) => item.skillId === event.skillId)) {
+            return current;
+          }
+
+          return [
+            ...current,
+            {
+              skillId: event.skillId,
+              name: event.name,
+              compatibility: event.compatibility
+            }
+          ];
+        });
+        return;
+      }
+
+      if (event.type === "external-assistant-message") {
+        setLiveMessages((prev) => [
+          ...prev,
+          {
+            id: event.messageId,
+            requestId: event.requestId,
+            role: "assistant",
+            text: event.text,
+            state: "done",
+            source: event.source,
+            process: createAssistantTurnProcess()
+          }
+        ]);
+        return;
+      }
+
+      if (event.type === "final") {
+        setActiveRequestId((current) => (current === event.requestId ? null : current));
+        setPendingApproval((current) => (current?.requestId === event.requestId ? null : current));
+        upsertAssistantMessage(event.requestId, (current) => ({
+          ...current,
+          text: event.displayText || current.text || "操作已完成。",
+          state: "done",
+          process: applyConsoleEventToAssistantProcess(current.process, event)
+        }));
+        return;
+      }
+
       setActiveRequestId((current) => (current === event.requestId ? null : current));
       setPendingApproval((current) => (current?.requestId === event.requestId ? null : current));
       upsertAssistantMessage(event.requestId, (current) => ({
         ...current,
-        text: event.displayText || current.text || "操作已完成。",
-        state: "done"
+        text: event.message,
+        state: "error",
+        process: applyConsoleEventToAssistantProcess(current.process, event)
       }));
-      appendAction({
-        requestId: event.requestId,
-        kind: "status",
-        label: "本轮输出完成",
-        detail: "最终答案已写入聊天记录",
-        timestamp: event.timestamp
-      });
-      return;
-    }
-
-    setActiveRequestId((current) => (current === event.requestId ? null : current));
-    setPendingApproval((current) => (current?.requestId === event.requestId ? null : current));
-    upsertAssistantMessage(event.requestId, (current) => ({
-      ...current,
-      text: event.message,
-      state: "error"
-    }));
-    appendAction({
-      requestId: event.requestId,
-      kind: "error",
-      label: "执行异常",
-      detail: event.message,
-      timestamp: event.timestamp
-    });
-  }, [appendAction, upsertAssistantMessage]);
+    },
+    [upsertAssistantMessage]
+  );
 
   const loadLatestHistory = useCallback(async () => {
     try {
@@ -436,40 +373,11 @@ export function useConsoleChatController(): ConsoleChatController {
       setLiveMessages([]);
       setHistoryHasMore(false);
       setHistoryCursor(null);
-      setActions([]);
-      setExpandedActions({});
       setPendingApproval(null);
-      appendAction({
-        requestId: "history-cleared",
-        kind: "status",
-        label: "历史已清空",
-        detail: "全部对话历史记录已删除。",
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      appendAction({
-        requestId: "history-clear-error",
-        kind: "error",
-        label: "清空失败",
-        detail: error instanceof Error ? error.message : "清空历史记录失败，请稍后重试。",
-        timestamp: new Date().toISOString()
-      });
     } finally {
       setClearingHistory(false);
     }
-  }, [activeRequestId, appendAction, clearingHistory]);
-
-  const clearActionLogs = useCallback(() => {
-    setActions([]);
-    setExpandedActions({});
-  }, []);
-
-  const toggleActionExpanded = useCallback((id: string) => {
-    setExpandedActions((prev) => ({
-      ...prev,
-      [id]: !prev[id]
-    }));
-  }, []);
+  }, [activeRequestId, clearingHistory]);
 
   const loadMoreHistory = useCallback(async () => {
     if (!historyHasMore || !historyCursor || loadingMoreHistoryRef.current) {
@@ -585,10 +493,6 @@ export function useConsoleChatController(): ConsoleChatController {
   }, [liveMessages]);
 
   useEffect(() => {
-    actionBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [actions]);
-
-  useEffect(() => {
     if (!pendingApproval) {
       return;
     }
@@ -606,112 +510,105 @@ export function useConsoleChatController(): ConsoleChatController {
     };
   }, []);
 
-  const submitApproval = useCallback(async (decision: CommandApprovalDecision) => {
-    if (!pendingApproval) {
-      return;
-    }
-
-    const approval = pendingApproval;
-    setPendingApproval(null);
-    setApprovalIndex(0);
-
-    await window.companion.approveConsoleCommand({
-      approvalId: approval.approvalId,
-      decision
-    });
-  }, [pendingApproval]);
-
-  const handleSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    const text = draft.trim();
-    if (!text || activeRequestId) {
-      return;
-    }
-
-    setDraft("");
-    setSkillsCatalog(null);
-    setActivatedSkills([]);
-    setLiveMessages((prev) => [
-      ...prev,
-      {
-        id: makeClientId("user"),
-        requestId: makeClientId("request-local"),
-        role: "user",
-        text,
-        state: "done"
+  const submitApproval = useCallback(
+    async (decision: CommandApprovalDecision) => {
+      if (!pendingApproval) {
+        return;
       }
-    ]);
 
-    try {
-      const started = await window.companion.sendConsoleChat(text);
-      setActiveRequestId(started.requestId);
+      const approval = pendingApproval;
+      setPendingApproval(null);
+      setApprovalIndex(0);
+
+      await window.companion.approveConsoleCommand({
+        approvalId: approval.approvalId,
+        decision
+      });
+    },
+    [pendingApproval]
+  );
+
+  const handleSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+
+      const text = draft.trim();
+      if (!text || activeRequestId) {
+        return;
+      }
+
+      setDraft("");
+      setSkillsCatalog(null);
+      setActivatedSkills([]);
       setLiveMessages((prev) => [
         ...prev,
         {
-          id: makeClientId("assistant"),
-          requestId: started.requestId,
-          role: "assistant",
-          text: "",
-          state: "streaming"
+          id: makeClientId("user"),
+          requestId: makeClientId("request-local"),
+          role: "user",
+          text,
+          state: "done"
         }
       ]);
-      appendAction({
-        requestId: started.requestId,
-        kind: "status",
-        label: "消息已提交",
-        detail: "Yobi 正在流式生成回复",
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "提交请求失败，请稍后重试";
-      setLiveMessages((prev) => [
-        ...prev,
-        {
-          id: makeClientId("assistant"),
-          requestId: makeClientId("request-error"),
-          role: "assistant",
-          text: message,
-          state: "error"
-        }
-      ]);
-      appendAction({
-        requestId: "request-error",
-        kind: "error",
-        label: "提交失败",
-        detail: message,
-        timestamp: new Date().toISOString()
-      });
-    }
-  }, [activeRequestId, appendAction, draft]);
 
-  const handleInputKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
-    if (!pendingApproval) {
-      return;
-    }
+      try {
+        const started = await window.companion.sendConsoleChat(text);
+        setActiveRequestId(started.requestId);
+        setLiveMessages((prev) => {
+          if (prev.some((item) => item.requestId === started.requestId && item.role === "assistant")) {
+            return prev;
+          }
 
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setApprovalIndex((current) =>
-        current <= 0 ? APPROVAL_OPTIONS.length - 1 : current - 1
-      );
-      return;
-    }
+          return [...prev, createStreamingAssistantMessage(started.requestId)];
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "提交请求失败，请稍后重试";
+        setLiveMessages((prev) => [
+          ...prev,
+          {
+            id: makeClientId("assistant"),
+            requestId: makeClientId("request-error"),
+            role: "assistant",
+            text: message,
+            state: "error",
+            process: createAssistantTurnProcess()
+          }
+        ]);
+      }
+    },
+    [activeRequestId, draft]
+  );
 
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setApprovalIndex((current) =>
-        current >= APPROVAL_OPTIONS.length - 1 ? 0 : current + 1
-      );
-      return;
-    }
+  const handleInputKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (!pendingApproval) {
+        return;
+      }
 
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void submitApproval(APPROVAL_OPTIONS[approvalIndex]?.decision ?? "allow-once");
-    }
-  }, [approvalIndex, pendingApproval, submitApproval]);
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setApprovalIndex((current) =>
+          current <= 0 ? APPROVAL_OPTIONS.length - 1 : current - 1
+        );
+        return;
+      }
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setApprovalIndex((current) =>
+          current >= APPROVAL_OPTIONS.length - 1 ? 0 : current + 1
+        );
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void submitApproval(APPROVAL_OPTIONS[approvalIndex]?.decision ?? "allow-once");
+      }
+    },
+    [approvalIndex, pendingApproval, submitApproval]
+  );
 
   const busy = activeRequestId !== null;
   const recording = micState === "recording";
@@ -727,35 +624,13 @@ export function useConsoleChatController(): ConsoleChatController {
   const messages = useMemo<ConsoleMessage[]>(() => {
     const historyMessages = persistedMessages
       .filter((item) => item.role === "user" || item.role === "assistant")
-      .map((item) => ({
-        id: item.id,
-        requestId: `history-${item.id}`,
-        role: historyRoleToMessageRole(item.role),
-        text: item.text,
-        state: "done" as const,
-        source: item.meta?.source
-      }));
+      .map((item) => createHistoryMessage(item));
 
     return [...historyMessages, ...liveMessages];
   }, [persistedMessages, liveMessages]);
 
-  const isToolAction = useCallback((item: ActionItem): boolean => {
-    if (item.kind === "tool") {
-      return true;
-    }
-
-    return (
-      item.label.startsWith("调用工具") ||
-      item.label.startsWith("工具返回") ||
-      item.label.startsWith("工具失败")
-    );
-  }, []);
-
   return {
     messages,
-    actions,
-    logEnabled,
-    setLogEnabled,
     draft,
     setDraft,
     sttReady,
@@ -767,7 +642,6 @@ export function useConsoleChatController(): ConsoleChatController {
     activatedSkills,
     approvalIndex,
     setApprovalIndex,
-    expandedActions,
     historyLoaded,
     historyHasMore,
     loadingMoreHistory,
@@ -780,16 +654,12 @@ export function useConsoleChatController(): ConsoleChatController {
     micButtonLabel,
     chatBottomRef,
     chatListRef,
-    actionBottomRef,
     inputRef,
     clearHistory,
-    clearActionLogs,
-    toggleActionExpanded,
     handleChatScroll,
     handleSubmit,
     handleInputKeyDown,
     toggleMicRecording,
-    submitApproval,
-    isToolAction
+    submitApproval
   };
 }

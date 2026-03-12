@@ -11,6 +11,7 @@ import {
 } from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
+import { AssistantProcessView } from "./AssistantProcessView";
 import { APPROVAL_OPTIONS } from "./types";
 import type {
   ConsoleActivatedSkill,
@@ -152,27 +153,31 @@ export function ConsoleChatPane({
                 key={item.id}
                 className={
                   item.role === "user"
-                    ? "ml-auto w-fit max-w-[80%] rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground"
-                    : `mr-auto w-fit max-w-[88%] rounded-2xl border px-4 py-3 text-sm ${
-                        item.state === "error"
-                          ? "status-surface status-surface--danger"
-                          : "status-surface status-surface--neutral"
-                      }`
+                    ? "ml-auto flex max-w-[80%] flex-col items-end"
+                    : "mr-auto flex max-w-[88%] flex-col items-start"
                 }
               >
-                {item.role === "assistant" && item.source === "yobi" ? (
-                  <div className="mb-2 flex items-center gap-2">
-                    <Badge className="status-badge status-badge--info">Yobi</Badge>
-                    <span className="text-[11px] text-muted-foreground">后台主动消息</span>
+                {item.role === "assistant" ? <AssistantProcessView message={item} /> : null}
+                {item.role === "user" ? (
+                  <div className="w-fit rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
+                    <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
                   </div>
-                ) : null}
-                {item.role === "assistant" ? (
-                  <MarkdownContent variant="chat" markdown={item.text || "..."} />
-                ) : (
-                  <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
-                )}
-                {item.role === "assistant" && item.state === "streaming" ? (
-                  <p className="mt-2 text-xs text-muted-foreground">流式输出中...</p>
+                ) : item.text.trim() || item.source === "yobi" ? (
+                  <div
+                    className={`w-fit rounded-2xl border px-4 py-3 text-sm ${
+                      item.state === "error"
+                        ? "status-surface status-surface--danger"
+                        : "status-surface status-surface--neutral"
+                    }`}
+                  >
+                    {item.source === "yobi" ? (
+                      <div className="mb-2 flex items-center gap-2">
+                        <Badge className="status-badge status-badge--info">Yobi</Badge>
+                        <span className="text-[11px] text-muted-foreground">后台主动消息</span>
+                      </div>
+                    ) : null}
+                    {item.text.trim() ? <MarkdownContent variant="chat" markdown={item.text} /> : null}
+                  </div>
                 ) : null}
               </div>
             ))
