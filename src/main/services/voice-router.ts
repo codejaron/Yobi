@@ -8,6 +8,17 @@ const DEFAULT_ALIBABA_ASR_MODEL = "fun-asr-realtime";
 const DEFAULT_ALIBABA_TTS_MODEL = "cosyvoice-v3-flash";
 const DEFAULT_ALIBABA_TTS_VOICE = "longxiaochun_v3";
 
+export interface StreamingAsrSession {
+  pushPcm: (chunk: Buffer) => Promise<void>;
+  flush: () => Promise<string>;
+  abort: () => Promise<void>;
+}
+
+export interface StreamingTtsSession {
+  synthesizeChunk: (text: string) => Promise<Buffer>;
+  close: () => Promise<void>;
+}
+
 function hasAlibabaCredentials(config: AppConfig): boolean {
   return config.alibabaVoice.apiKey.trim().length > 0;
 }
@@ -101,6 +112,33 @@ export class VoiceProviderRouter {
     throw new Error("未启用任何语音识别引擎。请在设置中选择本地 Whisper 或阿里百炼。");
   }
 
+  createStreamingAsrSession(input: {
+    sampleRate: number;
+    onPartial?: (text: string) => void;
+  }): StreamingAsrSession {
+    const config = this.getConfig();
+    if (config.voice.asrProvider === "whisper-local") {
+      return this.whisperLocal.createStreamingSession(input);
+    }
+
+    if (config.voice.asrProvider === "alibaba") {
+      if (!hasAlibabaCredentials(config)) {
+        throw new Error("阿里语音识别未就绪，请先填写 API Key。");
+      }
+
+      return this.alibabaVoice.createStreamingAsrSession({
+        apiKey: config.alibabaVoice.apiKey.trim(),
+        region: config.alibabaVoice.region,
+        sampleRate: input.sampleRate,
+        model: resolveAlibabaAsrModel(config),
+        timeoutMs: Math.max(6000, config.voice.requestTimeoutMs),
+        onPartial: input.onPartial
+      });
+    }
+
+    throw new Error("未启用任何流式语音识别引擎。");
+  }
+
   async synthesize(input: {
     text: string;
     edgeConfig: VoiceConfig;
@@ -126,5 +164,18 @@ export class VoiceProviderRouter {
       timeoutMs: Math.max(6000, config.voice.requestTimeoutMs),
       retryCount: config.voice.retryCount
     });
+  }
+
+  createStreamingTtsSession(input: {
+    edgeConfig: VoiceConfig;
+  }): StreamingTtsSession {
+    return {
+      synthesizeChunk: async (text: string) =>
+        this.synthesize({
+          text,
+          edgeConfig: input.edgeConfig
+        }),
+      close: async () => undefined
+    };
   }
 }

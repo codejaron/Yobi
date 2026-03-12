@@ -119,6 +119,21 @@ const api = {
   transcribeVoice(input) {
     return ipcRenderer.invoke('voice:transcribe', input);
   },
+  getVoiceSessionState() {
+    return ipcRenderer.invoke('voice:session:get');
+  },
+  startVoiceSession(input) {
+    return ipcRenderer.invoke('voice:session:start', input ?? {});
+  },
+  stopVoiceSession() {
+    return ipcRenderer.invoke('voice:session:stop');
+  },
+  interruptVoiceSession(input) {
+    return ipcRenderer.invoke('voice:session:interrupt', input ?? {});
+  },
+  setVoiceSessionMode(mode) {
+    return ipcRenderer.invoke('voice:session:set-mode', { mode });
+  },
   listConsoleHistory(input) {
     return ipcRenderer.invoke('console:chat:history', input ?? {});
   },
@@ -130,6 +145,13 @@ const api = {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on(channel, wrapped);
     ipcRenderer.send('console:chat:subscribe');
+    return () => ipcRenderer.removeListener(channel, wrapped);
+  },
+  onVoiceSessionEvent(listener) {
+    const channel = 'runtime:voice-session-event';
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on(channel, wrapped);
+    ipcRenderer.send('voice:session:subscribe');
     return () => ipcRenderer.removeListener(channel, wrapped);
   },
   listScheduledTasks() {

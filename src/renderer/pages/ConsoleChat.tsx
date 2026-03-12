@@ -24,6 +24,9 @@ export function ConsoleChatPage() {
     micButtonDisabled,
     micButtonLabel,
     stoppingRequest,
+    voiceSession,
+    toggleVoiceSession,
+    interruptVoiceSession,
     chatBottomRef,
     chatListRef,
     inputRef,
@@ -65,6 +68,9 @@ export function ConsoleChatPage() {
         transcribing={transcribing}
         micButtonLabel={micButtonLabel}
         stoppingRequest={stoppingRequest}
+        voiceSession={voiceSession}
+        toggleVoiceSession={toggleVoiceSession}
+        interruptVoiceSession={interruptVoiceSession}
         sttReady={sttReady}
         micHint={micHint}
         onSubmit={handleSubmit}

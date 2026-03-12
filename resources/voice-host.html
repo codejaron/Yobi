@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Yobi Voice Host</title>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const voiceHost = window.voiceHost;
+        if (!voiceHost || typeof voiceHost.onPort !== "function") {
+          return;
+        }
+
+        let port = null;
+        let captureStream = null;
+        let captureContext = null;
+        let captureSource = null;
+        let captureNode = null;
+        let playbackQueue = [];
+        let activePlayback = null;
+        let playbackContext = null;
+        let playbackAnalyser = null;
+        let playbackSource = null;
+        let playbackData = null;
+        let playbackRaf = 0;
+
+        const floatToInt16 = (input) => {
+          const output = new Int16Array(input.length);
+          for (let index = 0; index < input.length; index += 1) {
+            const value = Math.max(-1, Math.min(1, input[index] || 0));
+            output[index] = value < 0 ? Math.round(value * 0x8000) : Math.round(value * 0x7fff);
+          }
+          return output;
+        };
+
+        const emit = (payload, transfer = []) => {
+          if (!port) {
+            return;
+          }
+
+          port.postMessage(payload, transfer);
+        };
+
+        const clearPlaybackMonitor = async () => {
+          if (playbackRaf) {
+            cancelAnimationFrame(playbackRaf);
+            playbackRaf = 0;
+          }
+
+          playbackData = null;
+          playbackAnalyser = null;
+
+          if (playbackSource) {
+            try {
+              playbackSource.disconnect();
+            } catch {}
+          }
+          playbackSource = null;
+
+          if (playbackContext) {
+            try {
+              await playbackContext.close();
+            } catch {}
+          }
+          playbackContext = null;
+        };
+
+        const stopActivePlayback = async () => {
+          if (!activePlayback) {
+            await clearPlaybackMonitor();
+            return;
+          }
+
+          try {
+            activePlayback.audio.pause();
+            activePlayback.audio.src = "";
+            activePlayback.audio.load();
+          } catch {}
+
+          activePlayback = null;
+          await clearPlaybackMonitor();
+        };
+
+        const startPlaybackMonitor = (item) => {
+          const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContextCtor) {
+            return;
+          }
+
+          try {
+            playbackContext = new AudioContextCtor();
+            playbackAnalyser = playbackContext.createAnalyser();
+            playbackAnalyser.fftSize = 256;
+            playbackData = new Uint8Array(playbackAnalyser.frequencyBinCount);
+            playbackSource = playbackContext.createMediaElementSource(item.audio);
+            playbackSource.connect(playbackAnalyser);
+            playbackAnalyser.connect(playbackContext.destination);
+
+            if (playbackContext.state === "suspended") {
+              void playbackContext.resume().catch(() => undefined);
+            }
+
+            const tick = () => {
+              if (!activePlayback || !playbackAnalyser || !playbackData) {
+                playbackRaf = 0;
+                return;
+              }
+
+              playbackAnalyser.getByteTimeDomainData(playbackData);
+              let energy = 0;
+              for (let index = 0; index < playbackData.length; index += 1) {
+                const normalized = (playbackData[index] - 128) / 128;
+                energy += normalized * normalized;
+              }
+              const rms = Math.sqrt(energy / playbackData.length);
+              emit({
+                type: "speech-level",
+                level: rms * 8,
+                queueLength: playbackQueue.length,
+                currentText: activePlayback.text
+              });
+
+              playbackRaf = requestAnimationFrame(tick);
+            };
+
+            playbackRaf = requestAnimationFrame(tick);
+          } catch {}
+        };
+
+        const playNext = async () => {
+          if (activePlayback || playbackQueue.length === 0) {
+            return;
+          }
+
+          const item = playbackQueue.shift();
+          if (!item) {
+            return;
+          }
+
+          const audio = new Audio(`data:${item.mimeType || "audio/mpeg"};base64,${item.audioBase64}`);
+          activePlayback = {
+            id: item.id,
+            text: item.text,
+            audio
+          };
+
+          audio.onplay = () => {
+            emit({
+              type: "playback-started",
+              id: item.id,
+              text: item.text,
+              queueLength: playbackQueue.length
+            });
+            startPlaybackMonitor(activePlayback);
+          };
+
+          audio.onended = async () => {
+            if (!activePlayback || activePlayback.id !== item.id) {
+              return;
+            }
+
+            activePlayback = null;
+            await clearPlaybackMonitor();
+            emit({
+              type: "playback-ended",
+              id: item.id,
+              text: item.text,
+              queueLength: playbackQueue.length
+            });
+            void playNext();
+          };
+
+          audio.onerror = async () => {
+            emit({
+              type: "playback-error",
+              id: item.id,
+              message: "语音播放失败"
+            });
+            activePlayback = null;
+            await clearPlaybackMonitor();
+            void playNext();
+          };
+
+          try {
+            await audio.play();
+          } catch (error) {
+            emit({
+              type: "playback-error",
+              id: item.id,
+              message: error && error.message ? String(error.message) : "语音播放失败"
+            });
+            activePlayback = null;
+            await clearPlaybackMonitor();
+            void playNext();
+          }
+        };
+
+        const createWorkletUrl = () => {
+          const source = `
+            class VoiceCaptureProcessor extends AudioWorkletProcessor {
+              process(inputs) {
+                const channel = inputs?.[0]?.[0];
+                if (channel && channel.length > 0) {
+                  this.port.postMessage(channel.slice(0));
+                }
+                return true;
+              }
+            }
+            registerProcessor("voice-capture-processor", VoiceCaptureProcessor);
+          `;
+          return URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        };
+
+        const startCapture = async (aecEnabled) => {
+          if (captureStream) {
+            emit({ type: "capture-started" });
+            return;
+          }
+
+          try {
+            captureStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                channelCount: 1,
+                echoCancellation: aecEnabled !== false,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            });
+
+            captureContext = new AudioContext({ sampleRate: 16000 });
+            if (captureContext.state === "suspended") {
+              await captureContext.resume();
+            }
+
+            const workletUrl = createWorkletUrl();
+            await captureContext.audioWorklet.addModule(workletUrl);
+            URL.revokeObjectURL(workletUrl);
+
+            captureSource = captureContext.createMediaStreamSource(captureStream);
+            captureNode = new AudioWorkletNode(captureContext, "voice-capture-processor", {
+              numberOfInputs: 1,
+              numberOfOutputs: 0,
+              channelCount: 1
+            });
+            captureNode.port.onmessage = (event) => {
+              const floatChunk = event.data;
+              if (!floatChunk || !port) {
+                return;
+              }
+
+              const pcm16 = floatToInt16(floatChunk);
+              emit(
+                {
+                  type: "pcm-frame",
+                  pcm: pcm16.buffer,
+                  sampleRate: 16000
+                },
+                [pcm16.buffer]
+              );
+            };
+
+            captureSource.connect(captureNode);
+            emit({ type: "capture-started" });
+          } catch (error) {
+            emit({
+              type: "capture-error",
+              message: error && error.message ? String(error.message) : "无法启动麦克风"
+            });
+          }
+        };
+
+        const stopCapture = async () => {
+          if (captureNode) {
+            try {
+              captureNode.port.onmessage = null;
+              captureNode.disconnect();
+            } catch {}
+          }
+
+          if (captureSource) {
+            try {
+              captureSource.disconnect();
+            } catch {}
+          }
+
+          if (captureStream) {
+            for (const track of captureStream.getTracks()) {
+              track.stop();
+            }
+          }
+
+          if (captureContext) {
+            try {
+              await captureContext.close();
+            } catch {}
+          }
+
+          captureNode = null;
+          captureSource = null;
+          captureStream = null;
+          captureContext = null;
+          emit({ type: "capture-stopped" });
+        };
+
+        const clearPlayback = async () => {
+          playbackQueue = [];
+          await stopActivePlayback();
+          emit({
+            type: "playback-cleared",
+            queueLength: 0
+          });
+        };
+
+        const handleCommand = (message) => {
+          if (!message || typeof message !== "object") {
+            return;
+          }
+
+          if (message.type === "start-capture") {
+            void startCapture(message.aecEnabled);
+            return;
+          }
+
+          if (message.type === "stop-capture") {
+            void stopCapture();
+            return;
+          }
+
+          if (message.type === "enqueue-playback") {
+            playbackQueue.push({
+              id: String(message.id || ""),
+              audioBase64: typeof message.audioBase64 === "string" ? message.audioBase64 : "",
+              text: typeof message.text === "string" ? message.text : "",
+              mimeType: typeof message.mimeType === "string" ? message.mimeType : "audio/mpeg"
+            });
+            void playNext();
+            return;
+          }
+
+          if (message.type === "clear-playback") {
+            void clearPlayback();
+          }
+        };
+
+        voiceHost.onPort((nextPort) => {
+          port = nextPort;
+          port.onmessage = (event) => {
+            handleCommand(event.data);
+          };
+          port.start();
+          emit({ type: "host-ready" });
+        });
+      })();
+    </script>
+  </body>
+</html>

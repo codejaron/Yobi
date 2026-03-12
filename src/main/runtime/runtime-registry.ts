@@ -211,7 +211,26 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   );
   const keepAwake = new KeepAwakeService();
   const pet = new PetWindowController();
-  const realtimeVoice = new RealtimeVoiceService();
+  const realtimeVoice = new RealtimeVoiceService({
+    paths,
+    logger,
+    getConfig: () => configStore.getConfig(),
+    voiceRouter,
+    conversation,
+    memory,
+    defaultTarget: {
+      resourceId: input.resourceId,
+      threadId: input.threadId
+    },
+    onRecordUserActivity: (activityInput) => callbackBridge.recordUserActivity(activityInput),
+    onAssistantMessage: async () => {
+      await kernel.onAssistantMessage();
+      await callbackBridge.emitStatus();
+    },
+    onStatusChange: () => {
+      void callbackBridge.emitStatus();
+    }
+  });
   const globalPtt = new GlobalPetPushToTalkService();
   const systemPermissionsService = new SystemPermissionsService({
     onStatusChange: () => {

@@ -19,7 +19,7 @@ import {
   isConversationAbortError
 } from "./conversation-abort";
 import { resolveOpenAIStoreOption } from "./provider-utils";
-import { extractEmotionTag, stripEmotionTags } from "./emotion-tags";
+import { createEmotionTagStripper, extractEmotionTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
 import type { SkillManager } from "@main/skills/manager";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
@@ -34,6 +34,9 @@ import { appLogger as logger } from "@main/runtime/singletons";
 export interface ChatReplyStreamListener {
   onThinkingChange?: (state: "start" | "stop") => void;
   onTextDelta?: (delta: string) => void;
+  onVisibleTextDelta?: (delta: string) => void;
+  onVisibleTextFinal?: (text: string) => void;
+  onAbortVisibleText?: (text: string) => void;
   onToolCall?: (payload: {
     toolCallId: string;
     toolName: string;
@@ -143,6 +146,7 @@ export class ConversationEngine {
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
     persistUserMessage?: boolean;
+    assistantPersistence?: "engine" | "caller";
     allowedToolNames?: string[];
     preapprovedToolNames?: string[];
     abortSignal?: AbortSignal;
@@ -252,6 +256,7 @@ export class ConversationEngine {
     let streamAborted = false;
     let lastStreamError = "";
     let toolTrace = [] as ReturnType<typeof finalizeToolTraceItems>;
+    const visibleStripper = createEmotionTagStripper();
     const result = this.streamTextImpl({
       model,
       system,
@@ -281,6 +286,10 @@ export class ConversationEngine {
           if (chunk.type === "text-delta") {
             fullText += chunk.text;
             input.stream?.onTextDelta?.(chunk.text);
+            const visibleDelta = visibleStripper.push(chunk.text);
+            if (visibleDelta) {
+              input.stream?.onVisibleTextDelta?.(visibleDelta);
+            }
             continue;
           }
 
@@ -395,6 +404,10 @@ export class ConversationEngine {
         }
       }
     } finally {
+      const trailingVisibleDelta = visibleStripper.flush();
+      if (trailingVisibleDelta) {
+        input.stream?.onVisibleTextDelta?.(trailingVisibleDelta);
+      }
       input.stream?.onThinkingChange?.("stop");
     }
 
@@ -414,7 +427,8 @@ export class ConversationEngine {
           }
         : undefined;
     if (streamAborted) {
-      if (visibleText || toolTraceMetadata) {
+      input.stream?.onAbortVisibleText?.(visibleText);
+      if (input.assistantPersistence !== "caller" && (visibleText || toolTraceMetadata)) {
         await this.memory.rememberMessage({
           threadId: input.threadId,
           resourceId: input.resourceId,
@@ -433,7 +447,7 @@ export class ConversationEngine {
     const trimmedText = visibleText;
     if (streamFailed) {
       const failureText = lastStreamError || "LLM 调用失败，请稍后重试。";
-      if (toolTraceMetadata) {
+      if (input.assistantPersistence !== "caller" && toolTraceMetadata) {
         await this.memory.rememberMessage({
           threadId: input.threadId,
           resourceId: input.resourceId,
@@ -450,7 +464,7 @@ export class ConversationEngine {
 
     if (!trimmedText && toolFailed) {
       const failureText = lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。";
-      if (toolTraceMetadata) {
+      if (input.assistantPersistence !== "caller" && toolTraceMetadata) {
         await this.memory.rememberMessage({
           threadId: input.threadId,
           resourceId: input.resourceId,
@@ -474,16 +488,20 @@ export class ConversationEngine {
       await this.onRealtimeEmotionalSignals?.(parsedReply.signals);
     }
 
-    await this.memory.rememberMessage({
-      threadId: input.threadId,
-      resourceId: input.resourceId,
-      role: "assistant",
-      text: finalText,
-      metadata: {
-        channel: input.channel,
-        ...(toolTraceMetadata ?? {})
-      }
-    });
+    input.stream?.onVisibleTextFinal?.(finalText);
+
+    if (input.assistantPersistence !== "caller") {
+      await this.memory.rememberMessage({
+        threadId: input.threadId,
+        resourceId: input.resourceId,
+        role: "assistant",
+        text: finalText,
+        metadata: {
+          channel: input.channel,
+          ...(toolTraceMetadata ?? {})
+        }
+      });
+    }
 
     void result.totalUsage
       .then((totalUsage) => {

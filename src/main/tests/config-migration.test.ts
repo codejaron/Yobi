@@ -78,3 +78,33 @@ test("ConfigStore: fills appearance defaults for config without theme settings",
     await fs.rm(baseDir, { recursive: true, force: true });
   }
 });
+
+test("ConfigStore: migrates legacy realtime voice shape without losing enabled flags", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-realtime-voice-"));
+
+  try {
+    const paths = new CompanionPaths(baseDir);
+    paths.ensureLayout();
+
+    const legacyConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Record<string, any>;
+    legacyConfig.realtimeVoice = {
+      enabled: true,
+      whisperMode: "api",
+      autoInterrupt: false
+    };
+
+    await fs.writeFile(paths.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, "utf8");
+
+    const store = new ConfigStore(paths);
+    await store.init();
+    const config = store.getConfig();
+
+    assert.equal(config.realtimeVoice.enabled, true);
+    assert.equal(config.realtimeVoice.mode, "ptt");
+    assert.equal(config.realtimeVoice.autoInterrupt, false);
+    assert.equal(config.realtimeVoice.aecEnabled, true);
+    assert.equal(config.realtimeVoice.vadThreshold, 0.5);
+  } finally {
+    await fs.rm(baseDir, { recursive: true, force: true });
+  }
+});

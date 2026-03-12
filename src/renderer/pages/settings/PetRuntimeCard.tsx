@@ -195,6 +195,60 @@ export function PetRuntimeCard({
             }
           />
         </div>
+
+        <div className="grid gap-3 rounded-md border border-border/70 bg-white/70 px-3 py-3 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label>会话模式</Label>
+            <select
+              className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              value={config.realtimeVoice.mode}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  realtimeVoice: {
+                    ...config.realtimeVoice,
+                    mode: event.target.value as AppConfig["realtimeVoice"]["mode"]
+                  }
+                })
+              }
+            >
+              <option value="ptt">PTT（稳定串行）</option>
+              <option value="free">自由对话（全流式）</option>
+            </select>
+          </div>
+
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-background px-3 py-2">
+            <Label>自动打断</Label>
+            <Switch
+              checked={config.realtimeVoice.autoInterrupt}
+              onChange={(checked) =>
+                setConfig({
+                  ...config,
+                  realtimeVoice: {
+                    ...config.realtimeVoice,
+                    autoInterrupt: checked
+                  }
+                })
+              }
+            />
+          </div>
+
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-background px-3 py-2">
+            <Label>AEC</Label>
+            <Switch
+              checked={config.realtimeVoice.aecEnabled}
+              onChange={(checked) =>
+                setConfig({
+                  ...config,
+                  realtimeVoice: {
+                    ...config.realtimeVoice,
+                    aecEnabled: checked
+                  }
+                })
+              }
+            />
+          </div>
+        </div>
       </CardContent>
     </Card>
   );

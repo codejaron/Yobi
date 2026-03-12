@@ -129,6 +129,8 @@ export const scheduledTaskRunStatusSchema = z.enum([
 ]);
 
 export const themeModeSchema = z.enum(["system", "light", "dark"]);
+export const realtimeVoiceModeSchema = z.enum(["ptt", "free"]);
+export const realtimeVoiceFirstChunkStrategySchema = z.enum(["aggressive", "balanced"]);
 
 export const scheduledTaskSchema = z
   .object({
@@ -376,8 +378,17 @@ export const appConfigSchema = z
     realtimeVoice: z
       .object({
         enabled: z.boolean().default(false),
-        whisperMode: z.enum(["local", "api"]).default("api"),
-        autoInterrupt: z.boolean().default(true)
+        mode: realtimeVoiceModeSchema.default("ptt"),
+        vadThreshold: z.number().min(0).max(1).default(0.5),
+        minSpeechMs: z.number().int().min(50).max(10_000).default(180),
+        minSilenceMs: z.number().int().min(100).max(10_000).default(600),
+        preRollMs: z.number().int().min(0).max(5_000).default(240),
+        maxUtteranceMs: z.number().int().min(1_000).max(5 * 60_000).default(45_000),
+        firstChunkStrategy: realtimeVoiceFirstChunkStrategySchema.default("aggressive"),
+        chunkFlushMs: z.number().int().min(100).max(10_000).default(450),
+        autoInterrupt: z.boolean().default(true),
+        aecEnabled: z.boolean().default(true),
+        playbackCrossfadeMs: z.number().int().min(0).max(1_000).default(80)
       })
       .strict(),
     proactive: z
@@ -553,6 +564,8 @@ export type ScheduledTaskRunStatus = z.infer<typeof scheduledTaskRunStatusSchema
 export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
 export type ScheduledTaskRun = z.infer<typeof scheduledTaskRunSchema>;
 export type ScheduledTaskInput = z.infer<typeof scheduledTaskInputSchema>;
+export type RealtimeVoiceMode = z.infer<typeof realtimeVoiceModeSchema>;
+export type RealtimeVoiceFirstChunkStrategy = z.infer<typeof realtimeVoiceFirstChunkStrategySchema>;
 
 export type ChatRole = "system" | "user" | "assistant";
 export type CommandApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -604,13 +617,101 @@ export interface ToolTraceItem {
   durationMs?: number;
 }
 
+export type VoiceSessionPhase =
+  | "idle"
+  | "listening"
+  | "user-speaking"
+  | "transcribing"
+  | "assistant-thinking"
+  | "assistant-speaking"
+  | "interrupted"
+  | "error";
+
+export interface VoiceSessionTarget {
+  resourceId: string;
+  threadId: string;
+  source: "console" | "pet" | "voice";
+}
+
+export interface VoicePlaybackState {
+  active: boolean;
+  queueLength: number;
+  level: number;
+  currentText: string;
+}
+
+export interface VoiceHistoryMeta {
+  source: "voice";
+  sessionId: string;
+  mode: RealtimeVoiceMode;
+  interrupted: boolean;
+  playedTextLength: number;
+  asrProvider: AppConfig["voice"]["asrProvider"];
+  ttsProvider: AppConfig["voice"]["ttsProvider"];
+}
+
 export interface HistoryMessageMeta {
   proactive?: boolean;
   source?: "yobi";
   toolTrace?: {
     items: ToolTraceItem[];
   };
+  voice?: VoiceHistoryMeta;
 }
+
+export interface VoiceSessionState {
+  sessionId: string | null;
+  phase: VoiceSessionPhase;
+  mode: RealtimeVoiceMode;
+  target: VoiceSessionTarget | null;
+  userTranscript: string;
+  assistantTranscript: string;
+  lastInterruptReason: "vad" | "manual" | "system" | null;
+  errorMessage: string | null;
+  playback: VoicePlaybackState;
+  updatedAt: string;
+}
+
+export type VoiceSessionCommand =
+  | { type: "start"; target?: Partial<VoiceSessionTarget>; mode?: RealtimeVoiceMode }
+  | { type: "stop" }
+  | { type: "interrupt"; reason?: "vad" | "manual" | "system" }
+  | { type: "set-mode"; mode: RealtimeVoiceMode }
+  | { type: "ptt"; phase: "down" | "up" };
+
+export type VoiceSessionEvent =
+  | {
+      type: "state";
+      state: VoiceSessionState;
+      timestamp: string;
+    }
+  | {
+      type: "user-transcript";
+      text: string;
+      isFinal: boolean;
+      timestamp: string;
+    }
+  | {
+      type: "assistant-transcript";
+      text: string;
+      isFinal: boolean;
+      timestamp: string;
+    }
+  | {
+      type: "speech-level";
+      level: number;
+      timestamp: string;
+    }
+  | {
+      type: "playback";
+      playback: VoicePlaybackState;
+      timestamp: string;
+    }
+  | {
+      type: "error";
+      message: string;
+      timestamp: string;
+    };
 
 export type ConsoleRunEventV2 =
   | {
@@ -1234,8 +1335,17 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   realtimeVoice: {
     enabled: false,
-    whisperMode: "api",
-    autoInterrupt: true
+    mode: "ptt",
+    vadThreshold: 0.5,
+    minSpeechMs: 180,
+    minSilenceMs: 600,
+    preRollMs: 240,
+    maxUtteranceMs: 45_000,
+    firstChunkStrategy: "aggressive",
+    chunkFlushMs: 450,
+    autoInterrupt: true,
+    aecEnabled: true,
+    playbackCrossfadeMs: 80
   },
   proactive: {
     enabled: false,

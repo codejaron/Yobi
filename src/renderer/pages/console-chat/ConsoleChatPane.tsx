@@ -1,5 +1,5 @@
 import type { FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
-import type { CommandApprovalDecision } from "@shared/types";
+import type { CommandApprovalDecision, VoiceSessionState } from "@shared/types";
 import { Loader2, Mic, Square } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -47,6 +47,9 @@ interface ConsoleChatPaneProps {
   transcribing: boolean;
   micButtonLabel: string;
   stoppingRequest: boolean;
+  voiceSession: VoiceSessionState | null;
+  toggleVoiceSession: () => Promise<void>;
+  interruptVoiceSession: () => Promise<void>;
   sttReady: boolean;
   micHint: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -81,6 +84,9 @@ export function ConsoleChatPane({
   transcribing,
   micButtonLabel,
   stoppingRequest,
+  voiceSession,
+  toggleVoiceSession,
+  interruptVoiceSession,
   sttReady,
   micHint,
   onSubmit,
@@ -92,16 +98,45 @@ export function ConsoleChatPane({
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div>
           <CardTitle>对话窗口</CardTitle>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge className="status-badge status-badge--neutral">
+              语音 {voiceSession?.phase ?? "idle"}
+            </Badge>
+            <span>
+              模式 {voiceSession?.mode ?? "ptt"}
+            </span>
+            {voiceSession?.sessionId ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => void interruptVoiceSession()}
+                className="h-7 px-2 text-xs"
+              >
+                打断语音
+              </Button>
+            ) : null}
+          </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void clearHistory()}
-          disabled={busy || clearingHistory || !historyLoaded}
-          className="theme-danger-button"
-        >
-          {clearingHistory ? "清空中..." : "清空历史记录"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => void toggleVoiceSession()}
+          >
+            {voiceSession?.sessionId ? "停止实时语音" : "启动实时语音"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void clearHistory()}
+            disabled={busy || clearingHistory || !historyLoaded}
+            className="theme-danger-button"
+          >
+            {clearingHistory ? "清空中..." : "清空历史记录"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
         {skillsCatalog ? (

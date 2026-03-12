@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, UIEvent } from "react";
-import type { CommandApprovalDecision, ConsoleRunEventV2, HistoryMessage } from "@shared/types";
+import type {
+  CommandApprovalDecision,
+  ConsoleRunEventV2,
+  HistoryMessage,
+  VoiceSessionEvent,
+  VoiceSessionState
+} from "@shared/types";
 import {
   applyConsoleEventToAssistantProcess,
   createAssistantTurnProcess,
@@ -46,6 +52,9 @@ export interface ConsoleChatController {
   micButtonDisabled: boolean;
   micButtonLabel: string;
   stoppingRequest: boolean;
+  voiceSession: VoiceSessionState | null;
+  toggleVoiceSession: () => Promise<void>;
+  interruptVoiceSession: () => Promise<void>;
   chatBottomRef: React.RefObject<HTMLDivElement | null>;
   chatListRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLInputElement | null>;
@@ -117,6 +126,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [activatedSkills, setActivatedSkills] = useState<ConsoleActivatedSkill[]>([]);
   const [approvalIndex, setApprovalIndex] = useState(0);
   const [stoppingRequestId, setStoppingRequestId] = useState<string | null>(null);
+  const [voiceSession, setVoiceSession] = useState<VoiceSessionState | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
@@ -409,6 +419,12 @@ export function useConsoleChatController(): ConsoleChatController {
     }
   }, [micState, startMicRecording, stopMicRecording]);
 
+  const handleVoiceSessionEvent = useCallback((event: VoiceSessionEvent) => {
+    if (event.type === "state") {
+      setVoiceSession(event.state);
+    }
+  }, []);
+
   const clearHistory = useCallback(async () => {
     if (activeRequestId || clearingHistory) {
       return;
@@ -519,6 +535,32 @@ export function useConsoleChatController(): ConsoleChatController {
       handleChatEvent(event);
     });
   }, [handleChatEvent]);
+
+  useEffect(() => {
+    void window.companion.getVoiceSessionState().then((state) => {
+      setVoiceSession(state);
+    }).catch(() => undefined);
+
+    return window.companion.onVoiceSessionEvent((event) => {
+      handleVoiceSessionEvent(event);
+    });
+  }, [handleVoiceSessionEvent]);
+
+  const toggleVoiceSession = useCallback(async () => {
+    if (voiceSession?.sessionId) {
+      await window.companion.stopVoiceSession();
+      return;
+    }
+
+    const started = await window.companion.startVoiceSession();
+    setVoiceSession(started);
+  }, [voiceSession?.sessionId]);
+
+  const interruptVoiceSession = useCallback(async () => {
+    await window.companion.interruptVoiceSession({
+      reason: "manual"
+    });
+  }, []);
 
   useEffect(() => {
     void loadLatestHistory();
@@ -742,6 +784,9 @@ export function useConsoleChatController(): ConsoleChatController {
     micButtonDisabled,
     micButtonLabel,
     stoppingRequest,
+    voiceSession,
+    toggleVoiceSession,
+    interruptVoiceSession,
     chatBottomRef,
     chatListRef,
     inputRef,

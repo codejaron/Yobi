@@ -896,6 +896,7 @@
           let suppressTapUntil = 0;
           let thinkingActive = false;
           let speechActive = false;
+          let remoteSpeechActive = false;
           let activeAudio = null;
           let syntheticLipSyncRaf = 0;
           let audioLipSyncRaf = 0;
@@ -1422,15 +1423,44 @@
               activeAudio.load();
             } catch {}
 
-            speechActive = false;
+            speechActive = remoteSpeechActive;
             activeAudio = null;
             stopLipSync();
           };
 
           const finishSpeech = () => {
-            speechActive = false;
+            speechActive = remoteSpeechActive;
             activeAudio = null;
             stopLipSync();
+            if (remoteSpeechActive) {
+              updateStatus("talking");
+              return;
+            }
+            if (thinkingActive) {
+              applyThinkingState();
+              return;
+            }
+            enterIdle(false);
+          };
+
+          const applyRemoteSpeechState = (active) => {
+            remoteSpeechActive = active;
+            speechActive = remoteSpeechActive || Boolean(activeAudio);
+            if (remoteSpeechActive) {
+              clearIdleMotionLoop();
+              clearStatusTimer();
+              pulseModel();
+              playMotion(talkingMotionGroup);
+              updateStatus("talking");
+              return;
+            }
+
+            if (activeAudio) {
+              return;
+            }
+
+            stopLipSync();
+            setMouthOpen(0);
             if (thinkingActive) {
               applyThinkingState();
               return;
@@ -2097,6 +2127,18 @@
 
             if (data.type === "speech") {
               playPetSpeech(data.audioBase64, data.mimeType);
+              return;
+            }
+
+            if (data.type === "voice-state") {
+              applyRemoteSpeechState(data.phase === "assistant-speaking");
+              return;
+            }
+
+            if (data.type === "speech-level") {
+              if (remoteSpeechActive && !activeAudio) {
+                setMouthOpen(Number.isFinite(data.level) ? data.level : 0);
+              }
             }
           });
         } catch (error) {

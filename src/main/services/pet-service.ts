@@ -18,6 +18,8 @@ import { SystemPermissionsService } from "@main/services/system-permissions";
 import { extractEmotionTag } from "@main/core/emotion-tags";
 import { StateStore } from "@main/kernel/state-store";
 import { shouldPublishEmotionState } from "@main/pet/emotion-state-sync";
+import { shouldUseUnifiedRealtimeVoice } from "@main/services/pet-voice-mode";
+import type { VoiceSessionEvent, VoiceSessionPhase } from "@shared/types";
 
 interface PetServiceInput {
   paths: CompanionPaths;
@@ -41,11 +43,15 @@ export class PetService {
   private latestEmotionalState: EmotionalState = { ...DEFAULT_PET_EMOTION_CONFIG.defaultEmotion };
   private lastPublishedEmotionalState: EmotionalState | null = null;
   private lastPublishedAtMs = 0;
+  private lastVoicePhase: VoiceSessionPhase = "idle";
 
   constructor(private readonly input: PetServiceInput) {
     this.input.stateStore.subscribe((state) => {
       this.handleKernelStateSnapshot(state);
     }, { emitCurrent: true });
+    this.input.realtimeVoice.onEvent((event) => {
+      this.handleRealtimeVoiceEvent(event);
+    });
   }
 
   isPetOnline(): boolean {
@@ -256,6 +262,12 @@ export class PetService {
   }
 
   async syncGlobalPetPushToTalk(): Promise<void> {
+    if (shouldUseUnifiedRealtimeVoice(this.input.getConfig())) {
+      this.input.globalPtt.stop();
+      this.petPttRecording = false;
+      return;
+    }
+
     if (!this.shouldEnableGlobalPetPushToTalk()) {
       this.input.globalPtt.stop();
       if (this.petPttRecording) {
@@ -313,7 +325,7 @@ export class PetService {
   }
 
   syncRealtimeVoice(): void {
-    if (this.input.getConfig().realtimeVoice.enabled) {
+    if (shouldUseUnifiedRealtimeVoice(this.input.getConfig())) {
       this.input.realtimeVoice.start();
       return;
     }
@@ -340,6 +352,11 @@ export class PetService {
   }
 
   private async handleGlobalPetPushToTalkPhase(phase: GlobalPttPhase): Promise<void> {
+    if (shouldUseUnifiedRealtimeVoice(this.input.getConfig())) {
+      await this.input.realtimeVoice.handlePttPhase(phase);
+      return;
+    }
+
     if (!this.shouldEnableGlobalPetPushToTalk()) {
       this.petPttRecording = false;
       return;
@@ -396,28 +413,37 @@ export class PetService {
 
   private async emitPetSpeech(text: string): Promise<void> {
     const normalized = text.trim();
-    if (!normalized || !this.input.getConfig().realtimeVoice.enabled || !this.input.pet.isOnline()) {
+    if (!normalized || !this.input.pet.isOnline()) {
+      return;
+    }
+
+    if (!shouldUseUnifiedRealtimeVoice(this.input.getConfig())) {
+      try {
+        const config = this.input.getConfig();
+        const audio = await this.input.voiceRouter.synthesize({
+          text: normalized,
+          edgeConfig: {
+            voice: config.voice.ttsVoice,
+            rate: config.voice.ttsRate,
+            pitch: config.voice.ttsPitch,
+            requestTimeoutMs: config.voice.requestTimeoutMs,
+            retryCount: config.voice.retryCount
+          }
+        });
+
+        this.input.pet.emitEvent({
+          type: "speech",
+          audioBase64: audio.toString("base64"),
+          mimeType: "audio/mpeg"
+        });
+      } catch (error) {
+        logger.warn("pet", "speech-synthesis-failed", undefined, error);
+      }
       return;
     }
 
     try {
-      const config = this.input.getConfig();
-      const audio = await this.input.voiceRouter.synthesize({
-        text: normalized,
-        edgeConfig: {
-          voice: config.voice.ttsVoice,
-          rate: config.voice.ttsRate,
-          pitch: config.voice.ttsPitch,
-          requestTimeoutMs: config.voice.requestTimeoutMs,
-          retryCount: config.voice.retryCount
-        }
-      });
-
-      this.input.pet.emitEvent({
-        type: "speech",
-        audioBase64: audio.toString("base64"),
-        mimeType: "audio/mpeg"
-      });
+      await this.input.realtimeVoice.speakText(normalized);
     } catch (error) {
       logger.warn("pet", "speech-synthesis-failed", undefined, error);
     }
@@ -494,5 +520,48 @@ export class PetService {
 
   private async notifyStatusChange(): Promise<void> {
     await this.input.onStatusChange?.();
+  }
+
+  private handleRealtimeVoiceEvent(event: VoiceSessionEvent): void {
+    if (!this.input.pet.isOnline()) {
+      return;
+    }
+
+    if (event.type === "state") {
+      this.input.pet.emitEvent({
+        type: "voice-state",
+        phase: event.state.phase,
+        mode: event.state.mode
+      });
+
+      if (event.state.phase === "assistant-thinking" && this.lastVoicePhase !== "assistant-thinking") {
+        this.input.pet.emitEvent({
+          type: "thinking",
+          value: "start"
+        });
+      } else if (this.lastVoicePhase === "assistant-thinking" && event.state.phase !== "assistant-thinking") {
+        this.input.pet.emitEvent({
+          type: "thinking",
+          value: "stop"
+        });
+      }
+
+      if (event.state.phase === "assistant-speaking" && this.lastVoicePhase !== "assistant-speaking") {
+        this.input.pet.emitEvent({
+          type: "talking",
+          value: "talking"
+        });
+      }
+
+      this.lastVoicePhase = event.state.phase;
+      return;
+    }
+
+    if (event.type === "speech-level") {
+      this.input.pet.emitEvent({
+        type: "speech-level",
+        level: event.level
+      });
+    }
   }
 }

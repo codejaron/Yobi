@@ -1,19 +1,1036 @@
+import { createRequire } from "node:module";
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import type {
+  AppConfig,
+  RealtimeVoiceMode,
+  VoiceSessionEvent,
+  VoiceSessionState,
+  VoiceSessionTarget
+} from "@shared/types";
+import type { RuntimeInboundChannel } from "@main/storage/runtime-context-store";
+import type { AppLogger } from "./logger";
+import type { CompanionPaths } from "@main/storage/paths";
+import type { YobiMemory } from "@main/memory/setup";
+import type { ConversationEngine } from "@main/core/conversation";
+import { SentenceChunkBuffer } from "./realtime-voice-chunker";
+import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
+import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voice-state";
+import { estimateSpeechProbabilityFromRms } from "./realtime-voice-vad";
+import { VoiceHostWindowController, type VoiceHostMessage } from "./voice-host-window";
+import { VoiceProviderRouter, type StreamingAsrSession, type StreamingTtsSession } from "./voice-router";
+
+const require = createRequire(import.meta.url);
+
+type VadContextLike = {
+  getWindowSamples: () => number;
+  process: (samples: Float32Array) => number;
+  reset: () => void;
+  free: () => void;
+};
+
+interface RealtimeVoiceServiceInput {
+  paths: CompanionPaths;
+  logger: AppLogger;
+  getConfig: () => AppConfig;
+  voiceRouter: VoiceProviderRouter;
+  conversation: ConversationEngine;
+  memory: YobiMemory;
+  defaultTarget: {
+    resourceId: string;
+    threadId: string;
+  };
+  onRecordUserActivity?: (input: {
+    channel: RuntimeInboundChannel;
+    chatId?: string;
+    text?: string;
+  }) => Promise<void>;
+  onAssistantMessage?: () => Promise<void>;
+  onStatusChange?: () => void | Promise<void>;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
+  return {
+    sessionId: null,
+    phase: "idle",
+    mode,
+    target: null,
+    userTranscript: "",
+    assistantTranscript: "",
+    lastInterruptReason: null,
+    errorMessage: null,
+    playback: {
+      active: false,
+      queueLength: 0,
+      level: 0,
+      currentText: ""
+    },
+    updatedAt: nowIso()
+  };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.max(min, Math.min(max, value));
+}
+
+function pcm16Rms(chunk: Buffer): number {
+  if (chunk.length < 2) {
+    return 0;
+  }
+
+  const sampleCount = Math.floor(chunk.length / 2);
+  let energy = 0;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = chunk.readInt16LE(index * 2) / 0x8000;
+    energy += sample * sample;
+  }
+
+  return Math.sqrt(energy / sampleCount);
+}
+
+function pcm16ToFloat32(pcm: Buffer): Float32Array {
+  const safeLength = pcm.length - (pcm.length % 2);
+  const sampleCount = safeLength / 2;
+  const output = new Float32Array(sampleCount);
+  for (let index = 0; index < sampleCount; index += 1) {
+    output[index] = pcm.readInt16LE(index * 2) / 0x8000;
+  }
+  return output;
+}
+
+class LocalVad {
+  private ctx: VadContextLike | null = null;
+  private pending = new Float32Array(0);
+
+  constructor(modelPath: string | null, private readonly logger: AppLogger) {
+    if (!modelPath || !existsSync(modelPath)) {
+      this.logger.warn("realtime-voice", "vad-model-missing", {
+        modelPath: modelPath ?? ""
+      });
+      return;
+    }
+
+    try {
+      const whisper = require("whisper-cpp-node") as {
+        createVadContext?: (input: {
+          model: string;
+          threshold?: number;
+          n_threads?: number;
+          no_prints?: boolean;
+        }) => VadContextLike;
+      };
+      if (typeof whisper.createVadContext === "function") {
+        this.ctx = whisper.createVadContext({
+          model: modelPath,
+          threshold: 0.5,
+          n_threads: 1,
+          no_prints: true
+        });
+      }
+    } catch (error) {
+      this.logger.warn("realtime-voice", "vad-init-failed", undefined, error);
+    }
+  }
+
+  process(chunk: Buffer): number {
+    if (!this.ctx) {
+      return estimateSpeechProbabilityFromRms(pcm16Rms(chunk));
+    }
+
+    const samples = pcm16ToFloat32(chunk);
+    const merged = new Float32Array(this.pending.length + samples.length);
+    merged.set(this.pending, 0);
+    merged.set(samples, this.pending.length);
+
+    const windowSamples = this.ctx.getWindowSamples();
+    let cursor = 0;
+    let probability = 0;
+    while (cursor + windowSamples <= merged.length) {
+      const slice = merged.subarray(cursor, cursor + windowSamples);
+      probability = Math.max(probability, this.ctx.process(slice));
+      cursor += windowSamples;
+    }
+
+    this.pending = merged.subarray(cursor);
+    return probability;
+  }
+
+  reset(): void {
+    this.pending = new Float32Array(0);
+    this.ctx?.reset();
+  }
+
+  dispose(): void {
+    this.ctx?.free();
+    this.ctx = null;
+  }
+}
+
 export class RealtimeVoiceService {
-  private active = false;
+  private readonly host: VoiceHostWindowController;
+  private readonly listeners = new Set<(event: VoiceSessionEvent) => void>();
+  private state: VoiceSessionState;
+  private pttHeld = false;
+  private vad: LocalVad | null = null;
+  private speechActive = false;
+  private speechStartedAtMs = 0;
+  private lastSpeechAtMs = 0;
+  private preRollBuffers: Buffer[] = [];
+  private speechBuffers: Buffer[] = [];
+  private activeAsrSession: StreamingAsrSession | null = null;
+  private activeTtsSession: StreamingTtsSession | null = null;
+  private replyAbortController: AbortController | null = null;
+  private responseSequence = Promise.resolve();
+  private ttsSequence = Promise.resolve();
+  private pendingSynthesisCount = 0;
+  private pendingPlaybackTexts = new Map<string, string>();
+  private playedChunkIds = new Set<string>();
+  private llmFinished = false;
+  private llmVisibleText = "";
+  private playedAssistantText = "";
+  private assistantCommitPersisted = false;
+
+  constructor(private readonly input: RealtimeVoiceServiceInput) {
+    this.host = new VoiceHostWindowController(input.logger);
+    this.state = createEmptyVoiceState(this.input.getConfig().realtimeVoice.mode);
+    this.host.onMessage((message) => {
+      void this.handleHostMessage(message);
+    });
+  }
 
   start(): void {
-    this.active = true;
+    const config = this.input.getConfig();
+    this.state = createEmptyVoiceState(config.realtimeVoice.mode);
+    this.ensureVad();
+    if (config.realtimeVoice.enabled) {
+      void this.startSession({
+        mode: config.realtimeVoice.mode
+      });
+    }
   }
 
   stop(): void {
-    this.active = false;
+    void this.stopSession();
+    this.host.close();
+    this.vad?.dispose();
+    this.vad = null;
   }
 
   isActive(): boolean {
-    return this.active;
+    return this.state.sessionId !== null;
   }
 
-  interrupt(): void {
-    // Placeholder for future streaming audio interrupt logic.
+  getState(): VoiceSessionState {
+    return {
+      ...this.state,
+      playback: {
+        ...this.state.playback
+      },
+      target: this.state.target ? { ...this.state.target } : null
+    };
+  }
+
+  onEvent(listener: (event: VoiceSessionEvent) => void): () => void {
+    this.listeners.add(listener);
+    listener({
+      type: "state",
+      state: this.getState(),
+      timestamp: nowIso()
+    });
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  async startSession(input?: {
+    mode?: RealtimeVoiceMode;
+    target?: Partial<VoiceSessionTarget>;
+  }): Promise<VoiceSessionState> {
+    const config = this.input.getConfig();
+    const mode = input?.mode ?? this.state.mode ?? config.realtimeVoice.mode;
+    const sessionId = this.state.sessionId ?? randomUUID();
+    const target: VoiceSessionTarget = {
+      resourceId: input?.target?.resourceId ?? this.input.defaultTarget.resourceId,
+      threadId: input?.target?.threadId ?? this.input.defaultTarget.threadId,
+      source: input?.target?.source ?? "voice"
+    };
+
+    this.state = createVoiceSessionState({
+      sessionId,
+      mode,
+      target
+    });
+    this.applyState({
+      type: "session-started"
+    });
+    this.ensureVad();
+    this.resetSpeechTracking();
+
+    if (mode === "free") {
+      await this.host.send({
+        type: "start-capture",
+        aecEnabled: config.realtimeVoice.aecEnabled
+      });
+    }
+
+    await this.notifyStatusChange();
+    return this.getState();
+  }
+
+  async stopSession(): Promise<{ accepted: boolean }> {
+    if (!this.state.sessionId) {
+      return {
+        accepted: false
+      };
+    }
+
+    await this.abortActiveResponse("system");
+    await this.host.send({
+      type: "stop-capture"
+    }).catch(() => undefined);
+    await this.host.send({
+      type: "clear-playback"
+    }).catch(() => undefined);
+    this.pttHeld = false;
+    this.resetSpeechTracking();
+    this.state = createEmptyVoiceState(this.state.mode);
+    this.emitState();
+    await this.notifyStatusChange();
+    return {
+      accepted: true
+    };
+  }
+
+  async interrupt(reason: "vad" | "manual" | "system" = "manual"): Promise<{ accepted: boolean }> {
+    if (!this.state.sessionId) {
+      return {
+        accepted: false
+      };
+    }
+
+    await this.abortActiveResponse(reason);
+    await this.host.send({
+      type: "clear-playback"
+    }).catch(() => undefined);
+    this.applyState({
+      type: "barge-in-detected",
+      reason
+    });
+    this.resetSpeechTracking();
+    return {
+      accepted: true
+    };
+  }
+
+  async setMode(mode: RealtimeVoiceMode): Promise<VoiceSessionState> {
+    this.state = {
+      ...this.state,
+      mode,
+      updatedAt: nowIso()
+    };
+    this.emitState();
+
+    if (!this.state.sessionId) {
+      return this.getState();
+    }
+
+    if (mode === "free") {
+      await this.host.send({
+        type: "start-capture",
+        aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
+      });
+    } else if (!this.pttHeld) {
+      await this.host.send({
+        type: "stop-capture"
+      }).catch(() => undefined);
+    }
+
+    return this.getState();
+  }
+
+  async handlePttPhase(phase: "down" | "up"): Promise<void> {
+    if (this.state.mode !== "ptt") {
+      return;
+    }
+
+    if (!this.state.sessionId) {
+      await this.startSession({
+        mode: "ptt"
+      });
+    }
+
+    if (phase === "down") {
+      if (this.pttHeld) {
+        return;
+      }
+
+      this.pttHeld = true;
+      this.resetSpeechTracking();
+      this.beginSpeech();
+      await this.host.send({
+        type: "start-capture",
+        aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
+      });
+      return;
+    }
+
+    if (!this.pttHeld) {
+      return;
+    }
+
+    this.pttHeld = false;
+    await this.host.send({
+      type: "stop-capture"
+    }).catch(() => undefined);
+    await this.finishSpeech();
+  }
+
+  async speakText(text: string): Promise<void> {
+    const normalized = text.trim();
+    if (!normalized) {
+      return;
+    }
+
+    const config = this.input.getConfig();
+    const session = this.input.voiceRouter.createStreamingTtsSession({
+      edgeConfig: {
+        voice: config.voice.ttsVoice,
+        rate: config.voice.ttsRate,
+        pitch: config.voice.ttsPitch,
+        requestTimeoutMs: config.voice.requestTimeoutMs,
+        retryCount: config.voice.retryCount
+      }
+    });
+    const audio = await session.synthesizeChunk(normalized);
+    await this.host.send({
+      type: "enqueue-playback",
+      id: `standalone-${randomUUID()}`,
+      audioBase64: audio.toString("base64"),
+      text: normalized,
+      mimeType: "audio/mpeg"
+    });
+    await session.close();
+  }
+
+  private emit(event: VoiceSessionEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.input.logger.warn("realtime-voice", "listener-failed", undefined, error);
+      }
+    }
+  }
+
+  private emitState(): void {
+    this.emit({
+      type: "state",
+      state: this.getState(),
+      timestamp: nowIso()
+    });
+  }
+
+  private ensureVad(): void {
+    if (this.vad) {
+      return;
+    }
+
+    const modelPath = path.join(this.input.paths.vadModelsDir, "ggml-silero-v6.2.0.bin");
+    this.vad = new LocalVad(modelPath, this.input.logger);
+  }
+
+  private resetSpeechTracking(): void {
+    this.speechActive = false;
+    this.speechStartedAtMs = 0;
+    this.lastSpeechAtMs = 0;
+    this.preRollBuffers = [];
+    this.speechBuffers = [];
+    this.vad?.reset();
+    if (this.activeAsrSession) {
+      void this.activeAsrSession.abort().catch(() => undefined);
+      this.activeAsrSession = null;
+    }
+  }
+
+  private rememberPreRoll(chunk: Buffer): void {
+    const preRollMs = Math.max(0, this.input.getConfig().realtimeVoice.preRollMs);
+    const maxBytes = Math.max(0, Math.round(preRollMs * 32));
+    if (maxBytes === 0) {
+      this.preRollBuffers = [];
+      return;
+    }
+
+    this.preRollBuffers.push(Buffer.from(chunk));
+    let total = this.preRollBuffers.reduce((sum, item) => sum + item.length, 0);
+    while (total > maxBytes && this.preRollBuffers.length > 0) {
+      const removed = this.preRollBuffers.shift();
+      total -= removed?.length ?? 0;
+    }
+  }
+
+  private beginSpeech(): void {
+    if (this.speechActive) {
+      return;
+    }
+
+    if (this.state.phase === "assistant-speaking" && this.input.getConfig().realtimeVoice.autoInterrupt) {
+      void this.interrupt("vad");
+    }
+
+    this.speechActive = true;
+    this.speechStartedAtMs = Date.now();
+    this.lastSpeechAtMs = this.speechStartedAtMs;
+    this.speechBuffers = [];
+    this.state = {
+      ...this.state,
+      userTranscript: "",
+      updatedAt: nowIso()
+    };
+    this.applyState({
+      type: "speech-started"
+    });
+    this.activeAsrSession = this.input.voiceRouter.createStreamingAsrSession({
+      sampleRate: 16_000,
+      onPartial: (text) => {
+        this.state = {
+          ...this.state,
+          userTranscript: text,
+          updatedAt: nowIso()
+        };
+        this.emit({
+          type: "user-transcript",
+          text,
+          isFinal: false,
+          timestamp: nowIso()
+        });
+        this.emitState();
+      }
+    });
+
+    for (const chunk of this.preRollBuffers) {
+      this.speechBuffers.push(Buffer.from(chunk));
+      void this.activeAsrSession.pushPcm(chunk).catch((error) => {
+        this.input.logger.warn("realtime-voice", "push-preroll-failed", undefined, error);
+      });
+    }
+  }
+
+  private async finishSpeech(): Promise<void> {
+    if (!this.speechActive) {
+      return;
+    }
+
+    this.speechActive = false;
+    this.applyState({
+      type: "speech-ended"
+    });
+
+    const asrSession = this.activeAsrSession;
+    this.activeAsrSession = null;
+    if (!asrSession) {
+      if (this.state.mode === "free") {
+        this.applyState({
+          type: "session-started"
+        });
+      }
+      return;
+    }
+
+    try {
+      const text = (await asrSession.flush()).trim();
+      if (!text) {
+        this.state = {
+          ...this.state,
+          userTranscript: "",
+          updatedAt: nowIso()
+        };
+        if (this.state.mode === "free") {
+          this.applyState({
+            type: "session-started"
+          });
+        }
+        return;
+      }
+
+      this.state = {
+        ...this.state,
+        userTranscript: text,
+        updatedAt: nowIso()
+      };
+      this.emit({
+        type: "user-transcript",
+        text,
+        isFinal: true,
+        timestamp: nowIso()
+      });
+      this.emitState();
+      await this.handleUserTurn(text);
+    } catch (error) {
+      this.fail(error instanceof Error ? error.message : "语音识别失败");
+    } finally {
+      this.preRollBuffers = [];
+      this.speechBuffers = [];
+      this.vad?.reset();
+    }
+  }
+
+  private async handleHostMessage(message: VoiceHostMessage): Promise<void> {
+    if (message.type === "pcm-frame") {
+      const chunk = Buffer.from(message.pcm);
+      await this.handlePcmFrame(chunk, message.sampleRate);
+      return;
+    }
+
+    if (message.type === "capture-started") {
+      return;
+    }
+
+    if (message.type === "capture-stopped") {
+      return;
+    }
+
+    if (message.type === "capture-error") {
+      this.fail(message.message);
+      return;
+    }
+
+    if (message.type === "playback-started") {
+      this.pendingPlaybackTexts.set(message.id, message.text);
+      if (!this.playedChunkIds.has(message.id)) {
+        this.playedChunkIds.add(message.id);
+        this.playedAssistantText += message.text;
+      }
+      this.applyState({
+        type: "assistant-playback-started"
+      });
+      this.state = {
+        ...this.state,
+        playback: {
+          active: true,
+          queueLength: message.queueLength,
+          level: this.state.playback.level,
+          currentText: message.text
+        },
+        updatedAt: nowIso()
+      };
+      this.emit({
+        type: "playback",
+        playback: {
+          ...this.state.playback
+        },
+        timestamp: nowIso()
+      });
+      this.emitState();
+      return;
+    }
+
+    if (message.type === "playback-ended") {
+      this.pendingPlaybackTexts.delete(message.id);
+      this.state = {
+        ...this.state,
+        playback: {
+          active: message.queueLength > 0,
+          queueLength: message.queueLength,
+          level: 0,
+          currentText: ""
+        },
+        updatedAt: nowIso()
+      };
+      this.emit({
+        type: "playback",
+        playback: {
+          ...this.state.playback
+        },
+        timestamp: nowIso()
+      });
+      this.emitState();
+      await this.maybeFinalizeAssistantTurn();
+      return;
+    }
+
+    if (message.type === "playback-cleared") {
+      this.pendingPlaybackTexts.clear();
+      this.state = {
+        ...this.state,
+        playback: {
+          active: false,
+          queueLength: message.queueLength,
+          level: 0,
+          currentText: ""
+        },
+        updatedAt: nowIso()
+      };
+      this.emitState();
+      return;
+    }
+
+    if (message.type === "speech-level") {
+      this.state = reduceVoiceSessionState(this.state, {
+        type: "playback-level",
+        level: message.level,
+        queueLength: message.queueLength,
+        currentText: message.currentText
+      });
+      this.emit({
+        type: "speech-level",
+        level: message.level,
+        timestamp: nowIso()
+      });
+      this.emit({
+        type: "playback",
+        playback: {
+          ...this.state.playback
+        },
+        timestamp: nowIso()
+      });
+      this.emitState();
+      return;
+    }
+
+    if (message.type === "playback-error") {
+      this.fail(message.message);
+    }
+  }
+
+  private async handlePcmFrame(chunk: Buffer, sampleRate: number): Promise<void> {
+    if (sampleRate !== 16_000 || chunk.length === 0) {
+      return;
+    }
+
+    if (this.state.mode === "ptt") {
+      if (!this.pttHeld || !this.activeAsrSession) {
+        return;
+      }
+
+      this.speechBuffers.push(Buffer.from(chunk));
+      await this.activeAsrSession.pushPcm(chunk);
+      return;
+    }
+
+    this.rememberPreRoll(chunk);
+    const probability = this.vad?.process(chunk) ?? clampNumber(pcm16Rms(chunk) * 4, 0, 1);
+    const threshold = clampNumber(this.input.getConfig().realtimeVoice.vadThreshold, 0.05, 0.95);
+    const nowMs = Date.now();
+
+    if (!this.speechActive) {
+      if (probability >= threshold) {
+        this.beginSpeech();
+      }
+
+      if (this.speechActive && this.activeAsrSession) {
+        this.speechBuffers.push(Buffer.from(chunk));
+        await this.activeAsrSession.pushPcm(chunk);
+      }
+      return;
+    }
+
+    this.speechBuffers.push(Buffer.from(chunk));
+    await this.activeAsrSession?.pushPcm(chunk);
+    if (probability >= threshold) {
+      this.lastSpeechAtMs = nowMs;
+    }
+
+    const speechDuration = nowMs - this.speechStartedAtMs;
+    const silenceDuration = nowMs - this.lastSpeechAtMs;
+    const config = this.input.getConfig().realtimeVoice;
+    if (speechDuration >= config.maxUtteranceMs) {
+      await this.finishSpeech();
+      return;
+    }
+
+    if (speechDuration >= config.minSpeechMs && silenceDuration >= config.minSilenceMs) {
+      await this.finishSpeech();
+    }
+  }
+
+  private async handleUserTurn(text: string): Promise<void> {
+    const sessionId = this.state.sessionId;
+    const target = this.state.target;
+    if (!sessionId || !target) {
+      return;
+    }
+
+    const config = this.input.getConfig();
+    await this.input.memory.rememberMessage({
+      threadId: target.threadId,
+      resourceId: target.resourceId,
+      role: "user",
+      text,
+      metadata: {
+        channel: "console",
+        voice: {
+          source: "voice",
+          sessionId,
+          mode: this.state.mode,
+          interrupted: false,
+          playedTextLength: 0,
+          asrProvider: config.voice.asrProvider,
+          ttsProvider: config.voice.ttsProvider
+        }
+      }
+    });
+    await this.input.onRecordUserActivity?.({
+      channel: "console",
+      text
+    });
+
+    this.replyAbortController = new AbortController();
+    this.llmFinished = false;
+    this.llmVisibleText = "";
+    this.playedAssistantText = "";
+    this.assistantCommitPersisted = false;
+    this.ttsSequence = Promise.resolve();
+    this.pendingPlaybackTexts.clear();
+    this.playedChunkIds.clear();
+
+    const chunker = new SentenceChunkBuffer({
+      firstChunkMinChars: config.realtimeVoice.firstChunkStrategy === "aggressive" ? 6 : 12,
+      subsequentChunkMinChars: 18
+    });
+    const ttsSession = this.input.voiceRouter.createStreamingTtsSession({
+      edgeConfig: {
+        voice: config.voice.ttsVoice,
+        rate: config.voice.ttsRate,
+        pitch: config.voice.ttsPitch,
+        requestTimeoutMs: config.voice.requestTimeoutMs,
+        retryCount: config.voice.retryCount
+      }
+    });
+    this.activeTtsSession = ttsSession;
+    this.applyState({
+      type: "assistant-thinking-started"
+    });
+
+    this.responseSequence = (async () => {
+      try {
+        const finalText = await this.input.conversation.reply({
+          text,
+          channel: "console",
+          resourceId: target.resourceId,
+          threadId: target.threadId,
+          persistUserMessage: false,
+          assistantPersistence: "caller",
+          abortSignal: this.replyAbortController?.signal,
+          stream: {
+            onVisibleTextDelta: (delta) => {
+              this.llmVisibleText += delta;
+              this.state = {
+                ...this.state,
+                assistantTranscript: this.llmVisibleText,
+                updatedAt: nowIso()
+              };
+              this.emit({
+                type: "assistant-transcript",
+                text: this.llmVisibleText,
+                isFinal: false,
+                timestamp: nowIso()
+              });
+              this.emitState();
+              for (const chunk of chunker.push(delta)) {
+                void this.enqueueTtsChunk(chunk, ttsSession);
+              }
+            },
+            onVisibleTextFinal: (visibleText) => {
+              this.llmVisibleText = visibleText;
+            },
+            onAbortVisibleText: (visibleText) => {
+              this.llmVisibleText = visibleText;
+            }
+          }
+        });
+
+        for (const chunk of chunker.flush()) {
+          await this.enqueueTtsChunk(chunk, ttsSession);
+        }
+
+        this.llmVisibleText = finalText;
+        this.llmFinished = true;
+        this.emit({
+          type: "assistant-transcript",
+          text: finalText,
+          isFinal: true,
+          timestamp: nowIso()
+        });
+        this.state = {
+          ...this.state,
+          assistantTranscript: finalText,
+          updatedAt: nowIso()
+        };
+        this.emitState();
+        await this.maybeFinalizeAssistantTurn();
+      } catch (error) {
+        if (this.replyAbortController?.signal.aborted) {
+          await this.persistInterruptedAssistantTurn();
+          return;
+        }
+
+        this.fail(error instanceof Error ? error.message : "实时语音回复失败");
+      } finally {
+        this.llmFinished = true;
+        await ttsSession.close();
+        if (this.activeTtsSession === ttsSession) {
+          this.activeTtsSession = null;
+        }
+      }
+    })();
+    await this.responseSequence;
+  }
+
+  private async enqueueTtsChunk(text: string, session: StreamingTtsSession): Promise<void> {
+    const normalized = text.trim();
+    if (!normalized) {
+      return;
+    }
+
+    this.ttsSequence = this.ttsSequence.then(async () => {
+      this.pendingSynthesisCount += 1;
+      try {
+        const audio = await session.synthesizeChunk(normalized);
+        const id = `voice-playback-${randomUUID()}`;
+        this.pendingPlaybackTexts.set(id, normalized);
+        await this.host.send({
+          type: "enqueue-playback",
+          id,
+          audioBase64: audio.toString("base64"),
+          text: normalized,
+          mimeType: "audio/mpeg"
+        });
+        this.state = {
+          ...this.state,
+          playback: {
+            ...this.state.playback,
+            queueLength: this.pendingPlaybackTexts.size
+          },
+          updatedAt: nowIso()
+        };
+        this.emitState();
+      } catch (error) {
+        this.input.logger.warn("realtime-voice", "tts-chunk-failed", {
+          textLength: normalized.length
+        }, error);
+      } finally {
+        this.pendingSynthesisCount = Math.max(0, this.pendingSynthesisCount - 1);
+      }
+    });
+
+    await this.ttsSequence;
+  }
+
+  private async maybeFinalizeAssistantTurn(): Promise<void> {
+    if (!this.llmFinished || this.pendingSynthesisCount > 0 || this.pendingPlaybackTexts.size > 0) {
+      return;
+    }
+
+    if (this.assistantCommitPersisted || !this.state.sessionId || !this.state.target) {
+      return;
+    }
+
+    this.assistantCommitPersisted = true;
+    if (this.llmVisibleText.trim()) {
+      await this.input.conversation.rememberAssistantMessage({
+        threadId: this.state.target.threadId,
+        resourceId: this.state.target.resourceId,
+        channel: "console",
+        text: this.llmVisibleText,
+        metadata: {
+          channel: "console",
+          voice: {
+            source: "voice",
+            sessionId: this.state.sessionId,
+            mode: this.state.mode,
+            interrupted: false,
+            playedTextLength: this.llmVisibleText.length,
+            asrProvider: this.input.getConfig().voice.asrProvider,
+            ttsProvider: this.input.getConfig().voice.ttsProvider
+          }
+        }
+      });
+      await this.input.onAssistantMessage?.();
+    }
+
+    this.applyState({
+      type: "assistant-playback-finished"
+    });
+    await this.notifyStatusChange();
+  }
+
+  private async persistInterruptedAssistantTurn(): Promise<void> {
+    if (this.assistantCommitPersisted || !this.state.sessionId || !this.state.target) {
+      return;
+    }
+
+    const commit = buildInterruptedAssistantCommit({
+      fullText: this.llmVisibleText,
+      playedText: this.playedAssistantText,
+      sessionId: this.state.sessionId,
+      mode: this.state.mode,
+      asrProvider: this.input.getConfig().voice.asrProvider,
+      ttsProvider: this.input.getConfig().voice.ttsProvider
+    });
+
+    if (!commit.text.trim()) {
+      return;
+    }
+
+    this.assistantCommitPersisted = true;
+    await this.input.conversation.rememberAssistantMessage({
+      threadId: this.state.target.threadId,
+      resourceId: this.state.target.resourceId,
+      channel: "console",
+      text: commit.text,
+      metadata: {
+        channel: "console",
+        ...commit.metadata
+      }
+    });
+    await this.input.onAssistantMessage?.();
+  }
+
+  private async abortActiveResponse(reason: "vad" | "manual" | "system"): Promise<void> {
+    if (this.replyAbortController && !this.replyAbortController.signal.aborted) {
+      this.replyAbortController.abort();
+    }
+    this.replyAbortController = null;
+    await this.persistInterruptedAssistantTurn();
+    this.llmFinished = true;
+    this.ttsSequence = Promise.resolve();
+    this.pendingSynthesisCount = 0;
+    this.pendingPlaybackTexts.clear();
+    this.state = {
+      ...this.state,
+      lastInterruptReason: reason,
+      updatedAt: nowIso()
+    };
+  }
+
+  private applyState(event: Parameters<typeof reduceVoiceSessionState>[1]): void {
+    this.state = reduceVoiceSessionState(this.state, event);
+    this.emitState();
+  }
+
+  private fail(message: string): void {
+    this.state = reduceVoiceSessionState(this.state, {
+      type: "error",
+      message
+    });
+    this.emit({
+      type: "error",
+      message,
+      timestamp: nowIso()
+    });
+    this.emitState();
+  }
+
+  private async notifyStatusChange(): Promise<void> {
+    await this.input.onStatusChange?.();
   }
 }

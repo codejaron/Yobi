@@ -12,7 +12,11 @@ import type {
   ScheduledTask,
   ScheduledTaskInput,
   ScheduledTaskRun,
-  UserProfile
+  UserProfile,
+  VoiceSessionEvent,
+  VoiceSessionState,
+  RealtimeVoiceMode,
+  VoiceSessionTarget
 } from "./types";
 
 export interface CursorHistoryPage {
@@ -103,6 +107,16 @@ export interface CompanionApi {
     pcm16Base64: string;
     sampleRate: number;
   }): Promise<{ text: string }>;
+  getVoiceSessionState(): Promise<VoiceSessionState>;
+  startVoiceSession(input?: {
+    mode?: RealtimeVoiceMode;
+    target?: Partial<VoiceSessionTarget>;
+  }): Promise<VoiceSessionState>;
+  stopVoiceSession(): Promise<{ accepted: boolean }>;
+  interruptVoiceSession(input?: {
+    reason?: "vad" | "manual" | "system";
+  }): Promise<{ accepted: boolean }>;
+  setVoiceSessionMode(mode: RealtimeVoiceMode): Promise<VoiceSessionState>;
   listConsoleHistory(input?: {
     cursor?: string;
     limit?: number;
@@ -112,6 +126,7 @@ export interface CompanionApi {
     decision: CommandApprovalDecision;
   }): Promise<{ accepted: boolean }>;
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void;
+  onVoiceSessionEvent(listener: (event: VoiceSessionEvent) => void): () => void;
 
   listScheduledTasks(): Promise<{ tasks: ScheduledTask[]; runs: ScheduledTaskRun[] }>;
   saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;

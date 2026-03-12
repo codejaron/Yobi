@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { StreamingAsrSession } from "./voice-router";
 
 type WsLike = {
   on: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -26,6 +27,13 @@ interface AsrInput extends VoiceAuthInput {
   sampleRate: number;
   model: string;
   timeoutMs: number;
+}
+
+interface StreamingAsrInput extends VoiceAuthInput {
+  sampleRate: number;
+  model: string;
+  timeoutMs: number;
+  onPartial?: (text: string) => void;
 }
 
 const CN_WS_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference";
@@ -211,6 +219,238 @@ export class AlibabaVoiceService {
     const timeoutMs = clampInt(input.timeoutMs, 5000, 120_000);
     const text = await withTimeout(this.transcribeOnce(input), timeoutMs);
     return normalizeTranscript(text);
+  }
+
+  createStreamingAsrSession(input: StreamingAsrInput): StreamingAsrSession {
+    const taskId = makeTaskId();
+    const timeoutMs = clampInt(input.timeoutMs, 5000, 120_000);
+    let wsPromise: Promise<WsLike> | null = createWebSocket({
+      url: resolveWsUrl(input.region),
+      apiKey: input.apiKey,
+      timeoutMs
+    });
+    let ws: WsLike | null = null;
+    let settled = false;
+    let ready = false;
+    let finishSent = false;
+    const pieces: string[] = [];
+    let latestPartial = "";
+
+    let resolveReady: (() => void) | null = null;
+    let rejectReady: ((error: Error) => void) | null = null;
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+
+    let resolveFinished: ((text: string) => void) | null = null;
+    let rejectFinished: ((error: Error) => void) | null = null;
+    const finishedPromise = new Promise<string>((resolve, reject) => {
+      resolveFinished = resolve;
+      rejectFinished = reject;
+    });
+
+    const appendPiece = (text: string): void => {
+      const normalized = normalizeTranscript(text);
+      if (!normalized) {
+        return;
+      }
+
+      if (pieces.at(-1) === normalized) {
+        return;
+      }
+
+      pieces.push(normalized);
+    };
+
+    const finalize = (): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      try {
+        ws?.close();
+      } catch {}
+
+      if (pieces.length === 0 && latestPartial) {
+        appendPiece(latestPartial);
+      }
+
+      resolveReady?.();
+      resolveFinished?.(pieces.join(" ").trim());
+    };
+
+    const fail = (error: unknown): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      try {
+        ws?.close();
+      } catch {}
+
+      const normalized = normalizeError(error);
+      rejectReady?.(normalized);
+      rejectFinished?.(normalized);
+    };
+
+    void wsPromise
+      .then((socket) => {
+        ws = socket;
+        socket.on("error", (error) => {
+          fail(error);
+        });
+
+        socket.on("open", () => {
+          try {
+            socket.send(
+              jsonStringify({
+                header: {
+                  action: "run-task",
+                  task_id: taskId,
+                  streaming: "duplex"
+                },
+                payload: {
+                  task_group: "audio",
+                  task: "asr",
+                  function: "recognition",
+                  model: input.model,
+                  input: {},
+                  parameters: {
+                    format: "pcm",
+                    sample_rate: clampInt(input.sampleRate, 8000, 48_000),
+                    disfluency_removal_enabled: true,
+                    language_hints: ["zh", "en"]
+                  }
+                }
+              })
+            );
+          } catch (error) {
+            fail(error);
+          }
+        });
+
+        socket.on("message", (raw, isBinary) => {
+          if (settled || isBinary) {
+            return;
+          }
+
+          const frame = parseJsonFrame(raw);
+          if (!frame) {
+            return;
+          }
+
+          const header = (frame.header ?? {}) as {
+            event?: unknown;
+          };
+          const event = typeof header.event === "string" ? header.event : "";
+
+          if (event === "task-failed") {
+            fail(new Error(asErrorMessage(frame)));
+            return;
+          }
+
+          if (event === "task-started") {
+            if (ready) {
+              return;
+            }
+
+            ready = true;
+            resolveReady?.();
+            return;
+          }
+
+          if (event === "result-generated") {
+            const sentence =
+              (frame.payload as { output?: { sentence?: { text?: unknown; end?: unknown } } } | undefined)
+                ?.output?.sentence;
+
+            const sentenceText = typeof sentence?.text === "string" ? sentence.text : "";
+            if (!sentenceText) {
+              return;
+            }
+
+            latestPartial = sentenceText;
+            input.onPartial?.(normalizeTranscript(sentenceText));
+            if (sentence?.end === true) {
+              appendPiece(sentenceText);
+            }
+            return;
+          }
+
+          if (event === "task-finished") {
+            finalize();
+          }
+        });
+
+        socket.on("close", () => {
+          if (settled) {
+            return;
+          }
+
+          finalize();
+        });
+      })
+      .catch((error) => {
+        fail(error);
+      })
+      .finally(() => {
+        wsPromise = null;
+      });
+
+    return {
+      pushPcm: async (chunk: Buffer) => {
+        if (settled || chunk.length === 0) {
+          return;
+        }
+
+        await readyPromise;
+        if (settled || !ws) {
+          return;
+        }
+
+        ws.send(chunk);
+      },
+      flush: async () => {
+        if (settled) {
+          return finishedPromise;
+        }
+
+        await readyPromise;
+        if (!finishSent && ws) {
+          finishSent = true;
+          ws.send(
+            jsonStringify({
+              header: {
+                action: "finish-task",
+                task_id: taskId,
+                streaming: "duplex"
+              },
+              payload: {
+                input: {}
+              }
+            })
+          );
+        }
+
+        return finishedPromise;
+      },
+      abort: async () => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        try {
+          ws?.close();
+        } catch {}
+        const error = new Error("阿里流式识别已中断。");
+        rejectReady?.(error);
+        rejectFinished?.(error);
+      }
+    };
   }
 
   private async synthesizeOnce(input: TtsInput): Promise<Buffer> {

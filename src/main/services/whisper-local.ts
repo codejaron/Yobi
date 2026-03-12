@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import type { WhisperContext } from "whisper-cpp-node";
+import type { StreamingAsrSession } from "./voice-router";
 
 const require = createRequire(import.meta.url);
 const { createWhisperContext, transcribeAsync } = require("whisper-cpp-node") as typeof import("whisper-cpp-node");
@@ -119,6 +120,90 @@ export class WhisperLocalService {
 
   getLoadErrorMessage(): string | null {
     return this.loadError?.message ?? null;
+  }
+
+  createStreamingSession(input: {
+    sampleRate: number;
+    onPartial?: (text: string) => void;
+  }): StreamingAsrSession {
+    if (this.loadError) {
+      throw new Error(`本地 Whisper 初始化失败：${this.loadError.message}`);
+    }
+
+    if (!this.ctx) {
+      throw new Error("本地 Whisper 模型未就绪，请先下载模型并保存设置。");
+    }
+
+    let closed = false;
+    let transcribing = false;
+    let scheduled: NodeJS.Timeout | null = null;
+    let latestText = "";
+    const pcmChunks: Buffer[] = [];
+
+    const runPartial = async (): Promise<void> => {
+      if (closed || transcribing) {
+        return;
+      }
+
+      scheduled = null;
+      transcribing = true;
+      try {
+        const pcm = Buffer.concat(pcmChunks);
+        if (pcm.length === 0) {
+          return;
+        }
+
+        const nextText = await this.transcribe({
+          pcm,
+          sampleRate: input.sampleRate
+        });
+
+        if (!closed && nextText && nextText !== latestText) {
+          latestText = nextText;
+          input.onPartial?.(nextText);
+        }
+      } finally {
+        transcribing = false;
+      }
+    };
+
+    const schedulePartial = (): void => {
+      if (closed || scheduled || transcribing) {
+        return;
+      }
+
+      scheduled = setTimeout(() => {
+        void runPartial();
+      }, 360);
+      scheduled.unref?.();
+    };
+
+    return {
+      pushPcm: async (chunk: Buffer) => {
+        if (closed || chunk.length === 0) {
+          return;
+        }
+
+        pcmChunks.push(Buffer.from(chunk));
+        schedulePartial();
+      },
+      flush: async () => {
+        if (scheduled) {
+          clearTimeout(scheduled);
+          scheduled = null;
+        }
+        await runPartial();
+        closed = true;
+        return latestText;
+      },
+      abort: async () => {
+        closed = true;
+        if (scheduled) {
+          clearTimeout(scheduled);
+          scheduled = null;
+        }
+      }
+    };
   }
 
   private async init(modelPath: string): Promise<void> {

@@ -12,6 +12,10 @@ import {
   type UserProfile,
   type HistoryMessage,
   type KernelStateDocument,
+  type VoiceSessionEvent,
+  type VoiceSessionState,
+  type RealtimeVoiceMode,
+  type VoiceSessionTarget
 } from "@shared/types";
 import {
   type RuntimeInboundChannel
@@ -66,6 +70,7 @@ export class CompanionRuntime {
   private readonly telegram: RuntimeRegistry["telegram"];
   private readonly consoleChannel: RuntimeRegistry["consoleChannel"];
   private readonly voiceRouter: RuntimeRegistry["voiceRouter"];
+  private readonly realtimeVoice: RuntimeRegistry["realtimeVoice"];
   private readonly pet: RuntimeRegistry["pet"];
   private readonly petService: RuntimeRegistry["petService"];
   private readonly activityCoordinator: RuntimeRegistry["activityCoordinator"];
@@ -94,6 +99,7 @@ export class CompanionRuntime {
     this.telegram = registry.telegram;
     this.consoleChannel = registry.consoleChannel;
     this.voiceRouter = registry.voiceRouter;
+    this.realtimeVoice = registry.realtimeVoice;
     this.pet = registry.pet;
     this.petService = registry.petService;
     this.activityCoordinator = registry.activityCoordinator;
@@ -184,6 +190,10 @@ export class CompanionRuntime {
 
   onConsoleRunEvent(listener: (event: ConsoleRunEventV2) => void): () => void {
     return this.consoleChannel.onEvent(listener);
+  }
+
+  onVoiceSessionEvent(listener: (event: VoiceSessionEvent) => void): () => void {
+    return this.realtimeVoice.onEvent(listener);
   }
 
   getConfig(): AppConfig {
@@ -516,6 +526,31 @@ export class CompanionRuntime {
     message?: string;
   }> {
     return this.petService.transcribeAndSendFromPet(input);
+  }
+
+  getVoiceSessionState(): VoiceSessionState {
+    return this.realtimeVoice.getState();
+  }
+
+  async startVoiceSession(input?: {
+    mode?: RealtimeVoiceMode;
+    target?: Partial<VoiceSessionTarget>;
+  }): Promise<VoiceSessionState> {
+    return this.realtimeVoice.startSession(input);
+  }
+
+  async stopVoiceSession(): Promise<{ accepted: boolean }> {
+    return this.realtimeVoice.stopSession();
+  }
+
+  async interruptVoiceSession(input?: {
+    reason?: "vad" | "manual" | "system";
+  }): Promise<{ accepted: boolean }> {
+    return this.realtimeVoice.interrupt(input?.reason ?? "manual");
+  }
+
+  async setVoiceSessionMode(mode: RealtimeVoiceMode): Promise<VoiceSessionState> {
+    return this.realtimeVoice.setMode(mode);
   }
 
   private registerBuiltinTools(): void {
@@ -943,23 +978,8 @@ export class CompanionRuntime {
       await this.pushToConfiguredChannels(normalizedMessage, input.pushTargets);
     }
 
-    const config = this.getConfig();
     try {
-      const audio = await this.voiceRouter.synthesize({
-        text: normalizedMessage,
-        edgeConfig: {
-          voice: config.voice.ttsVoice,
-          rate: config.voice.ttsRate,
-          pitch: config.voice.ttsPitch,
-          requestTimeoutMs: config.voice.requestTimeoutMs,
-          retryCount: config.voice.retryCount
-        }
-      });
-      this.pet.emitEvent({
-        type: "speech",
-        audioBase64: audio.toString("base64"),
-        mimeType: "audio/mpeg"
-      });
+      await this.realtimeVoice.speakText(normalizedMessage);
     } catch (error) {
       this.logger.warn("kernel", "proactive:speech-failed", undefined, error);
     }

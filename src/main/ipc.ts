@@ -8,6 +8,7 @@ import type { CompanionRuntime } from "./app-runtime";
 
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
+const VOICE_SESSION_EVENT_CHANNEL = "runtime:voice-session-event";
 const WHISPER_MODEL_PROGRESS_CHANNEL = "runtime:whisper-model-progress";
 
 interface IpcSubscription {
@@ -17,6 +18,7 @@ interface IpcSubscription {
 
 const statusSubscriptions = new Map<number, IpcSubscription>();
 const consoleRunSubscriptions = new Map<number, IpcSubscription>();
+const voiceSessionSubscriptions = new Map<number, IpcSubscription>();
 
 function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSubscription>): void {
   const current = subscriptions.get(target.id);
@@ -213,6 +215,15 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       }
     ) => runtime.transcribeVoiceInput(payload)
   );
+  ipcMain.handle("voice:session:get", () => runtime.getVoiceSessionState());
+  ipcMain.handle("voice:session:start", (_, payload) => runtime.startVoiceSession(payload));
+  ipcMain.handle("voice:session:stop", () => runtime.stopVoiceSession());
+  ipcMain.handle("voice:session:interrupt", (_, payload: { reason?: "vad" | "manual" | "system" }) =>
+    runtime.interruptVoiceSession(payload)
+  );
+  ipcMain.handle("voice:session:set-mode", (_, payload: { mode?: "ptt" | "free" }) =>
+    runtime.setVoiceSessionMode(payload?.mode === "free" ? "free" : "ptt")
+  );
   ipcMain.handle(
     "console:chat:history",
     (
@@ -254,6 +265,10 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
 
   ipcMain.on("console:chat:subscribe", (event) => {
     subscribeToConsoleRun(runtime, event.sender);
+  });
+
+  ipcMain.on("voice:session:subscribe", (event) => {
+    subscribeToVoiceSession(runtime, event.sender);
   });
 
   ipcMain.handle("open:path", (_, location: string) => {
@@ -304,6 +319,29 @@ function subscribeToConsoleRun(runtime: CompanionRuntime, target: WebContents): 
   };
 
   consoleRunSubscriptions.set(target.id, {
+    unsubscribe,
+    onDestroyed
+  });
+  target.on("destroyed", onDestroyed);
+}
+
+function subscribeToVoiceSession(runtime: CompanionRuntime, target: WebContents): void {
+  clearSubscription(target, voiceSessionSubscriptions);
+
+  const unsubscribe = runtime.onVoiceSessionEvent((event) => {
+    if (target.isDestroyed()) {
+      clearSubscription(target, voiceSessionSubscriptions);
+      return;
+    }
+
+    target.send(VOICE_SESSION_EVENT_CHANNEL, event);
+  });
+
+  const onDestroyed = () => {
+    clearSubscription(target, voiceSessionSubscriptions);
+  };
+
+  voiceSessionSubscriptions.set(target.id, {
     unsubscribe,
     onDestroyed
   });
