@@ -107,6 +107,9 @@ const api = {
   sendConsoleChat(text) {
     return ipcRenderer.invoke('console:chat:send', { text });
   },
+  stopConsoleChat(requestId) {
+    return ipcRenderer.invoke('console:chat:stop', { requestId });
+  },
   transcribeVoice(input) {
     return ipcRenderer.invoke('voice:transcribe', input);
   },

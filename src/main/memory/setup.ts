@@ -126,11 +126,16 @@ export class YobiMemory {
     metadata?: Record<string, unknown>;
   }): Promise<void> {
     await this.init();
+    const allowEmpty =
+      input.role === "assistant" &&
+      typeof input.metadata?.toolTrace === "object" &&
+      input.metadata?.toolTrace !== null;
     await this.bufferStore.append({
       role: input.role,
       channel: normalizeChannel(input.metadata?.channel),
       text: input.text,
-      meta: input.metadata
+      meta: input.metadata,
+      allowEmpty
     });
     const kernel = this.getConfig().kernel;
     const compaction = await this.bufferStore.compactIfNeeded({
@@ -234,6 +239,7 @@ export class YobiMemory {
     const boundedLimit = Math.max(1, limit);
     return this.bufferStore
       .listRecent(boundedLimit)
+      .filter((message) => message.text.trim())
       .map((message) => ({
         role: message.role,
         content: message.text

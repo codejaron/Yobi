@@ -23,12 +23,14 @@ export function ConsoleChatPage() {
     inputDisabled,
     micButtonDisabled,
     micButtonLabel,
+    stoppingRequest,
     chatBottomRef,
     chatListRef,
     inputRef,
     clearHistory,
     handleChatScroll,
     handleSubmit,
+    stopCurrentRequest,
     handleInputKeyDown,
     toggleMicRecording,
     submitApproval
@@ -62,9 +64,11 @@ export function ConsoleChatPage() {
         recording={recording}
         transcribing={transcribing}
         micButtonLabel={micButtonLabel}
+        stoppingRequest={stoppingRequest}
         sttReady={sttReady}
         micHint={micHint}
         onSubmit={handleSubmit}
+        stopCurrentRequest={stopCurrentRequest}
         clearHistory={clearHistory}
       />
     </div>

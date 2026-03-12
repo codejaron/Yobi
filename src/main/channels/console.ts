@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { CommandApprovalDecision, ConsoleRunEventV2 } from "@shared/types";
-import type { ToolApprovalHandler, ToolApprovalRequest } from "@main/tools/types";
+import type {
+  ToolApprovalHandler,
+  ToolApprovalOutcome,
+  ToolApprovalRequest
+} from "@main/tools/types";
 
 interface PendingApproval {
   requestId: string;
-  resolve: (decision: CommandApprovalDecision) => void;
+  resolve: (decision: ToolApprovalOutcome) => void;
 }
 
 export class ConsoleChannel {
@@ -43,7 +47,10 @@ export class ConsoleChannel {
   makeApprovalHandler(requestId: string): ToolApprovalHandler {
     return async (request: ToolApprovalRequest) => {
       if (this.listeners.size === 0) {
-        return "deny";
+        return {
+          kind: "decision",
+          decision: "deny"
+        };
       }
 
       const approvalId = randomUUID();
@@ -56,7 +63,7 @@ export class ConsoleChannel {
         timestamp: new Date().toISOString()
       });
 
-      return new Promise<CommandApprovalDecision>((resolve) => {
+      return new Promise<ToolApprovalOutcome>((resolve) => {
         this.pendingApprovals.set(approvalId, {
           requestId,
           resolve
@@ -77,7 +84,10 @@ export class ConsoleChannel {
     }
 
     this.pendingApprovals.delete(input.approvalId);
-    pending.resolve(input.decision);
+    pending.resolve({
+      kind: "decision",
+      decision: input.decision
+    });
 
     this.emit({
       requestId: pending.requestId,
@@ -92,14 +102,25 @@ export class ConsoleChannel {
     };
   }
 
-  flushByRequest(requestId: string): void {
+  abortPendingApprovalsByRequest(requestId: string): number {
+    let aborted = 0;
+
     for (const [approvalId, pending] of this.pendingApprovals.entries()) {
       if (pending.requestId !== requestId) {
         continue;
       }
 
       this.pendingApprovals.delete(approvalId);
-      pending.resolve("deny");
+      pending.resolve({
+        kind: "aborted"
+      });
+      aborted += 1;
     }
+
+    return aborted;
+  }
+
+  flushByRequest(requestId: string): void {
+    this.abortPendingApprovalsByRequest(requestId);
   }
 }

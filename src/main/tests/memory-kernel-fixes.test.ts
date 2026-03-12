@@ -158,6 +158,58 @@ test("listHistory: preserves toolTrace metadata for assistant messages", async (
   }
 });
 
+test("memory: allows empty assistant message when toolTrace is present and excludes it from prompt context", async () => {
+  const paths = await createTempPaths("yobi-history-empty-tool-trace-");
+  try {
+    const config = cloneConfig();
+    const memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "assistant",
+      text: "",
+      metadata: {
+        channel: "console",
+        toolTrace: {
+          items: [
+            {
+              toolName: "search_web",
+              status: "aborted",
+              inputPreview: "搜索：北京天气"
+            }
+          ]
+        }
+      }
+    });
+
+    const recent = await memory.listHistoryByCursor({
+      threadId: "main",
+      resourceId: "main",
+      limit: 20
+    });
+    const promptMessages = await memory.mapRecentToModelMessages({
+      threadId: "main",
+      resourceId: "main"
+    });
+
+    assert.equal(recent.items[0]?.text, "");
+    assert.deepEqual(recent.items[0]?.meta?.toolTrace, {
+      items: [
+        {
+          toolName: "search_web",
+          status: "aborted",
+          inputPreview: "搜索：北京天气"
+        }
+      ]
+    });
+    assert.equal(promptMessages.length, 0);
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
 test("buffer compaction: removed messages persist into unprocessed queue", async () => {
   const paths = await createTempPaths("yobi-compaction-");
   try {

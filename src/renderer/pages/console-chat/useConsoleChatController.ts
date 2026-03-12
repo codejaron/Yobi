@@ -3,7 +3,8 @@ import type { FormEvent, KeyboardEvent, UIEvent } from "react";
 import type { CommandApprovalDecision, ConsoleRunEventV2, HistoryMessage } from "@shared/types";
 import {
   applyConsoleEventToAssistantProcess,
-  createAssistantTurnProcess
+  createAssistantTurnProcess,
+  hasAssistantVisibleContent
 } from "@shared/tool-trace";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
@@ -43,12 +44,14 @@ export interface ConsoleChatController {
   inputDisabled: boolean;
   micButtonDisabled: boolean;
   micButtonLabel: string;
+  stoppingRequest: boolean;
   chatBottomRef: React.RefObject<HTMLDivElement | null>;
   chatListRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLInputElement | null>;
   clearHistory: () => Promise<void>;
   handleChatScroll: (event: UIEvent<HTMLDivElement>) => void;
   handleSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  stopCurrentRequest: () => Promise<void>;
   handleInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   toggleMicRecording: () => void;
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
@@ -104,6 +107,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [skillsCatalog, setSkillsCatalog] = useState<ConsoleSkillsCatalogState | null>(null);
   const [activatedSkills, setActivatedSkills] = useState<ConsoleActivatedSkill[]>([]);
   const [approvalIndex, setApprovalIndex] = useState(0);
+  const [stoppingRequestId, setStoppingRequestId] = useState<string | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
@@ -122,6 +126,27 @@ export function useConsoleChatController(): ConsoleChatController {
 
         const next = [...prev];
         next[index] = updater(next[index]);
+        return next;
+      });
+    },
+    []
+  );
+
+  const updateAssistantMessageIfPresent = useCallback(
+    (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage | null) => {
+      setLiveMessages((prev) => {
+        const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
+        if (index < 0) {
+          return prev;
+        }
+
+        const nextMessage = updater(prev[index]);
+        if (!nextMessage) {
+          return prev.filter((item) => item.id !== prev[index]?.id);
+        }
+
+        const next = [...prev];
+        next[index] = nextMessage;
         return next;
       });
     },
@@ -219,7 +244,24 @@ export function useConsoleChatController(): ConsoleChatController {
 
       if (event.type === "final") {
         setActiveRequestId((current) => (current === event.requestId ? null : current));
+        setStoppingRequestId((current) => (current === event.requestId ? null : current));
         setPendingApproval((current) => (current?.requestId === event.requestId ? null : current));
+        if (event.finishReason === "aborted") {
+          updateAssistantMessageIfPresent(event.requestId, (current) => {
+            const nextProcess = applyConsoleEventToAssistantProcess(current.process, event);
+            if (!hasAssistantVisibleContent(current.text, nextProcess)) {
+              return null;
+            }
+
+            return {
+              ...current,
+              state: "done",
+              process: nextProcess
+            };
+          });
+          return;
+        }
+
         upsertAssistantMessage(event.requestId, (current) => ({
           ...current,
           text: event.displayText || current.text || "操作已完成。",
@@ -230,6 +272,7 @@ export function useConsoleChatController(): ConsoleChatController {
       }
 
       setActiveRequestId((current) => (current === event.requestId ? null : current));
+      setStoppingRequestId((current) => (current === event.requestId ? null : current));
       setPendingApproval((current) => (current?.requestId === event.requestId ? null : current));
       upsertAssistantMessage(event.requestId, (current) => ({
         ...current,
@@ -238,7 +281,7 @@ export function useConsoleChatController(): ConsoleChatController {
         process: applyConsoleEventToAssistantProcess(current.process, event)
       }));
     },
-    [upsertAssistantMessage]
+    [updateAssistantMessageIfPresent, upsertAssistantMessage]
   );
 
   const loadLatestHistory = useCallback(async () => {
@@ -580,6 +623,25 @@ export function useConsoleChatController(): ConsoleChatController {
     [activeRequestId, draft]
   );
 
+  const stopCurrentRequest = useCallback(async () => {
+    if (!activeRequestId || stoppingRequestId === activeRequestId) {
+      return;
+    }
+
+    const requestId = activeRequestId;
+    setStoppingRequestId(requestId);
+
+    try {
+      const result = await window.companion.stopConsoleChat(requestId);
+      if (result.accepted) {
+        setActiveRequestId((current) => (current === requestId ? null : current));
+        setPendingApproval((current) => (current?.requestId === requestId ? null : current));
+      }
+    } finally {
+      setStoppingRequestId((current) => (current === requestId ? null : current));
+    }
+  }, [activeRequestId, stoppingRequestId]);
+
   const handleInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (!pendingApproval) {
@@ -620,6 +682,7 @@ export function useConsoleChatController(): ConsoleChatController {
     busy ||
     (!sttReady && !recording);
   const micButtonLabel = transcribing ? "识别中" : recording ? "结束" : "语音";
+  const stoppingRequest = stoppingRequestId !== null && stoppingRequestId === activeRequestId;
 
   const messages = useMemo<ConsoleMessage[]>(() => {
     const historyMessages = persistedMessages
@@ -652,12 +715,14 @@ export function useConsoleChatController(): ConsoleChatController {
     inputDisabled,
     micButtonDisabled,
     micButtonLabel,
+    stoppingRequest,
     chatBottomRef,
     chatListRef,
     inputRef,
     clearHistory,
     handleChatScroll,
     handleSubmit,
+    stopCurrentRequest,
     handleInputKeyDown,
     toggleMicRecording,
     submitApproval

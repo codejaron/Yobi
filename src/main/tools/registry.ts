@@ -1,5 +1,6 @@
 import { tool, type ToolSet } from "ai";
 import type { AppConfig } from "@shared/types";
+import { isConversationAbortError } from "@main/core/conversation-abort";
 import { ApprovalGuard } from "./guard/approval";
 import type {
   FunctionSchema,
@@ -153,6 +154,10 @@ export class DefaultToolRegistry implements ToolRegistry {
         getConfig: this.getConfig
       });
     } catch (error) {
+      if (isConversationAbortError(error)) {
+        throw error;
+      }
+
       return {
         success: false,
         error: summarizeError(error)

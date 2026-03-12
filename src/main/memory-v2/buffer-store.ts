@@ -51,10 +51,11 @@ export class BufferStore {
     text: string;
     meta?: Record<string, unknown>;
     ts?: string;
+    allowEmpty?: boolean;
   }): Promise<BufferMessage> {
     await this.init();
     const text = input.text.trim();
-    if (!text) {
+    if (!text && !input.allowEmpty) {
       throw new Error("buffer message cannot be empty");
     }
 
@@ -236,7 +237,8 @@ function normalizeMessage(raw: BufferMessage): BufferMessage | null {
     return null;
   }
   const text = typeof raw.text === "string" ? raw.text.trim() : "";
-  if (!text) {
+  const meta = raw.meta && typeof raw.meta === "object" ? { ...raw.meta } : undefined;
+  if (!text && !hasPersistableToolTraceMeta(meta)) {
     return null;
   }
 
@@ -245,7 +247,6 @@ function normalizeMessage(raw: BufferMessage): BufferMessage | null {
     typeof raw.ts === "string" && Number.isFinite(new Date(raw.ts).getTime())
       ? new Date(raw.ts).toISOString()
       : new Date().toISOString();
-  const meta = raw.meta && typeof raw.meta === "object" ? { ...raw.meta } : undefined;
   return {
     id,
     ts,
@@ -271,6 +272,20 @@ function parseNumericId(id: string): number {
     return 0;
   }
   return Number(matched[1]) || 0;
+}
+
+function hasPersistableToolTraceMeta(meta: Record<string, unknown> | undefined): boolean {
+  if (!meta) {
+    return false;
+  }
+
+  const toolTrace = meta.toolTrace;
+  return (
+    typeof toolTrace === "object" &&
+    toolTrace !== null &&
+    Array.isArray((toolTrace as { items?: unknown }).items) &&
+    (toolTrace as { items: unknown[] }).items.length > 0
+  );
 }
 
 function buildSourceRanges(rows: BufferMessage[]): string[] {

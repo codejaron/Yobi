@@ -46,9 +46,11 @@ interface ConsoleChatPaneProps {
   recording: boolean;
   transcribing: boolean;
   micButtonLabel: string;
+  stoppingRequest: boolean;
   sttReady: boolean;
   micHint: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  stopCurrentRequest: () => Promise<void>;
   clearHistory: () => Promise<void>;
 }
 
@@ -78,9 +80,11 @@ export function ConsoleChatPane({
   recording,
   transcribing,
   micButtonLabel,
+  stoppingRequest,
   sttReady,
   micHint,
   onSubmit,
+  stopCurrentRequest,
   clearHistory
 }: ConsoleChatPaneProps) {
   return (
@@ -251,13 +255,30 @@ export function ConsoleChatPane({
                 </>
               )}
             </Button>
-            <Button
-              type="submit"
-              disabled={busy || recording || transcribing || draft.trim().length === 0}
-              className="h-11 min-w-[92px] shrink-0 whitespace-nowrap"
-            >
-              {busy ? "处理中..." : "发送"}
-            </Button>
+            {busy ? (
+              <Button
+                type="button"
+                onClick={() => void stopCurrentRequest()}
+                disabled={stoppingRequest}
+                className="h-11 w-11 min-w-0 shrink-0 rounded-full bg-foreground p-0 text-background hover:bg-foreground/90"
+                title="停止生成"
+                aria-label="停止生成"
+              >
+                {stoppingRequest ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-4 w-4 fill-current" />
+                )}
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                disabled={recording || transcribing || draft.trim().length === 0}
+                className="h-11 min-w-[92px] shrink-0 whitespace-nowrap"
+              >
+                发送
+              </Button>
+            )}
           </form>
           {micHint ? (
             <p className="mt-2 text-xs text-muted-foreground">{micHint}</p>

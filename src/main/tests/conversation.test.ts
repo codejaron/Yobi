@@ -289,6 +289,10 @@ test("ConversationEngine: persists aborted toolTrace when stream aborts mid-tool
     (() => ({
       fullStream: (async function* () {
         yield {
+          type: "text-delta",
+          text: "已经输出了一半"
+        };
+        yield {
           type: "tool-call",
           toolCallId: "tool-1",
           toolName: "web_fetch",
@@ -310,17 +314,99 @@ test("ConversationEngine: persists aborted toolTrace when stream aborts mid-tool
         resourceId: "resource-1",
         threadId: "thread-1",
         persistUserMessage: false
-      }),
+    }),
     /LLM 回复已中断/
   );
 
-  assert.equal(remembered[0]?.text, "LLM 回复已中断。");
+  assert.equal(remembered[0]?.text, "已经输出了一半");
   assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
     items: [
       {
         toolName: "web_fetch",
         status: "aborted",
         inputPreview: "URL：https://example.com/page"
+      }
+    ]
+  });
+});
+
+test("ConversationEngine: persists tool-only aborted turn with empty text", async () => {
+  const config = cloneConfig();
+  const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async (input: { role: string; text: string; metadata?: Record<string, unknown> }) => {
+        remembered.push(input);
+      },
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    (() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "tool-call",
+          toolCallId: "tool-1",
+          toolName: "search_web",
+          input: { query: "北京天气" }
+        };
+        yield {
+          type: "abort"
+        };
+      })(),
+      totalUsage: Promise.resolve(undefined)
+    })) as any
+  );
+
+  await assert.rejects(
+    () =>
+      conversation.reply({
+        text: "查天气",
+        channel: "console",
+        resourceId: "resource-1",
+        threadId: "thread-1",
+        persistUserMessage: false
+      }),
+    /LLM 回复已中断/
+  );
+
+  assert.equal(remembered[0]?.text, "");
+  assert.deepEqual(remembered[0]?.metadata?.toolTrace, {
+    items: [
+      {
+        toolName: "search_web",
+        status: "aborted",
+        inputPreview: "搜索：北京天气"
       }
     ]
   });

@@ -15,6 +15,7 @@ import {
 import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
+import { isConversationAbortError } from "@main/core/conversation-abort";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
 import { ExaSearchService } from "@main/services/exa-search";
 import { ScheduledTaskService } from "@main/services/scheduled-tasks";
@@ -36,6 +37,13 @@ interface HistoryQuery {
 
 const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
+
+interface ConsoleRequestHandle {
+  abortController: AbortController;
+  finalized: boolean;
+  finishReason?: "completed" | "aborted" | "error";
+  finalEventEmitted: boolean;
+}
 
 export class CompanionRuntime {
   private static readonly CHAT_REPLY_TIMEOUT_MS = 5 * 60_000;
@@ -112,6 +120,7 @@ export class CompanionRuntime {
   }
 
   private statusListeners = new Set<(status: AppStatus) => void>();
+  private activeConsoleRequests = new Map<string, ConsoleRequestHandle>();
 
   async init(): Promise<void> {
     this.paths.ensureLayout();
@@ -426,12 +435,36 @@ export class CompanionRuntime {
     }
 
     const requestId = randomUUID();
+    this.activeConsoleRequests.set(requestId, {
+      abortController: new AbortController(),
+      finalized: false,
+      finalEventEmitted: false
+    });
     queueMicrotask(() => {
       void this.runConsoleChatRequest(requestId, normalized);
     });
 
     return {
       requestId
+    };
+  }
+
+  async stopConsoleChat(requestId: string): Promise<{ accepted: boolean }> {
+    const handle = this.activeConsoleRequests.get(requestId);
+    if (!handle || handle.finalized) {
+      return {
+        accepted: false
+      };
+    }
+
+    handle.finalized = true;
+    handle.finishReason = "aborted";
+    this.consoleChannel.abortPendingApprovalsByRequest(requestId);
+    handle.abortController.abort();
+    this.emitConsoleFinal(requestId, handle, "aborted");
+
+    return {
+      accepted: true
     };
   }
 
@@ -494,27 +527,38 @@ export class CompanionRuntime {
 
   private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
     const deltaStripper = createEmotionTagStripper();
+    const handle = this.activeConsoleRequests.get(requestId);
 
-    this.consoleChannel.emit({
-      requestId,
-      type: "thinking",
-      state: "start",
-      timestamp: new Date().toISOString()
-    });
-
-    await this.recordUserActivity({
-      channel: "console",
-      text
-    });
+    if (!handle) {
+      return;
+    }
 
     try {
+      if (!handle.finalized) {
+        this.consoleChannel.emit({
+          requestId,
+          type: "thinking",
+          state: "start",
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      await this.recordUserActivity({
+        channel: "console",
+        text
+      });
+
       const reply = await this.withTimeout(
         this.channelRouter.handleConsole({
           text,
           resourceId: PRIMARY_RESOURCE_ID,
           threadId: PRIMARY_THREAD_ID,
+          abortSignal: handle.abortController.signal,
           stream: {
             onSkillsCatalog: (payload) => {
+              if (this.shouldSuppressConsoleRequestEvent(requestId)) {
+                return;
+              }
               this.consoleChannel.emit({
                 requestId,
                 type: "skills-catalog",
@@ -526,6 +570,9 @@ export class CompanionRuntime {
               });
             },
             onTextDelta: (delta) => {
+              if (this.shouldSuppressConsoleRequestEvent(requestId)) {
+                return;
+              }
               const visibleDelta = deltaStripper.push(delta);
               if (!visibleDelta) {
                 return;
@@ -539,6 +586,9 @@ export class CompanionRuntime {
               });
             },
             onToolCall: (payload) => {
+              if (this.shouldSuppressConsoleRequestEvent(requestId)) {
+                return;
+              }
               this.consoleChannel.emit({
                 requestId,
                 type: "tool-call",
@@ -549,6 +599,9 @@ export class CompanionRuntime {
               });
             },
             onToolResult: (payload) => {
+              if (this.shouldSuppressConsoleRequestEvent(requestId)) {
+                return;
+              }
               this.consoleChannel.emit({
                 requestId,
                 type: "tool-result",
@@ -595,6 +648,11 @@ export class CompanionRuntime {
         "LLM 回复超时"
       );
 
+      const latestHandle = this.activeConsoleRequests.get(requestId);
+      if (!latestHandle || latestHandle.finalized) {
+        return;
+      }
+
       const trailingDelta = deltaStripper.flush();
       if (trailingDelta) {
         this.consoleChannel.emit({
@@ -614,34 +672,92 @@ export class CompanionRuntime {
         });
       }
 
-      this.consoleChannel.emit({
-        requestId,
-        type: "final",
-        rawText: visibleReply,
-        displayText: visibleReply,
-        timestamp: new Date().toISOString()
-      });
+      latestHandle.finalized = true;
+      latestHandle.finishReason = "completed";
+      this.emitConsoleFinal(requestId, latestHandle, "completed", visibleReply);
       this.petService.emitPetTalkingReply(visibleReply);
       await this.kernel.onAssistantMessage();
       await this.emitStatus();
     } catch (error) {
+      const latestHandle = this.activeConsoleRequests.get(requestId);
+      if (latestHandle?.finalized && latestHandle.finishReason === "aborted") {
+        return;
+      }
+
+      if (isConversationAbortError(error)) {
+        if (latestHandle) {
+          latestHandle.finalized = true;
+          latestHandle.finishReason = "aborted";
+          this.emitConsoleFinal(requestId, latestHandle, "aborted");
+        }
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "处理消息时出现未知错误。";
-      this.consoleChannel.emit({
-        requestId,
-        type: "error",
-        message,
-        timestamp: new Date().toISOString()
-      });
+      if (!latestHandle?.finalized) {
+        if (latestHandle) {
+          latestHandle.finalized = true;
+          latestHandle.finishReason = "error";
+        }
+
+        this.consoleChannel.emit({
+          requestId,
+          type: "error",
+          message,
+          timestamp: new Date().toISOString()
+        });
+      }
     } finally {
-      this.consoleChannel.flushByRequest(requestId);
-      this.consoleChannel.emit({
-        requestId,
-        type: "thinking",
-        state: "stop",
-        timestamp: new Date().toISOString()
-      });
+      const latestHandle = this.activeConsoleRequests.get(requestId);
+      this.consoleChannel.abortPendingApprovalsByRequest(requestId);
+      if (latestHandle && !latestHandle.finalized) {
+        this.consoleChannel.emit({
+          requestId,
+          type: "thinking",
+          state: "stop",
+          timestamp: new Date().toISOString()
+        });
+      }
+      this.activeConsoleRequests.delete(requestId);
       await this.emitStatus();
     }
+  }
+
+  private shouldSuppressConsoleRequestEvent(requestId: string): boolean {
+    const handle = this.activeConsoleRequests.get(requestId);
+    return handle?.finalized === true;
+  }
+
+  private emitConsoleFinal(
+    requestId: string,
+    handle: ConsoleRequestHandle,
+    finishReason: "completed" | "aborted",
+    displayText?: string
+  ): void {
+    if (handle.finalEventEmitted) {
+      return;
+    }
+
+    handle.finalEventEmitted = true;
+    if (finishReason === "aborted") {
+      this.consoleChannel.emit({
+        requestId,
+        type: "final",
+        finishReason: "aborted",
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    const visibleText = displayText?.trim() || "我这次没有生成有效回复，请重试一次。";
+    this.consoleChannel.emit({
+      requestId,
+      type: "final",
+      finishReason: "completed",
+      rawText: visibleText,
+      displayText: visibleText,
+      timestamp: new Date().toISOString()
+    });
   }
 
   private async startTelegram(): Promise<void> {

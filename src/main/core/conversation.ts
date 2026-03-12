@@ -13,6 +13,11 @@ import {
   toPersistedToolTraceItems
 } from "@shared/tool-trace";
 import type { ModelFactory } from "./model-factory";
+import {
+  ConversationAbortError,
+  isAbortLikeError,
+  isConversationAbortError
+} from "./conversation-abort";
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { extractEmotionTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
@@ -139,6 +144,7 @@ export class ConversationEngine {
     persistUserMessage?: boolean;
     allowedToolNames?: string[];
     preapprovedToolNames?: string[];
+    abortSignal?: AbortSignal;
   }): Promise<string> {
     const config = this.getConfig();
     const providerOptions = resolveOpenAIStoreOption(config);
@@ -235,17 +241,6 @@ export class ConversationEngine {
     });
 
     const model = this.modelFactory.getChatModel();
-    const result = this.streamTextImpl({
-      model,
-      system,
-      messages,
-      tools,
-      toolChoice: "auto",
-      providerOptions,
-      stopWhen: stepCountIs(20)
-    });
-
-    input.stream?.onThinkingChange?.("start");
 
     let fullText = "";
     let toolFailed = false;
@@ -254,106 +249,153 @@ export class ConversationEngine {
     let streamAborted = false;
     let lastStreamError = "";
     let toolTrace = [] as ReturnType<typeof finalizeToolTraceItems>;
+    const result = this.streamTextImpl({
+      model,
+      system,
+      messages,
+      tools,
+      toolChoice: "auto",
+      providerOptions,
+      stopWhen: stepCountIs(20),
+      abortSignal: input.abortSignal,
+      onAbort: () => {
+        streamAborted = true;
+        lastStreamError = lastStreamError || "LLM 回复已中断。";
+      }
+    });
+
+    input.stream?.onThinkingChange?.("start");
     try {
-      for await (const chunk of result.fullStream) {
-        if (chunk.type === "text-delta") {
-          fullText += chunk.text;
-          input.stream?.onTextDelta?.(chunk.text);
-          continue;
-        }
-
-        if (chunk.type === "tool-call") {
-          toolTrace = recordToolCallStarted(toolTrace, {
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            input: chunk.input,
-            timestamp: new Date().toISOString()
-          });
-          input.stream?.onToolCall?.({
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            input: chunk.input
-          });
-          continue;
-        }
-
-        if (chunk.type === "tool-result") {
-          const output = chunk.output as {
-            success?: boolean;
-            data?: unknown;
-            error?: string;
-          };
-          const success = output?.success ?? true;
-          if (!success) {
-            toolFailed = true;
-            lastToolError = output?.error?.trim() || lastToolError;
+      try {
+        for await (const chunk of result.fullStream) {
+          if (input.abortSignal?.aborted) {
+            streamFailed = true;
+            streamAborted = true;
+            lastStreamError = lastStreamError || "LLM 回复已中断。";
+            break;
           }
 
-          toolTrace = recordToolCallSettled(toolTrace, {
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            input: chunk.input,
-            output: output?.data,
-            error: output?.error,
-            success,
-            timestamp: new Date().toISOString()
-          });
-          input.stream?.onToolResult?.({
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            input: chunk.input,
-            success,
-            output: output?.data,
-            error: output?.error
-          });
-          continue;
-        }
+          if (chunk.type === "text-delta") {
+            fullText += chunk.text;
+            input.stream?.onTextDelta?.(chunk.text);
+            continue;
+          }
 
-        if (chunk.type === "tool-error") {
-          toolFailed = true;
-          const errorMessage = normalizeErrorMessage(chunk.error, "工具调用失败");
-          lastToolError = errorMessage.trim() || lastToolError;
-          toolTrace = recordToolCallSettled(toolTrace, {
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            input: chunk.input,
-            success: false,
-            error: errorMessage,
-            timestamp: new Date().toISOString()
-          });
-          input.stream?.onToolResult?.({
-            toolCallId: chunk.toolCallId,
-            toolName: chunk.toolName,
-            input: chunk.input,
-            success: false,
-            error: errorMessage
-          });
-          continue;
-        }
+          if (chunk.type === "tool-call") {
+            toolTrace = recordToolCallStarted(toolTrace, {
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              timestamp: new Date().toISOString()
+            });
+            input.stream?.onToolCall?.({
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input
+            });
+            continue;
+          }
 
-        if (chunk.type === "error") {
-          streamFailed = true;
-          lastStreamError = normalizeErrorMessage(chunk.error, "LLM 调用失败，请稍后重试。");
-          continue;
-        }
+          if (chunk.type === "tool-result") {
+            const output = chunk.output as {
+              success?: boolean;
+              data?: unknown;
+              error?: string;
+            };
+            const success = output?.success ?? true;
+            if (!success) {
+              toolFailed = true;
+              lastToolError = output?.error?.trim() || lastToolError;
+            }
 
-        if (chunk.type === "abort") {
+            toolTrace = recordToolCallSettled(toolTrace, {
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              output: output?.data,
+              error: output?.error,
+              success,
+              timestamp: new Date().toISOString()
+            });
+            input.stream?.onToolResult?.({
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              success,
+              output: output?.data,
+              error: output?.error
+            });
+            continue;
+          }
+
+          if (chunk.type === "tool-error") {
+            if (isConversationAbortError(chunk.error) || input.abortSignal?.aborted) {
+              streamFailed = true;
+              streamAborted = true;
+              lastStreamError = lastStreamError || "LLM 回复已中断。";
+              break;
+            }
+
+            toolFailed = true;
+            const errorMessage = normalizeErrorMessage(chunk.error, "工具调用失败");
+            lastToolError = errorMessage.trim() || lastToolError;
+            toolTrace = recordToolCallSettled(toolTrace, {
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              success: false,
+              error: errorMessage,
+              timestamp: new Date().toISOString()
+            });
+            input.stream?.onToolResult?.({
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              success: false,
+              error: errorMessage
+            });
+            continue;
+          }
+
+          if (chunk.type === "error") {
+            if (isAbortLikeError(chunk.error) || input.abortSignal?.aborted) {
+              streamFailed = true;
+              streamAborted = true;
+              lastStreamError = lastStreamError || "LLM 回复已中断。";
+              continue;
+            }
+
+            streamFailed = true;
+            lastStreamError = normalizeErrorMessage(chunk.error, "LLM 调用失败，请稍后重试。");
+            continue;
+          }
+
+          if (chunk.type === "abort") {
+            streamFailed = true;
+            streamAborted = true;
+            lastStreamError = lastStreamError || "LLM 回复已中断。";
+            continue;
+          }
+
+          if ((chunk.type === "finish" || chunk.type === "finish-step") && chunk.finishReason === "error") {
+            streamFailed = true;
+            lastStreamError = lastStreamError || "LLM 调用失败，请稍后重试。";
+          }
+        }
+      } catch (error) {
+        if (isConversationAbortError(error) || isAbortLikeError(error) || input.abortSignal?.aborted) {
           streamFailed = true;
           streamAborted = true;
           lastStreamError = lastStreamError || "LLM 回复已中断。";
-          continue;
-        }
-
-        if ((chunk.type === "finish" || chunk.type === "finish-step") && chunk.finishReason === "error") {
-          streamFailed = true;
-          lastStreamError = lastStreamError || "LLM 调用失败，请稍后重试。";
+        } else {
+          throw error;
         }
       }
     } finally {
       input.stream?.onThinkingChange?.("stop");
     }
 
-    const trimmedText = fullText.trim();
+    const visibleText = stripEmotionTags(fullText).trim();
     const finalizedToolTrace = finalizeToolTraceItems(
       toolTrace,
       streamFailed ? (streamAborted ? "aborted" : "failed") : "completed",
@@ -368,6 +410,24 @@ export class ConversationEngine {
             }
           }
         : undefined;
+    if (streamAborted) {
+      if (visibleText || toolTraceMetadata) {
+        await this.memory.rememberMessage({
+          threadId: input.threadId,
+          resourceId: input.resourceId,
+          role: "assistant",
+          text: visibleText,
+          metadata: {
+            channel: input.channel,
+            ...(toolTraceMetadata ?? {})
+          }
+        });
+      }
+
+      throw new ConversationAbortError(lastStreamError || "LLM 回复已中断。");
+    }
+
+    const trimmedText = visibleText;
     if (streamFailed) {
       const failureText = lastStreamError || "LLM 调用失败，请稍后重试。";
       if (toolTraceMetadata) {

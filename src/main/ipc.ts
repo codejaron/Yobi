@@ -194,6 +194,9 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("console:chat:send", (_, payload: { text?: string }) =>
     runtime.startConsoleChat(payload?.text ?? "")
   );
+  ipcMain.handle("console:chat:stop", (_, payload: { requestId?: string }) =>
+    runtime.stopConsoleChat(payload?.requestId ?? "")
+  );
   ipcMain.handle(
     "voice:transcribe",
     (

@@ -1,5 +1,6 @@
 import { dialog } from "electron";
 import type { CommandApprovalDecision } from "@shared/types";
+import { ConversationAbortError } from "@main/core/conversation-abort";
 import type {
   ToolApprovalHandler,
   ToolApprovalRequest
@@ -17,7 +18,12 @@ export class ApprovalGuard {
     }
 
     if (requestApproval) {
-      const decision = await requestApproval(request);
+      const outcome = await requestApproval(request);
+      if (outcome.kind === "aborted") {
+        throw new ConversationAbortError();
+      }
+
+      const decision = outcome.decision;
       this.applyDecision(request.signature, decision);
       return decision === "allow-once" || decision === "allow-always";
     }

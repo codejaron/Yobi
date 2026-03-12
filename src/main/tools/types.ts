@@ -8,8 +8,6 @@ interface ToolMediaAttachment {
   mimeType: string;
 }
 
-type ToolApprovalDecision = CommandApprovalDecision;
-
 export interface ToolApprovalRequest {
   toolName: string;
   params: Record<string, unknown>;
@@ -17,7 +15,16 @@ export interface ToolApprovalRequest {
   signature: string;
 }
 
-export type ToolApprovalHandler = (request: ToolApprovalRequest) => Promise<ToolApprovalDecision>;
+export type ToolApprovalOutcome =
+  | {
+      kind: "decision";
+      decision: CommandApprovalDecision;
+    }
+  | {
+      kind: "aborted";
+    };
+
+export type ToolApprovalHandler = (request: ToolApprovalRequest) => Promise<ToolApprovalOutcome>;
 
 export interface ToolResult {
   success: boolean;

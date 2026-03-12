@@ -57,6 +57,13 @@ export function createHistoryToolTraceItems(items?: ToolTraceItem[]): LiveToolTr
   }));
 }
 
+export function hasAssistantVisibleContent(
+  text: string,
+  process?: AssistantTurnProcess
+): boolean {
+  return text.trim().length > 0 || (process?.tools.length ?? 0) > 0;
+}
+
 export function buildToolInputPreview(input: unknown, maxLength = 96): string {
   for (const group of PREVIEW_KEY_GROUPS) {
     const found = findPreferredValue(input, group.keys);
@@ -171,7 +178,11 @@ export function applyConsoleEventToAssistantProcess(
 
   if (event.type === "final") {
     next.thinkingVisible = false;
-    next.tools = finalizeToolTraceItems(next.tools, "completed", event.timestamp);
+    next.tools = finalizeToolTraceItems(
+      next.tools,
+      event.finishReason === "aborted" ? "aborted" : "completed",
+      event.timestamp
+    );
     return next;
   }
 

@@ -95,6 +95,7 @@ export interface CompanionApi {
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 
   sendConsoleChat(text: string): Promise<{ requestId: string }>;
+  stopConsoleChat(requestId: string): Promise<{ accepted: boolean }>;
   transcribeVoice(input: {
     pcm16Base64: string;
     sampleRate: number;

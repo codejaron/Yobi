@@ -662,8 +662,15 @@ export type ConsoleRunEventV2 =
   | {
       requestId: string;
       type: "final";
+      finishReason: "completed";
       rawText: string;
       displayText: string;
+      timestamp: string;
+    }
+  | {
+      requestId: string;
+      type: "final";
+      finishReason: "aborted";
       timestamp: string;
     }
   | {

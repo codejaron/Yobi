@@ -11,6 +11,7 @@ export class ChannelRouter {
     threadId: string;
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
+    abortSignal?: AbortSignal;
   }): Promise<string> {
     return this.conversation.reply({
       text: input.text,
@@ -18,7 +19,8 @@ export class ChannelRouter {
       resourceId: input.resourceId,
       threadId: input.threadId,
       stream: input.stream,
-      requestApproval: input.requestApproval
+      requestApproval: input.requestApproval,
+      abortSignal: input.abortSignal
     });
   }
 
