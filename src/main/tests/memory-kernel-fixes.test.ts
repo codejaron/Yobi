@@ -14,6 +14,7 @@ import { ensureKernelBootstrap } from "../kernel/init.js";
 import {
   DEFAULT_CONFIG,
   DEFAULT_KERNEL_STATE,
+  DEFAULT_RELATIONSHIP_GUIDE,
   DEFAULT_USER_PROFILE,
   type AppConfig,
   type PendingTask
@@ -513,6 +514,7 @@ test("legacy facts json files are ignored by SQLite facts store", async () => {
 test("assembleContext: preserves ranked candidate order instead of re-scoring lexically", () => {
   const selected = assembleContext({
     soul: "soul",
+    relationship: DEFAULT_RELATIONSHIP_GUIDE,
     stage: "stranger",
     state: DEFAULT_KERNEL_STATE,
     profile: DEFAULT_USER_PROFILE,
@@ -569,6 +571,15 @@ test("assembleContext: preserves ranked candidate order instead of re-scoring le
 test("assembleContext: emits a single SOUL block without PERSONA", () => {
   const selected = assembleContext({
     soul: "只保留 soul",
+    relationship: {
+      stages: {
+        stranger: ["礼貌但有距离感。"],
+        acquaintance: ["开始偶尔吐槽。"],
+        familiar: [],
+        close: [],
+        intimate: []
+      }
+    },
     stage: "stranger",
     state: DEFAULT_KERNEL_STATE,
     profile: DEFAULT_USER_PROFILE,
@@ -580,24 +591,82 @@ test("assembleContext: emits a single SOUL block without PERSONA", () => {
   });
 
   assert.match(selected.system, /\[SOUL\]/);
+  assert.match(selected.system, /\[RELATIONSHIP\]/);
   assert.doesNotMatch(selected.system, /\[PERSONA\]/);
   assert.match(selected.system, /只保留 soul/);
-  assert.match(selected.system, /当前关系阶段: stranger/);
+  assert.match(selected.system, /current_stage=stranger/);
+  assert.match(selected.system, /allowed_values=\["stranger","acquaintance","familiar","close","intimate"\]/);
+  assert.match(selected.system, /current_stage_rules=\["礼貌但有距离感。"\]/);
+  assert.doesNotMatch(selected.system, /开始偶尔吐槽/);
+  assert.doesNotMatch(selected.system, /shared_rules=/);
+  assert.doesNotMatch(selected.system, /当前关系阶段:/);
 });
 
-test("ensureKernelBootstrap: creates soul.md without persona.md", async () => {
+test("assembleContext: emits structured STATE values with ranges", () => {
+  const state = {
+    ...DEFAULT_KERNEL_STATE,
+    emotional: {
+      mood: 0.2,
+      energy: 0.83,
+      connection: 0.61,
+      curiosity: 0.47,
+      confidence: 0.58,
+      irritation: 0.15
+    },
+    coldStart: false,
+    sessionReentry: {
+      active: true,
+      gapHours: 27,
+      gapLabel: "1 天",
+      activatedAt: new Date(0).toISOString()
+    }
+  };
+
+  const selected = assembleContext({
+    soul: "只保留 soul",
+    relationship: {
+      ...DEFAULT_RELATIONSHIP_GUIDE,
+      stages: {
+        ...DEFAULT_RELATIONSHIP_GUIDE.stages,
+        familiar: ["交流更自然。"]
+      }
+    },
+    stage: "familiar",
+    state,
+    profile: DEFAULT_USER_PROFILE,
+    buffer: [],
+    facts: [],
+    episodes: [],
+    maxTokens: 6000,
+    memoryFloorTokens: 1200
+  });
+
+  assert.match(selected.system, /\[STATE\]/);
+  assert.match(selected.system, /mood=0.20 range=\[-1.00,1.00\] higher=more_positive/);
+  assert.match(selected.system, /energy=0.83 range=\[0.00,1.00\] higher=more_energetic/);
+  assert.match(selected.system, /connection=0.61 range=\[0.00,1.00\] higher=more_connected/);
+  assert.match(selected.system, /curiosity=0.47 range=\[0.00,1.00\] higher=more_curious/);
+  assert.match(selected.system, /confidence=0.58 range=\[0.00,1.00\] higher=more_confident/);
+  assert.match(selected.system, /irritation=0.15 range=\[0.00,1.00\] higher=more_irritable/);
+  assert.match(selected.system, /cold_start=false values=\[true,false\]/);
+  assert.match(selected.system, /session_reentry_active=true values=\[true,false\]/);
+  assert.match(selected.system, /session_reentry_gap_hours=27 range=\[0,\+inf\)/);
+});
+
+test("ensureKernelBootstrap: creates soul.md and relationship.json without persona.md", async () => {
   const paths = await createTempPaths("yobi-soul-bootstrap-");
   try {
     await ensureKernelBootstrap(paths);
 
     await fs.access(paths.soulPath);
+    await fs.access(paths.relationshipPath);
     await assert.rejects(() => fs.access(path.join(paths.baseDir, "persona.md")));
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }
 });
 
-test("RuntimeDataCoordinator.getMindSnapshot: returns soul-only snapshot", async () => {
+test("RuntimeDataCoordinator.getMindSnapshot: returns soul and relationship snapshot", async () => {
   const paths = await createTempPaths("yobi-soul-snapshot-");
   try {
     const config = cloneConfig();
@@ -608,6 +677,23 @@ test("RuntimeDataCoordinator.getMindSnapshot: returns soul-only snapshot", async
     await stateStore.init();
 
     await fs.writeFile(paths.soulPath, "# Soul only\n", "utf8");
+    await fs.writeFile(
+      paths.relationshipPath,
+      `${JSON.stringify(
+        {
+          stages: {
+            stranger: ["客气但有距离感"],
+            acquaintance: [],
+            familiar: [],
+            close: [],
+            intimate: []
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
     await fs.writeFile(path.join(paths.baseDir, "persona.md"), "# Ignored persona\n", "utf8");
 
     const coordinator = new RuntimeDataCoordinator({
@@ -629,6 +715,15 @@ test("RuntimeDataCoordinator.getMindSnapshot: returns soul-only snapshot", async
     const snapshot = await coordinator.getMindSnapshot();
 
     assert.equal(snapshot.soul, "# Soul only\n");
+    assert.deepEqual(snapshot.relationship, {
+      stages: {
+        stranger: ["客气但有距离感"],
+        acquaintance: [],
+        familiar: [],
+        close: [],
+        intimate: []
+      }
+    });
     assert.equal("persona" in snapshot, false);
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });

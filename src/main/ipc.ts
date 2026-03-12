@@ -73,6 +73,12 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("mind:snapshot:get", () => runtime.getMindSnapshot());
   ipcMain.handle("mind:soul:get", () => runtime.getSoul());
   ipcMain.handle("mind:soul:save", (_, input: { markdown: string }) => runtime.saveSoul(input));
+  ipcMain.handle("mind:relationship:get", () => runtime.getRelationship());
+  ipcMain.handle("mind:relationship:save", (_, input: { guide: Record<string, unknown> }) =>
+    runtime.saveRelationship({
+      guide: input.guide as any
+    })
+  );
   ipcMain.handle("mind:state:patch", (_, input: { patch: Record<string, unknown> }) =>
     runtime.patchState({
       patch: input.patch as any
@@ -88,7 +94,7 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     (
       _,
       input: {
-        section?: "soul" | "state" | "profile" | "facts" | "episodes";
+        section?: "soul" | "relationship" | "state" | "profile" | "facts" | "episodes";
       }
     ) =>
       runtime.resetMindSection({

@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { MindSnapshot } from "@shared/types";
+import {
+  DEFAULT_RELATIONSHIP_GUIDE,
+  RELATIONSHIP_STAGES,
+  type MindSnapshot,
+  type RelationshipGuide
+} from "@shared/types";
 import { Button } from "@renderer/components/ui/button";
 import {
   Card,
@@ -15,25 +20,37 @@ export function MemoryPage({
   snapshot,
   onRefresh,
   onSaveSoul,
+  onSaveRelationship,
   onTriggerKernelTask,
   onResetMindSection
 }: {
   snapshot: MindSnapshot | null;
   onRefresh: () => Promise<void>;
   onSaveSoul: (markdown: string) => Promise<void>;
+  onSaveRelationship: (guide: RelationshipGuide) => Promise<void>;
   onTriggerKernelTask: (taskType: "tick-now" | "daily-now") => Promise<{ accepted: boolean; message: string }>;
   onResetMindSection: (input: {
-    section: "soul" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "relationship" | "state" | "profile" | "facts" | "episodes";
   }) => Promise<{ accepted: boolean; message: string }>;
 }) {
   const [soulDraft, setSoulDraft] = useState(snapshot?.soul ?? "");
-  const [saving, setSaving] = useState<"soul" | null>(null);
-  const [resetting, setResetting] = useState<"soul" | "state" | "profile" | "facts" | "episodes" | null>(null);
+  const [relationshipDraft, setRelationshipDraft] = useState<RelationshipGuide>(
+    cloneRelationshipGuide(snapshot?.relationship ?? DEFAULT_RELATIONSHIP_GUIDE)
+  );
+  const [saving, setSaving] = useState<"soul" | "relationship" | null>(null);
+  const [resetting, setResetting] = useState<
+    "soul" | "relationship" | "state" | "profile" | "facts" | "episodes" | null
+  >(null);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
     setSoulDraft(snapshot?.soul ?? "");
   }, [snapshot?.soul]);
+
+  useEffect(() => {
+    const nextGuide = cloneRelationshipGuide(snapshot?.relationship ?? DEFAULT_RELATIONSHIP_GUIDE);
+    setRelationshipDraft(nextGuide);
+  }, [snapshot?.relationship]);
 
   const stateJson = useMemo(
     () => (snapshot ? JSON.stringify(snapshot.state, null, 2) : "{}"),
@@ -53,7 +70,7 @@ export function MemoryPage({
   );
 
   const resetSection = async (
-    section: "soul" | "state" | "profile" | "facts" | "episodes",
+    section: "soul" | "relationship" | "state" | "profile" | "facts" | "episodes",
     label: string
   ) => {
     const ok = window.confirm(`确认${label}吗？`);
@@ -78,7 +95,7 @@ export function MemoryPage({
         <CardHeader>
           <CardTitle>Mind Center</CardTitle>
           <CardDescription>
-            编辑 SOUL，查看 STATE / PROFILE / FACTS / EPISODES 快照。
+            编辑 SOUL / RELATIONSHIP，查看 STATE / PROFILE / FACTS / EPISODES 快照。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -145,6 +162,60 @@ export function MemoryPage({
               onClick={() => void resetSection("soul", "恢复 SOUL 默认内容")}
             >
               {resetting === "soul" ? "处理中..." : "恢复默认"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>RELATIONSHIP (可编辑)</CardTitle>
+          <CardDescription>只保留 5 个阶段规则。每行一条，当前阶段会单独传给模型。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            {RELATIONSHIP_STAGES.map((stage) => (
+              <div key={stage} className="space-y-1.5">
+                <Label>{stage}</Label>
+                <Textarea
+                  rows={5}
+                  value={relationshipDraft.stages[stage].join("\n")}
+                  onChange={(event) =>
+                    setRelationshipDraft((current) => ({
+                      ...current,
+                      stages: {
+                        ...current.stages,
+                        [stage]: parseRuleLines(event.target.value)
+                      }
+                    }))
+                  }
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              disabled={saving !== null || resetting !== null}
+              onClick={async () => {
+                setSaving("relationship");
+                try {
+                  await onSaveRelationship(relationshipDraft);
+                  setNotice("RELATIONSHIP 已保存");
+                  await onRefresh();
+                } finally {
+                  setSaving(null);
+                }
+              }}
+            >
+              {saving === "relationship" ? "保存中..." : "保存 RELATIONSHIP"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={saving !== null || resetting !== null}
+              onClick={() => void resetSection("relationship", "恢复 RELATIONSHIP 默认内容")}
+            >
+              {resetting === "relationship" ? "处理中..." : "恢复默认"}
             </Button>
           </div>
         </CardContent>
@@ -232,4 +303,23 @@ function ReadonlyJson({ value }: { value: string }) {
       <Textarea value={value} rows={16} readOnly className="font-mono text-xs" />
     </div>
   );
+}
+
+function parseRuleLines(input: string): string[] {
+  return input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function cloneRelationshipGuide(input: RelationshipGuide): RelationshipGuide {
+  return {
+    stages: {
+      stranger: [...input.stages.stranger],
+      acquaintance: [...input.stages.acquaintance],
+      familiar: [...input.stages.familiar],
+      close: [...input.stages.close],
+      intimate: [...input.stages.intimate]
+    }
+  };
 }

@@ -1,15 +1,18 @@
-import type {
-  BufferMessage,
-  Episode,
-  Fact,
-  KernelStateDocument,
-  RelationshipStage,
-  UserProfile
+import {
+  RELATIONSHIP_STAGES,
+  type BufferMessage,
+  type Episode,
+  type Fact,
+  type KernelStateDocument,
+  type RelationshipGuide,
+  type RelationshipStage,
+  type UserProfile
 } from "@shared/types";
 import { estimateTokenCount } from "./token-utils";
 
 export interface ContextAssemblerInput {
   soul: string;
+  relationship: RelationshipGuide;
   stage: RelationshipStage;
   state: KernelStateDocument;
   profile: UserProfile;
@@ -31,12 +34,17 @@ const RESERVED_RESPONSE_TOKENS = 500;
 
 export function assembleContext(input: ContextAssemblerInput): ContextAssemblerOutput {
   const maxTokens = Math.max(2000, input.maxTokens);
-  const block1 = buildIdentityBlock(input.soul, input.stage);
-  const block1Tokens = estimateTokenCount(block1);
-  const stateBlock = buildStateBlock(input.state, input.profile);
+  const soulBlock = buildSoulBlock(input.soul);
+  const soulTokens = estimateTokenCount(soulBlock);
+  const relationshipBlock = buildRelationshipBlock(input.relationship, input.stage);
+  const relationshipTokens = estimateTokenCount(relationshipBlock);
+  const stateBlock = buildStateBlock(input.state);
   const stateTokens = estimateTokenCount(stateBlock);
 
-  const rawRemaining = Math.max(0, maxTokens - block1Tokens - stateTokens - RESERVED_RESPONSE_TOKENS);
+  const rawRemaining = Math.max(
+    0,
+    maxTokens - soulTokens - relationshipTokens - stateTokens - RESERVED_RESPONSE_TOKENS
+  );
   const memoryBudget = Math.max(0, rawRemaining);
 
   const selectedFacts: Fact[] = [];
@@ -65,7 +73,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   const memoryBlockTokens = estimateTokenCount(memoryBlock);
   const remainingForMessages = Math.max(
     0,
-    maxTokens - block1Tokens - stateTokens - memoryBlockTokens - RESERVED_RESPONSE_TOKENS
+    maxTokens - soulTokens - relationshipTokens - stateTokens - memoryBlockTokens - RESERVED_RESPONSE_TOKENS
   );
 
   const recentMessages = input.buffer.slice().reverse();
@@ -81,7 +89,7 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
     maxRecentMessages += 1;
   }
 
-  const system = [block1, stateBlock, memoryBlock].filter(Boolean).join("\n\n");
+  const system = [soulBlock, relationshipBlock, stateBlock, memoryBlock].filter(Boolean).join("\n\n");
 
   return {
     system,
@@ -91,29 +99,35 @@ export function assembleContext(input: ContextAssemblerInput): ContextAssemblerO
   };
 }
 
-function buildIdentityBlock(soul: string, stage: RelationshipStage): string {
-  return [`[SOUL]`, soul.trim(), "", `当前关系阶段: ${stage}`].filter(Boolean).join("\n");
+function buildSoulBlock(soul: string): string {
+  return ["[SOUL]", soul.trim()].filter(Boolean).join("\n");
 }
 
-function buildStateBlock(state: KernelStateDocument, profile: UserProfile): string {
+function buildRelationshipBlock(relationship: RelationshipGuide, stage: RelationshipStage): string {
+  return [
+    "[RELATIONSHIP]",
+    `current_stage=${stage}`,
+    `allowed_values=${JSON.stringify(RELATIONSHIP_STAGES)}`,
+    `current_stage_rules=${JSON.stringify(relationship.stages[stage] ?? [])}`
+  ]
+    .join("\n");
+}
+
+function buildStateBlock(state: KernelStateDocument): string {
   const emotional = state.emotional;
-  const moodText = emotional.mood >= 0.25 ? "心情偏正向" : emotional.mood <= -0.25 ? "心情偏低落" : "心情中性";
-  const energyText = emotional.energy >= 0.65 ? "精力较充沛" : emotional.energy <= 0.3 ? "精力偏低" : "精力中等";
-  const sessionReentry = state.sessionReentry?.active
-    ? `用户在 ${state.sessionReentry.gapLabel} 后回来了，先自然承接再进入主题。`
-    : "";
 
   return [
     "[STATE]",
-    `你现在${moodText}，${energyText}，连接感 ${round2(emotional.connection)}。`,
-    `好奇心 ${round2(emotional.curiosity)}，自信 ${round2(emotional.confidence)}，烦躁 ${round2(emotional.irritation)}。`,
-    profile.patterns.active_hours ? `用户活跃时段观察：${profile.patterns.active_hours}` : "",
-    profile.communication.preferred_comfort_style
-      ? `用户安慰偏好：${profile.communication.preferred_comfort_style}`
-      : "",
-    sessionReentry
+    `mood=${formatSigned(emotional.mood)} range=[-1.00,1.00] higher=more_positive`,
+    `energy=${formatUnit(emotional.energy)} range=[0.00,1.00] higher=more_energetic`,
+    `connection=${formatUnit(emotional.connection)} range=[0.00,1.00] higher=more_connected`,
+    `curiosity=${formatUnit(emotional.curiosity)} range=[0.00,1.00] higher=more_curious`,
+    `confidence=${formatUnit(emotional.confidence)} range=[0.00,1.00] higher=more_confident`,
+    `irritation=${formatUnit(emotional.irritation)} range=[0.00,1.00] higher=more_irritable`,
+    `cold_start=${String(state.coldStart)} values=[true,false]`,
+    `session_reentry_active=${String(Boolean(state.sessionReentry?.active))} values=[true,false]`,
+    `session_reentry_gap_hours=${state.sessionReentry?.active ? Math.max(0, state.sessionReentry.gapHours) : 0} range=[0,+inf)`
   ]
-    .filter(Boolean)
     .join("\n");
 }
 
@@ -127,6 +141,11 @@ function buildMemoryBlock(facts: Fact[], episodes: Episode[]): string {
   return `[MEMORY]\n${lines.join("\n")}`;
 }
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
+function formatUnit(value: number): string {
+  return value.toFixed(2);
+}
+
+function formatSigned(value: number): string {
+  const normalized = Object.is(value, -0) ? 0 : value;
+  return normalized.toFixed(2);
 }

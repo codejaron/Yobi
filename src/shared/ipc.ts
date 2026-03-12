@@ -7,6 +7,7 @@ import type {
   HistoryMessage,
   KernelStateDocument,
   MindSnapshot,
+  RelationshipGuide,
   SkillCatalogItem,
   ScheduledTask,
   ScheduledTaskInput,
@@ -56,10 +57,12 @@ export interface CompanionApi {
   getMindSnapshot(): Promise<MindSnapshot>;
   getSoul(): Promise<{ markdown: string; updatedAt: string }>;
   saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }>;
+  getRelationship(): Promise<{ guide: RelationshipGuide; updatedAt: string }>;
+  saveRelationship(input: { guide: RelationshipGuide }): Promise<{ guide: RelationshipGuide; updatedAt: string }>;
   patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument>;
   patchProfile(input: { patch: Partial<UserProfile> }): Promise<UserProfile>;
   resetMindSection(input: {
-    section: "soul" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "relationship" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }>;
   triggerKernelTask(taskType: "tick-now" | "daily-now"): Promise<{ accepted: boolean; message: string }>;
 

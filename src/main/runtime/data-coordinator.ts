@@ -1,9 +1,11 @@
 import {
   DEFAULT_KERNEL_STATE,
+  DEFAULT_RELATIONSHIP_GUIDE,
   type AppStatus,
   type HistoryMessage,
   type KernelStateDocument,
   type MindSnapshot,
+  type RelationshipGuide,
   type UserProfile
 } from "@shared/types";
 import { readTextFile, writeTextFileAtomic } from "@main/storage/fs";
@@ -15,6 +17,11 @@ import type { KernelEngine } from "@main/kernel/engine";
 import type { BilibiliBrowseService } from "@main/services/browse/bilibili-browse-service";
 import type { BilibiliSyncCoordinator } from "@main/services/browse/bilibili-sync-coordinator";
 import type { SystemPermissionsService } from "@main/services/system-permissions";
+import {
+  ensureRelationshipGuideFile,
+  loadRelationshipGuide,
+  saveRelationshipGuide
+} from "@main/relationship/guide-store";
 
 interface HistoryQuery {
   query?: string;
@@ -57,8 +64,9 @@ export class RuntimeDataCoordinator {
   }
 
   async getMindSnapshot(): Promise<MindSnapshot> {
-    const [soul, profile, facts, episodes] = await Promise.allSettled([
+    const [soul, relationship, profile, facts, episodes] = await Promise.allSettled([
       readTextFile(this.input.paths.soulPath, ""),
+      loadRelationshipGuide(this.input.paths),
       this.input.memory.getProfile(),
       this.input.memory.listFacts(),
       this.input.memory.listRecentEpisodes(20)
@@ -66,6 +74,7 @@ export class RuntimeDataCoordinator {
 
     return {
       soul: soul.status === "fulfilled" ? soul.value : "",
+      relationship: relationship.status === "fulfilled" ? relationship.value : await ensureRelationshipGuideFile(this.input.paths),
       state: this.input.stateStore.getSnapshot(),
       profile:
         profile.status === "fulfilled"
@@ -88,6 +97,21 @@ export class RuntimeDataCoordinator {
     await writeTextFileAtomic(this.input.paths.soulPath, `${markdown}\n`);
     return {
       markdown,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async getRelationship(): Promise<{ guide: RelationshipGuide; updatedAt: string }> {
+    return {
+      guide: await loadRelationshipGuide(this.input.paths),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async saveRelationship(input: { guide: RelationshipGuide }): Promise<{ guide: RelationshipGuide; updatedAt: string }> {
+    const guide = await saveRelationshipGuide(this.input.paths, input.guide);
+    return {
+      guide,
       updatedAt: new Date().toISOString()
     };
   }
@@ -146,12 +170,16 @@ export class RuntimeDataCoordinator {
   }
 
   async resetMindSection(input: {
-    section: "soul" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "relationship" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }> {
     const section = input.section;
     if (section === "soul") {
       await writeTextFileAtomic(this.input.paths.soulPath, `${DEFAULT_SOUL_TEXT.trim()}\n`);
       return { accepted: true, message: "SOUL 已恢复默认。" };
+    }
+    if (section === "relationship") {
+      await saveRelationshipGuide(this.input.paths, DEFAULT_RELATIONSHIP_GUIDE);
+      return { accepted: true, message: "RELATIONSHIP 已恢复默认。" };
     }
     if (section === "state") {
       this.input.stateStore.mutate((state) => {

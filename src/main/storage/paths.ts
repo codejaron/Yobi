@@ -17,6 +17,10 @@ export class CompanionPaths {
     return path.join(this.baseDir, "soul.md");
   }
 
+  get relationshipPath(): string {
+    return path.join(this.baseDir, "relationship.json");
+  }
+
   get scheduledTasksPath(): string {
     return path.join(this.baseDir, "scheduled-tasks.json");
   }

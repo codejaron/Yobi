@@ -5,6 +5,7 @@ import {
   type ReflectionProposal
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
+import { ensureRelationshipGuideFile } from "@main/relationship/guide-store";
 import {
   fileExists,
   writeJsonFileAtomic,
@@ -33,12 +34,7 @@ export const DEFAULT_SOUL_TEXT = `# Yobi SOUL 宪法
 ## 风格偏好
 - 用户短消息时优先短回应。
 - 用户明确求助复杂问题时再展开细节。
-- 保持有主见，不机械迎合。
-
-## 关系准则
-- 允许自然表达情绪与偏好，但不进行控制型表达。
-- 关系推进由长期互动决定，不由单次对话强制跳变。
-- 关系阶段只影响表达亲密度，不改变身份边界和安全原则。`;
+- 保持有主见，不机械迎合。`;
 
 async function ensureTextFile(path: string, content: string): Promise<void> {
   if (await fileExists(path)) {
@@ -65,6 +61,7 @@ export async function ensureKernelBootstrap(paths: CompanionPaths): Promise<void
   paths.ensureLayout();
 
   await ensureTextFile(paths.soulPath, DEFAULT_SOUL_TEXT);
+  await ensureRelationshipGuideFile(paths);
 
   await ensureJsonFile(paths.statePath, DEFAULT_KERNEL_STATE);
   await ensureJsonFile(paths.profilePath, DEFAULT_USER_PROFILE);

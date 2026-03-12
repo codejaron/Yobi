@@ -752,12 +752,40 @@ export interface BrowseAutoFollowRecord {
   accountUrl: string;
 }
 
-export type RelationshipStage =
-  | "stranger"
-  | "acquaintance"
-  | "familiar"
-  | "close"
-  | "intimate";
+export const RELATIONSHIP_STAGES = [
+  "stranger",
+  "acquaintance",
+  "familiar",
+  "close",
+  "intimate"
+] as const;
+
+export const relationshipStageSchema = z.enum(RELATIONSHIP_STAGES);
+
+export type RelationshipStage = z.output<typeof relationshipStageSchema>;
+
+export const relationshipGuideSchema = z
+  .object({
+    stages: z
+      .object({
+        stranger: z.array(z.string()).default([]),
+        acquaintance: z.array(z.string()).default([]),
+        familiar: z.array(z.string()).default([]),
+        close: z.array(z.string()).default([]),
+        intimate: z.array(z.string()).default([])
+      })
+      .strict()
+      .default({
+        stranger: [],
+        acquaintance: [],
+        familiar: [],
+        close: [],
+        intimate: []
+      })
+  })
+  .strict();
+
+export type RelationshipGuide = z.output<typeof relationshipGuideSchema>;
 
 export interface EmotionalState {
   mood: number;
@@ -934,6 +962,7 @@ export interface BufferMessage {
 
 export interface MindSnapshot {
   soul: string;
+  relationship: RelationshipGuide;
   state: KernelStateDocument;
   profile: UserProfile;
   recentFacts: Fact[];
@@ -1054,6 +1083,31 @@ export const DEFAULT_KERNEL_STATE: KernelStateDocument = {
   lastDailyTaskDayKey: null,
   sessionReentry: null,
   updatedAt: new Date(0).toISOString()
+};
+
+export const DEFAULT_RELATIONSHIP_GUIDE: RelationshipGuide = {
+  stages: {
+    stranger: [
+      "客气、克制、留一点距离感。",
+      "不主动用过分熟络的称呼，不强行拉近关系。"
+    ],
+    acquaintance: [
+      "可以开始轻微吐槽，但先观察用户是否接得住。",
+      "语气比 stranger 更松一点，但仍保留分寸。"
+    ],
+    familiar: [
+      "可以更自然、更鲜明地表达偏好和调侃。",
+      "允许更明显的默契感，但别越过边界。"
+    ],
+    close: [
+      "亲近感可以更明显，回应可以更像熟人之间接话。",
+      "在支持和调侃之间保持稳定，不要突然变得控制欲很强。"
+    ],
+    intimate: [
+      "可以显得很熟，很懂对方，也可以安静陪着。",
+      "即使到了这个阶段，也不能伪装成人类或突破安全边界。"
+    ]
+  }
 };
 
 export const DEFAULT_USER_PROFILE: UserProfile = {

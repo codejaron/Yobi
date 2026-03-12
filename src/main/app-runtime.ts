@@ -5,6 +5,7 @@ import {
   type CommandApprovalDecision,
   type ConsoleRunEventV2,
   type MindSnapshot,
+  type RelationshipGuide,
   type ScheduledTaskInput,
   type ScheduledTaskToolName,
   type ScheduledTaskRun,
@@ -336,6 +337,14 @@ export class CompanionRuntime {
     return this.dataCoordinator.saveSoul(input);
   }
 
+  async getRelationship(): Promise<{ guide: RelationshipGuide; updatedAt: string }> {
+    return this.dataCoordinator.getRelationship();
+  }
+
+  async saveRelationship(input: { guide: RelationshipGuide }): Promise<{ guide: RelationshipGuide; updatedAt: string }> {
+    return this.dataCoordinator.saveRelationship(input);
+  }
+
   async patchState(input: { patch: Partial<KernelStateDocument> }): Promise<KernelStateDocument> {
     return this.dataCoordinator.patchState(input);
   }
@@ -345,7 +354,7 @@ export class CompanionRuntime {
   }
 
   async resetMindSection(input: {
-    section: "soul" | "state" | "profile" | "facts" | "episodes";
+    section: "soul" | "relationship" | "state" | "profile" | "facts" | "episodes";
   }): Promise<{ accepted: boolean; message: string }> {
     return this.dataCoordinator.resetMindSection(input);
   }

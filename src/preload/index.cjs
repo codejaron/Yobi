@@ -37,6 +37,12 @@ const api = {
   saveSoul(input) {
     return ipcRenderer.invoke('mind:soul:save', input);
   },
+  getRelationship() {
+    return ipcRenderer.invoke('mind:relationship:get');
+  },
+  saveRelationship(input) {
+    return ipcRenderer.invoke('mind:relationship:save', input);
+  },
   patchState(input) {
     return ipcRenderer.invoke('mind:state:patch', input);
   },

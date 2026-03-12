@@ -400,6 +400,11 @@ export default function App() {
               await refreshMindSnapshot();
               setNotice("SOUL 已更新");
             }}
+            onSaveRelationship={async (guide) => {
+              await window.companion.saveRelationship({ guide });
+              await refreshMindSnapshot();
+              setNotice("RELATIONSHIP 已更新");
+            }}
             onResetMindSection={async (input) => {
               const result = await window.companion.resetMindSection(input);
               await refreshMindSnapshot();

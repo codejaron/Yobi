@@ -26,6 +26,7 @@ import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { assembleContext } from "@main/memory-v2/context-assembler";
 import { extractQueryTerms, matchEpisodes } from "@main/memory-v2/retrieval";
+import { loadRelationshipGuide } from "@main/relationship/guide-store";
 import type { StateStore } from "@main/kernel/state-store";
 import { CompanionPaths } from "@main/storage/paths";
 import { appLogger as logger } from "@main/runtime/singletons";
@@ -166,8 +167,9 @@ export class ConversationEngine {
       });
     }
 
-    const [soul, profile, facts, episodes] = await Promise.all([
+    const [soul, relationship, profile, facts, episodes] = await Promise.all([
       readFile(this.paths.soulPath, "utf8").catch(() => ""),
+      loadRelationshipGuide(this.paths),
       this.memory.getProfile(),
       this.memory.listFacts(),
       this.memory.listRecentEpisodes(30)
@@ -191,6 +193,7 @@ export class ConversationEngine {
     ]);
     const assembled = assembleContext({
       soul: soul.trim(),
+      relationship,
       stage: stateSnapshot.relationship.stage,
       state: stateSnapshot,
       profile,
