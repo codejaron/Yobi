@@ -22,26 +22,30 @@ interface ScheduledTaskNotifyInput {
   };
 }
 
+interface ScheduledTaskAgentRunInput {
+  taskId: string;
+  taskName: string;
+  prompt: string;
+  allowedToolNames: ScheduledTaskToolName[];
+  pushTargets?: {
+    telegram: boolean;
+    feishu: boolean;
+  };
+}
+
 interface ScheduledTaskServiceInput {
   store: ScheduledTaskStore;
-  toolRegistry: Pick<ToolRegistry, "list" | "execute">;
+  toolRegistry: Pick<ToolRegistry, "list">;
   approvalGuard: ApprovalGuard;
   getConfig: () => AppConfig;
   notify: (input: ScheduledTaskNotifyInput) => Promise<void>;
+  runAgentTask: (input: ScheduledTaskAgentRunInput) => Promise<{ replyText: string }>;
 }
-
-const ALLOWED_SCHEDULED_TOOLS = new Set<ScheduledTaskToolName>([
-  "browser",
-  "system",
-  "file",
-  "web_search",
-  "code_search",
-  "web_fetch"
-]);
 
 const GRACE_WINDOW_MS = 5 * 60_000;
 const POLL_INTERVAL_MS = 1_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
+const AGENT_APPROVAL_REQUIRED_TOOLS = new Set<ScheduledTaskToolName>(["system", "file"]);
 
 function resolveLocalTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -115,6 +119,21 @@ function nowIso(): string {
 
 function cloneTask(task: ScheduledTask): ScheduledTask {
   return JSON.parse(JSON.stringify(task)) as ScheduledTask;
+}
+
+function dedupeToolNames(names: ScheduledTaskToolName[]): ScheduledTaskToolName[] {
+  return Array.from(new Set(names)).sort();
+}
+
+function summarizeAgentReply(replyText: string, limit = 200): string {
+  const normalized = replyText.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "执行成功";
+  }
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 export class ScheduledTaskService {
@@ -337,17 +356,10 @@ export class ScheduledTaskService {
     const startedAt = nowIso();
 
     try {
-      if (current.action.kind === "tool") {
-        await this.executeToolAction(current);
-      } else {
-        await this.input.notify({
-          text: current.action.text,
-          pushTargets: current.action.pushTargets
-        });
-      }
+      const successMessage = await this.executeAction(current);
 
       const finishedAt = nowIso();
-      const updatedTask = await this.applySuccess(current, input.manual);
+      const updatedTask = await this.applySuccess(current, input.manual, successMessage);
       const run = await this.input.store.appendRun({
         taskId: current.id,
         taskName: current.name,
@@ -379,41 +391,39 @@ export class ScheduledTaskService {
     }
   }
 
-  private async executeToolAction(task: ScheduledTask): Promise<void> {
-    if (task.action.kind !== "tool") {
-      return;
+  private async executeAction(task: ScheduledTask): Promise<string | null> {
+    if (task.action.kind === "notify") {
+      await this.input.notify({
+        text: task.action.text,
+        pushTargets: task.action.pushTargets
+      });
+      return null;
     }
 
-    const definition = this.findAllowedToolDefinition(task.action.toolName);
-    const config = this.input.getConfig();
-    const parsed = definition.parameters.safeParse(task.action.params);
-    if (!parsed.success) {
-      throw new Error(
-        `参数校验失败: ${parsed.error.issues
-          .map((item) => `${item.path.join(".") || "(root)"}: ${item.message}`)
-          .join("; ")}`
-      );
+    if (task.action.kind !== "agent") {
+      return null;
     }
 
-    const approvalRequired = definition.requiresApproval?.(parsed.data, config) ?? false;
+    const approvalRequired = this.requiresAgentApproval(task.action.allowedTools);
     if (approvalRequired) {
-      const signature = this.computeToolSignature(definition, parsed.data);
+      const signature = this.computeAgentApprovalSignature(task.action.allowedTools);
       if (!task.approvalSignature || task.approvalSignature !== signature) {
         throw new Error("approval-invalidated");
       }
     }
 
-    const result = await this.input.toolRegistry.execute(task.action.toolName, parsed.data, {
-      channel: "scheduler",
-      userMessage: `[scheduled-task:${task.id}]`
+    const result = await this.input.runAgentTask({
+      taskId: task.id,
+      taskName: task.name,
+      prompt: task.action.prompt,
+      allowedToolNames: task.action.allowedTools,
+      pushTargets: task.action.pushTargets
     });
 
-    if (!result.success) {
-      throw new Error(result.error || "执行失败");
-    }
+    return summarizeAgentReply(result.replyText);
   }
 
-  private async applySuccess(task: ScheduledTask, manual: boolean): Promise<ScheduledTask> {
+  private async applySuccess(task: ScheduledTask, manual: boolean, successMessage?: string | null): Promise<ScheduledTask> {
     const now = new Date();
     let status: ScheduledTaskStatus = task.status;
     let nextRunAt = task.nextRunAt;
@@ -432,7 +442,7 @@ export class ScheduledTaskService {
       nextRunAt,
       lastRunAt: now.toISOString(),
       lastRunStatus: "success",
-      lastRunMessage: "执行成功",
+      lastRunMessage: successMessage?.trim() || "执行成功",
       pauseReason: null,
       consecutiveFailures: 0,
       updatedAt: now.toISOString()
@@ -548,30 +558,26 @@ export class ScheduledTaskService {
       };
     }
 
-    if (!ALLOWED_SCHEDULED_TOOLS.has(action.toolName)) {
-      throw new Error(`该工具不允许被调度: ${action.toolName}`);
+    const prompt = action.prompt.trim();
+    if (!prompt) {
+      throw new Error("Agent 指令不能为空");
     }
 
-    const definition = this.findAllowedToolDefinition(action.toolName);
-    const parsed = definition.parameters.safeParse(action.params);
-    if (!parsed.success) {
-      throw new Error(
-        `参数校验失败: ${parsed.error.issues
-          .map((item) => `${item.path.join(".") || "(root)"}: ${item.message}`)
-          .join("; ")}`
-      );
+    const allowedTools = dedupeToolNames(action.allowedTools);
+    for (const toolName of allowedTools) {
+      this.findAllowedToolDefinition(toolName);
     }
 
-    const config = this.input.getConfig();
-    const approvalRequiredAtCreation = definition.requiresApproval?.(parsed.data, config) ?? false;
-    const approvalSignature = approvalRequiredAtCreation ? this.computeToolSignature(definition, parsed.data) : null;
-    const approvedAt = approvalRequiredAtCreation ? await this.ensureApproved(definition, parsed.data, approvalSignature!, requestApproval) : null;
+    const approvalRequiredAtCreation = this.requiresAgentApproval(allowedTools);
+    const approvalSignature = approvalRequiredAtCreation ? this.computeAgentApprovalSignature(allowedTools) : null;
+    const approvedAt = approvalRequiredAtCreation ? await this.ensureAgentApproved(allowedTools, approvalSignature!, requestApproval) : null;
 
     return {
       action: {
-        kind: "tool",
-        toolName: action.toolName,
-        params: parsed.data
+        kind: "agent",
+        prompt,
+        pushTargets: action.pushTargets,
+        allowedTools
       },
       approvalRequiredAtCreation,
       approvalSignature,
@@ -579,17 +585,18 @@ export class ScheduledTaskService {
     };
   }
 
-  private async ensureApproved(
-    definition: ToolDefinition<any>,
-    params: Record<string, unknown>,
+  private async ensureAgentApproved(
+    allowedTools: ScheduledTaskToolName[],
     signature: string,
     requestApproval?: ToolApprovalHandler
   ): Promise<string> {
-    const description = definition.approvalText?.(params) ?? `${definition.name} ${JSON.stringify(params)}`;
+    const description = `允许定时 Agent 在无人值守时使用以下工具类别：${allowedTools.join(", ")}`;
     const approved = await this.input.approvalGuard.ensureApproved(
       {
-        toolName: definition.name,
-        params,
+        toolName: "agent",
+        params: {
+          allowedTools
+        },
         description,
         signature
       },
@@ -624,13 +631,15 @@ export class ScheduledTaskService {
     if (action.kind === "notify") {
       return action.text.trim().slice(0, 24) || "定时提醒";
     }
-    return `定时任务 · ${action.toolName}`;
+    return action.prompt.trim().slice(0, 24) || "定时 Agent";
   }
 
-  private computeToolSignature(definition: ToolDefinition<any>, params: Record<string, unknown>): string {
-    return definition.signatureKey
-      ? `${definition.name}:${definition.signatureKey(params)}`
-      : `${definition.name}:${JSON.stringify(params)}`;
+  private requiresAgentApproval(allowedTools: ScheduledTaskToolName[]): boolean {
+    return allowedTools.some((toolName) => AGENT_APPROVAL_REQUIRED_TOOLS.has(toolName));
+  }
+
+  private computeAgentApprovalSignature(allowedTools: ScheduledTaskToolName[]): string {
+    return `agent:${dedupeToolNames(allowedTools).join(",")}`;
   }
 
   private computeNextRunAt(trigger: ScheduledTaskTrigger, fromDate: Date): string | null {

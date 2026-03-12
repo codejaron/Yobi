@@ -69,6 +69,9 @@ export class DefaultToolRegistry implements ToolRegistry {
       if (!this.isToolEnabled(definition)) {
         continue;
       }
+      if (!this.isToolAllowed(definition.name, context.allowedToolNames)) {
+        continue;
+      }
 
       toolSet[definition.name] = tool({
         description: definition.description,
@@ -100,6 +103,12 @@ export class DefaultToolRegistry implements ToolRegistry {
         error: `工具未启用: ${name}`
       };
     }
+    if (!this.isToolAllowed(name, context.allowedToolNames)) {
+      return {
+        success: false,
+        error: `当前任务未授权使用工具: ${name}`
+      };
+    }
 
     const parsed = definition.parameters.safeParse(params);
     if (!parsed.success) {
@@ -118,7 +127,8 @@ export class DefaultToolRegistry implements ToolRegistry {
       : `${name}:${JSON.stringify(input)}`;
 
     const needsApproval = definition.requiresApproval?.(input, config) ?? false;
-    if (needsApproval) {
+    const preapproved = context.preapprovedToolNames?.includes(name) ?? false;
+    if (needsApproval && !preapproved) {
       const approved = await this.approvalGuard.ensureApproved(
         {
           toolName: name,
@@ -164,5 +174,13 @@ export class DefaultToolRegistry implements ToolRegistry {
     }
 
     return true;
+  }
+
+  private isToolAllowed(name: string, allowedToolNames?: string[]): boolean {
+    if (!allowedToolNames) {
+      return true;
+    }
+
+    return allowedToolNames.includes(name);
   }
 }

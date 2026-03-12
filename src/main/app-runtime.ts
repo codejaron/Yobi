@@ -6,6 +6,7 @@ import {
   type ConsoleRunEventV2,
   type MindSnapshot,
   type ScheduledTaskInput,
+  type ScheduledTaskToolName,
   type ScheduledTaskRun,
   type UserProfile,
   type HistoryMessage,
@@ -97,7 +98,8 @@ export class CompanionRuntime {
       toolRegistry: this.toolRegistry,
       approvalGuard: this.approvalGuard,
       getConfig: () => this.getConfig(),
-      notify: (input) => this.dispatchScheduledNotification(input)
+      notify: (input) => this.dispatchScheduledNotification(input),
+      runAgentTask: (input) => this.runScheduledAgentTask(input)
     });
 
     registry.bindCallbacks({
@@ -717,6 +719,60 @@ export class CompanionRuntime {
       pushTargets: input.pushTargets ?? this.getConfig().proactive.pushTargets,
       recordProactive: false
     });
+  }
+
+  private async runScheduledAgentTask(input: {
+    taskId: string;
+    taskName: string;
+    prompt: string;
+    allowedToolNames: ScheduledTaskToolName[];
+    pushTargets?: {
+      telegram: boolean;
+      feishu: boolean;
+    };
+  }): Promise<{ replyText: string }> {
+    const replyText = await this.conversation.reply({
+      text: input.prompt,
+      channel: "console",
+      resourceId: PRIMARY_RESOURCE_ID,
+      threadId: PRIMARY_THREAD_ID,
+      persistUserMessage: false,
+      allowedToolNames: input.allowedToolNames,
+      preapprovedToolNames: input.allowedToolNames
+    });
+
+    await this.broadcastScheduledAgentReply({
+      text: replyText,
+      pushTargets: input.pushTargets ?? this.getConfig().proactive.pushTargets
+    });
+
+    return {
+      replyText
+    };
+  }
+
+  private async broadcastScheduledAgentReply(input: {
+    text: string;
+    pushTargets: {
+      telegram: boolean;
+      feishu: boolean;
+    };
+  }): Promise<void> {
+    const normalizedMessage = input.text.trim();
+    if (!normalizedMessage) {
+      return;
+    }
+
+    this.consoleChannel.emitExternalAssistantMessage({
+      text: normalizedMessage,
+      source: "yobi"
+    });
+
+    if (input.pushTargets.telegram || input.pushTargets.feishu) {
+      await this.pushToConfiguredChannels(normalizedMessage, input.pushTargets);
+    }
+
+    await this.emitStatus();
   }
 
   private async dispatchAssistantAutomationMessage(input: {

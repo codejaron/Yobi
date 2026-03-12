@@ -44,6 +44,19 @@ function createToolRegistryStub(definitions: ToolDefinition<any>[], executions: 
   };
 }
 
+function createBuiltinToolDefinitions(...names: string[]): ToolDefinition<any>[] {
+  return names.map((name) => ({
+    name,
+    source: "builtin",
+    description: `${name} tool`,
+    parameters: z.object({}).passthrough(),
+    isEnabled: () => true,
+    execute: async () => ({
+      success: true
+    })
+  }));
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -57,13 +70,16 @@ test("ScheduledTaskService: creates notify task and run-now dispatches notificat
   const executions: Array<{ name: string; params: Record<string, unknown> }> = [];
   const service = new ScheduledTaskService({
     store: new ScheduledTaskStore(paths),
-    toolRegistry: createToolRegistryStub([], executions),
+    toolRegistry: createToolRegistryStub(createBuiltinToolDefinitions("web_search", "web_fetch"), executions),
     approvalGuard: {
       ensureApproved: async () => true
     } as any,
     getConfig: () => config,
     notify: async (input) => {
       notifications.push(input.text);
+    },
+    runAgentTask: async () => {
+      throw new Error("should not run agent");
     }
   });
 
@@ -109,6 +125,9 @@ test("ScheduledTaskService: once task auto-runs at due time", async () => {
     getConfig: () => config,
     notify: async (input) => {
       notifications.push(input.text);
+    },
+    runAgentTask: async () => {
+      throw new Error("should not run agent");
     }
   });
 
@@ -156,6 +175,9 @@ test("ScheduledTaskService: validates cron and marks past once tasks as missed o
     getConfig: () => config,
     notify: async (input) => {
       notifications.push(input.text);
+    },
+    runAgentTask: async () => {
+      throw new Error("should not run agent");
     }
   });
 
@@ -275,76 +297,188 @@ test("ScheduledTaskService: validates cron and marks past once tasks as missed o
   }
 });
 
-test("ScheduledTaskService: pauses tool task when approval signature is invalidated", async () => {
-  const paths = await createTempPaths("yobi-scheduler-approval-");
+test("ScheduledTaskService: runs agent task and stores reply summary", async () => {
+  const paths = await createTempPaths("yobi-scheduler-agent-");
   const config = cloneConfig();
-  config.tools.system.enabled = true;
-  config.tools.system.execEnabled = true;
   const notifications: string[] = [];
   const executions: Array<{ name: string; params: Record<string, unknown> }> = [];
-
-  const systemTool: ToolDefinition<{ action: "exec"; command: string }> = {
-    name: "system",
-    source: "builtin",
-    description: "test system",
-    parameters: z.object({
-      action: z.literal("exec"),
-      command: z.string().min(1)
-    }),
-    isEnabled: () => true,
-    requiresApproval: () => true,
-    approvalText: ({ command }) => `执行命令:\n${command}`,
-    signatureKey: ({ command }) => command,
-    execute: async () => ({
-      success: true,
-      data: { ok: true }
-    })
-  };
-
-  const store = new ScheduledTaskStore(paths);
+  const agentRuns: Array<{
+    prompt: string;
+    allowedToolNames: string[];
+    pushTargets?: {
+      telegram: boolean;
+      feishu: boolean;
+    };
+  }> = [];
   const service = new ScheduledTaskService({
-    store,
-    toolRegistry: createToolRegistryStub([systemTool], executions),
+    store: new ScheduledTaskStore(paths),
+    toolRegistry: createToolRegistryStub(createBuiltinToolDefinitions("web_search", "web_fetch"), executions),
     approvalGuard: {
       ensureApproved: async () => true
     } as any,
     getConfig: () => config,
     notify: async (input) => {
       notifications.push(input.text);
+    },
+    runAgentTask: async (input) => {
+      agentRuns.push({
+        prompt: input.prompt,
+        allowedToolNames: input.allowedToolNames,
+        pushTargets: input.pushTargets
+      });
+      return {
+        replyText: "这是今晚的 GitHub Trending 总结：项目 A 做 agent 框架，项目 B 做构建工具。"
+      };
     }
   });
 
   try {
     await service.init();
     const created = await service.saveTask({
+      name: "晚间趋势总结",
       trigger: {
         kind: "once",
         runAt: toLocalDateTimeInput(new Date(Date.now() + 60_000))
       },
       action: {
-        kind: "tool",
-        toolName: "system",
-        params: {
-          action: "exec",
-          command: "echo hi"
+        kind: "agent",
+        prompt: "搜索 GitHub Trending 前十，并说明每个项目是做什么的。",
+        allowedTools: ["web_search", "web_fetch"],
+        pushTargets: {
+          telegram: true,
+          feishu: false
         }
       },
       enabled: true
     });
 
-    await store.save({
-      ...created,
-      approvalSignature: "system:changed"
-    });
-
     const run = await service.runTaskNow(created.id);
     const task = service.listTasks().find((item) => item.id === created.id);
 
-    assert.equal(run.status, "failed");
-    assert.equal(task?.status, "paused");
-    assert.equal(task?.pauseReason, "approval-invalidated");
+    assert.equal(run.status, "success");
+    assert.equal(task?.status, "completed");
+    assert.equal(task?.lastRunStatus, "success");
+    assert.match(task?.lastRunMessage ?? "", /GitHub Trending 总结/);
+    assert.match(run.message ?? "", /GitHub Trending 总结/);
+    assert.deepEqual(agentRuns, [
+      {
+        prompt: "搜索 GitHub Trending 前十，并说明每个项目是做什么的。",
+        allowedToolNames: ["web_fetch", "web_search"],
+        pushTargets: {
+          telegram: true,
+          feishu: false
+        }
+      }
+    ]);
     assert.equal(executions.length, 0);
     assert.equal(notifications.length, 0);
+  } finally {
+    await service.stop();
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("ScheduledTaskService: requests approval when agent task enables system tool", async () => {
+  const paths = await createTempPaths("yobi-scheduler-agent-approval-");
+  const config = cloneConfig();
+  config.tools.system.enabled = true;
+  config.tools.system.execEnabled = true;
+  let approvalCalls = 0;
+
+  const service = new ScheduledTaskService({
+    store: new ScheduledTaskStore(paths),
+    toolRegistry: createToolRegistryStub(
+      [
+        ...createBuiltinToolDefinitions("web_search"),
+        {
+          name: "system",
+          source: "builtin",
+          description: "test system",
+          parameters: z.object({}),
+          isEnabled: () => true,
+          requiresApproval: () => true,
+          execute: async () => ({ success: true })
+        } as any
+      ],
+      []
+    ),
+    approvalGuard: {
+      ensureApproved: async (request: { toolName: string; signature: string }) => {
+        approvalCalls += 1;
+        assert.equal(request.toolName, "agent");
+        assert.match(request.signature, /agent:system,web_search/);
+        return true;
+      }
+    } as any,
+    getConfig: () => config,
+    notify: async () => undefined,
+    runAgentTask: async () => ({ replyText: "ok" })
+  });
+
+  try {
+    await service.init();
+    const task = await service.saveTask({
+      trigger: {
+        kind: "once",
+        runAt: toLocalDateTimeInput(new Date(Date.now() + 60_000))
+      },
+      action: {
+        kind: "agent",
+        prompt: "帮我整理桌面窗口。",
+        allowedTools: ["web_search", "system"]
+      },
+      enabled: true
+    });
+
+    assert.equal(approvalCalls, 1);
+    assert.equal(task.approvalRequiredAtCreation, true);
+    assert.equal(task.approvalSignature, "agent:system,web_search");
+    assert.ok(task.approvedAt);
+  } finally {
+    await service.stop();
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("ScheduledTaskService: skips approval for safe agent tool set", async () => {
+  const paths = await createTempPaths("yobi-scheduler-agent-safe-");
+  const config = cloneConfig();
+  let approvalCalls = 0;
+  const service = new ScheduledTaskService({
+    store: new ScheduledTaskStore(paths),
+    toolRegistry: createToolRegistryStub(
+      createBuiltinToolDefinitions("browser", "web_search", "web_fetch", "code_search"),
+      []
+    ),
+    approvalGuard: {
+      ensureApproved: async () => {
+        approvalCalls += 1;
+        return true;
+      }
+    } as any,
+    getConfig: () => config,
+    notify: async () => undefined,
+    runAgentTask: async () => ({ replyText: "ok" })
+  });
+
+  try {
+    await service.init();
+    const task = await service.saveTask({
+      trigger: {
+        kind: "once",
+        runAt: toLocalDateTimeInput(new Date(Date.now() + 60_000))
+      },
+      action: {
+        kind: "agent",
+        prompt: "搜索今日技术趋势。",
+        allowedTools: ["browser", "web_search", "web_fetch", "code_search"]
+      },
+      enabled: true
+    });
+
+    assert.equal(approvalCalls, 0);
+    assert.equal(task.approvalRequiredAtCreation, false);
+    assert.equal(task.approvalSignature, null);
   } finally {
     await service.stop();
     await fs.rm(paths.baseDir, { recursive: true, force: true });
@@ -362,7 +496,8 @@ test("ScheduledTaskService: rejects legacy ISO once inputs", async () => {
       ensureApproved: async () => true
     } as any,
     getConfig: () => config,
-    notify: async () => undefined
+    notify: async () => undefined,
+    runAgentTask: async () => ({ replyText: "ok" })
   });
 
   try {
@@ -384,6 +519,63 @@ test("ScheduledTaskService: rejects legacy ISO once inputs", async () => {
     );
   } finally {
     await service.stop();
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("ScheduledTaskStore: drops legacy tool tasks during init", async () => {
+  const paths = await createTempPaths("yobi-scheduler-cleanup-");
+
+  try {
+    await fs.writeFile(
+      paths.scheduledTasksPath,
+      JSON.stringify(
+        {
+          tasks: [
+            {
+              id: "legacy-tool-task",
+              name: "旧工具任务",
+              trigger: {
+                kind: "once",
+                runAt: toLocalDateTimeInput(new Date(Date.now() + 60_000))
+              },
+              action: {
+                kind: "tool",
+                toolName: "web_search",
+                params: {
+                  query: "legacy"
+                }
+              },
+              status: "enabled",
+              nextRunAt: toLocalDateTimeInput(new Date(Date.now() + 60_000)),
+              lastRunAt: null,
+              lastRunStatus: null,
+              lastRunMessage: null,
+              pauseReason: null,
+              consecutiveFailures: 0,
+              approvalRequiredAtCreation: false,
+              approvalSignature: null,
+              approvedAt: null,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          ]
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const store = new ScheduledTaskStore(paths);
+    await store.init();
+
+    assert.equal(store.list().length, 0);
+    const saved = JSON.parse(await fs.readFile(paths.scheduledTasksPath, "utf8")) as {
+      tasks: unknown[];
+    };
+    assert.deepEqual(saved.tasks, []);
+  } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }
 });

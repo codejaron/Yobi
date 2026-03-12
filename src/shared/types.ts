@@ -105,9 +105,10 @@ export const scheduledTaskActionSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("tool"),
-      toolName: scheduledTaskToolNameSchema,
-      params: z.record(z.string(), z.unknown())
+      kind: z.literal("agent"),
+      prompt: z.string().min(1),
+      pushTargets: scheduledTaskPushTargetsSchema.optional(),
+      allowedTools: z.array(scheduledTaskToolNameSchema).default([])
     })
     .strict()
 ]);

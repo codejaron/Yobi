@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppConfig, ScheduledTask, ScheduledTaskInput, ScheduledTaskRun } from "@shared/types";
+import type {
+  AppConfig,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskRun,
+  ScheduledTaskToolName
+} from "@shared/types";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@renderer/components/ui/card";
@@ -58,6 +64,17 @@ function statusTone(status: ScheduledTask["status"]): string {
   return "status-badge status-badge--danger";
 }
 
+function defaultAgentTools(config: AppConfig): ScheduledTaskToolName[] {
+  const defaults: ScheduledTaskToolName[] = [];
+  if (config.tools.exa.enabled) {
+    defaults.push("web_search", "web_fetch", "code_search");
+  }
+  if (config.tools.browser.enabled) {
+    defaults.push("browser");
+  }
+  return defaults;
+}
+
 export function SchedulerPage({ config }: SchedulerPageProps) {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [runs, setRuns] = useState<ScheduledTaskRun[]>([]);
@@ -70,13 +87,31 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
   const [triggerKind, setTriggerKind] = useState<"once" | "cron">("once");
   const [runAt, setRunAt] = useState("");
   const [cronExpression, setCronExpression] = useState("0 9 * * *");
-  const [actionKind, setActionKind] = useState<"notify" | "tool">("notify");
+  const [actionKind, setActionKind] = useState<"notify" | "agent">("notify");
   const [notifyText, setNotifyText] = useState("");
   const [pushTelegram, setPushTelegram] = useState(config.proactive.pushTargets.telegram);
   const [pushFeishu, setPushFeishu] = useState(config.proactive.pushTargets.feishu);
-  const [toolName, setToolName] = useState<"browser" | "system" | "file" | "web_search" | "code_search" | "web_fetch">("web_search");
-  const [paramsText, setParamsText] = useState('{\n  "query": ""\n}');
+  const [agentPrompt, setAgentPrompt] = useState("");
+  const [allowedTools, setAllowedTools] = useState<ScheduledTaskToolName[]>(() => defaultAgentTools(config));
   const isEditing = Boolean(editingId);
+  const toolOptions = useMemo(
+    () =>
+      [
+        { name: "web_search", label: "web_search", enabled: config.tools.exa.enabled },
+        { name: "web_fetch", label: "web_fetch", enabled: config.tools.exa.enabled },
+        { name: "code_search", label: "code_search", enabled: config.tools.exa.enabled },
+        { name: "browser", label: "browser", enabled: config.tools.browser.enabled },
+        { name: "system", label: "system", enabled: config.tools.system.enabled },
+        { name: "file", label: "file", enabled: config.tools.file.readEnabled || config.tools.file.writeEnabled }
+      ] satisfies Array<{ name: ScheduledTaskToolName; label: string; enabled: boolean }>,
+    [
+      config.tools.browser.enabled,
+      config.tools.exa.enabled,
+      config.tools.file.readEnabled,
+      config.tools.file.writeEnabled,
+      config.tools.system.enabled
+    ]
+  );
 
   const loadSnapshot = useCallback(async () => {
     setLoading(true);
@@ -105,9 +140,9 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
     setNotifyText("");
     setPushTelegram(config.proactive.pushTargets.telegram);
     setPushFeishu(config.proactive.pushTargets.feishu);
-    setToolName("web_search");
-    setParamsText('{\n  "query": ""\n}');
-  }, [config.proactive.pushTargets.feishu, config.proactive.pushTargets.telegram]);
+    setAgentPrompt("");
+    setAllowedTools(defaultAgentTools(config));
+  }, [config]);
 
   const sortedRuns = useMemo(() => [...runs].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 20), [runs]);
 
@@ -126,9 +161,13 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
               }
             }
           : {
-              kind: "tool",
-              toolName,
-              params: JSON.parse(paramsText || "{}")
+              kind: "agent",
+              prompt: agentPrompt,
+              pushTargets: {
+                telegram: pushTelegram,
+                feishu: pushFeishu
+              },
+              allowedTools
             };
 
       const payload: ScheduledTaskInput = {
@@ -178,14 +217,22 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
       setPushTelegram(task.action.pushTargets?.telegram ?? config.proactive.pushTargets.telegram);
       setPushFeishu(task.action.pushTargets?.feishu ?? config.proactive.pushTargets.feishu);
     } else {
-      setActionKind("tool");
-      setToolName(task.action.toolName);
-      setParamsText(JSON.stringify(task.action.params, null, 2));
+      setActionKind("agent");
+      setAgentPrompt(task.action.prompt);
+      setAllowedTools(task.action.allowedTools);
+      setPushTelegram(task.action.pushTargets?.telegram ?? config.proactive.pushTargets.telegram);
+      setPushFeishu(task.action.pushTargets?.feishu ?? config.proactive.pushTargets.feishu);
     }
   };
 
   const cancelEditing = () => {
     resetForm();
+  };
+
+  const toggleAllowedTool = (toolName: ScheduledTaskToolName) => {
+    setAllowedTools((current) =>
+      current.includes(toolName) ? current.filter((item) => item !== toolName) : [...current, toolName].sort()
+    );
   };
 
   return (
@@ -233,9 +280,9 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
 
           <div className="space-y-1.5">
             <Label>动作类型</Label>
-            <Select value={actionKind} onChange={(event) => setActionKind(event.target.value as "notify" | "tool") }>
+            <Select value={actionKind} onChange={(event) => setActionKind(event.target.value as "notify" | "agent") }>
               <option value="notify">提醒</option>
-              <option value="tool">工具</option>
+              <option value="agent">Agent</option>
             </Select>
           </div>
 
@@ -259,19 +306,45 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
           ) : (
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label>工具</Label>
-                <Select value={toolName} onChange={(event) => setToolName(event.target.value as typeof toolName)}>
-                  <option value="web_search">web_search</option>
-                  <option value="web_fetch">web_fetch</option>
-                  <option value="code_search">code_search</option>
-                  <option value="browser">browser</option>
-                  <option value="system">system</option>
-                  <option value="file">file</option>
-                </Select>
+                <Label>Agent 指令</Label>
+                <Textarea
+                  rows={5}
+                  value={agentPrompt}
+                  onChange={(event) => setAgentPrompt(event.target.value)}
+                  placeholder="例如：搜索 GitHub Trending 前十，并告诉我每个项目是做什么的。"
+                />
               </div>
-              <div className="space-y-1.5">
-                <Label>参数 JSON</Label>
-                <Textarea rows={8} value={paramsText} onChange={(event) => setParamsText(event.target.value)} className="font-mono text-xs" />
+              <div className="space-y-2">
+                <Label>允许调用的工具</Label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {toolOptions.map((tool) => (
+                    <div key={tool.name} className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+                      <div>
+                        <p className="text-sm font-medium">{tool.label}</p>
+                        <p className="text-xs text-muted-foreground">{tool.enabled ? "已启用" : "当前设置里未启用"}</p>
+                      </div>
+                      <Switch
+                        checked={allowedTools.includes(tool.name)}
+                        onChange={(checked) => {
+                          if (!tool.enabled && checked) {
+                            return;
+                          }
+                          toggleAllowedTool(tool.name);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+                  <Label>推送 Telegram</Label>
+                  <Switch checked={pushTelegram} onChange={setPushTelegram} />
+                </div>
+                <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
+                  <Label>推送飞书</Label>
+                  <Switch checked={pushFeishu} onChange={setPushFeishu} />
+                </div>
               </div>
             </div>
           )}
@@ -308,7 +381,7 @@ export function SchedulerPage({ config }: SchedulerPageProps) {
                   <div>
                     <p className="text-sm font-medium">{task.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {task.action.kind === "notify" ? "提醒" : task.action.toolName} · {task.trigger.kind === "once" ? formatDateTime(task.trigger.runAt) : task.trigger.expression}
+                      {task.action.kind === "notify" ? "提醒" : "Agent"} · {task.trigger.kind === "once" ? formatDateTime(task.trigger.runAt) : task.trigger.expression}
                     </p>
                   </div>
                   <Badge className={statusTone(task.status)}>{task.status}</Badge>

@@ -30,9 +30,17 @@ const scheduleTaskParamsSchema = z.object({
         .optional()
     }),
     z.object({
-      kind: z.literal("tool"),
-      toolName: z.enum(["browser", "system", "file", "web_search", "code_search", "web_fetch"]),
-      params: z.record(z.string(), z.unknown())
+      kind: z.literal("agent"),
+      prompt: z.string().min(1),
+      pushTargets: z
+        .object({
+          telegram: z.boolean(),
+          feishu: z.boolean()
+        })
+        .optional(),
+      allowedTools: z
+        .array(z.enum(["browser", "system", "file", "web_search", "code_search", "web_fetch"]))
+        .default([])
     })
   ]),
   enabled: z.boolean().optional()
@@ -48,7 +56,7 @@ export function createSchedulerTools(input: {
   const scheduleTaskTool: ToolDefinition<z.infer<typeof scheduleTaskParamsSchema>> = {
     name: "schedule_task",
     source: "builtin",
-    description: "创建一个一次性或 cron 定时任务，可用于提醒或定时执行工具。",
+    description: "创建一个一次性或 cron 定时任务，可用于提醒或定时发起完整 Agent 任务。",
     parameters: scheduleTaskParamsSchema,
     async execute(params, context) {
       const task = await input.scheduledTaskService.saveTask(

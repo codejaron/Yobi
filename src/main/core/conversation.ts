@@ -54,6 +54,36 @@ function tokenSourceFromChannel(channel: "telegram" | "console" | "qq" | "feishu
   return "chat:console";
 }
 
+function normalizeErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    return message || fallback;
+  }
+
+  if (typeof error === "string") {
+    const message = error.trim();
+    return message || fallback;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const message = "message" in error && typeof error.message === "string" ? error.message.trim() : "";
+    if (message) {
+      return message;
+    }
+
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      // Ignore serialization failures and fall back to the generic copy.
+    }
+  }
+
+  return fallback;
+}
+
 function buildRealtimeSignalContractPrompt(): string {
   return [
     "[OUTPUT CONTRACT]",
@@ -88,7 +118,8 @@ export class ConversationEngine {
     private readonly stateStore: StateStore,
     private readonly paths: CompanionPaths,
     private readonly getConfig: () => AppConfig,
-    private readonly onRealtimeEmotionalSignals?: (signals: RealtimeEmotionalSignals) => void | Promise<void>
+    private readonly onRealtimeEmotionalSignals?: (signals: RealtimeEmotionalSignals) => void | Promise<void>,
+    private readonly streamTextImpl: typeof streamText = streamText
   ) {}
 
   async reply(input: {
@@ -99,6 +130,9 @@ export class ConversationEngine {
     photoUrl?: string;
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
+    persistUserMessage?: boolean;
+    allowedToolNames?: string[];
+    preapprovedToolNames?: string[];
   }): Promise<string> {
     const config = this.getConfig();
     const providerOptions = resolveOpenAIStoreOption(config);
@@ -108,15 +142,17 @@ export class ConversationEngine {
       return "";
     }
 
-    await this.memory.rememberMessage({
-      threadId: input.threadId,
-      resourceId: input.resourceId,
-      role: "user",
-      text: normalizedText,
-      metadata: {
-        channel: input.channel
-      }
-    });
+    if (input.persistUserMessage !== false) {
+      await this.memory.rememberMessage({
+        threadId: input.threadId,
+        resourceId: input.resourceId,
+        role: "user",
+        text: normalizedText,
+        metadata: {
+          channel: input.channel
+        }
+      });
+    }
 
     const [soul, profile, facts, episodes] = await Promise.all([
       readFile(this.paths.soulPath, "utf8").catch(() => ""),
@@ -126,10 +162,13 @@ export class ConversationEngine {
     ]);
     const stateSnapshot = this.stateStore.getSnapshot();
     const buffer = await this.memory.listRecentBufferMessages(config.memory.recentMessages);
-    const queryTexts = buffer
-      .filter((item) => item.role === "user")
-      .slice(-3)
-      .map((item) => item.text);
+    const queryTexts = [
+      ...buffer
+        .filter((item) => item.role === "user")
+        .slice(-3)
+        .map((item) => item.text),
+      ...(input.persistUserMessage === false ? [normalizedText] : [])
+    ].slice(-3);
     const [factCandidates, episodeCandidates] = await Promise.all([
       this.memory.searchRelevantFacts({
         queryTexts,
@@ -169,22 +208,28 @@ export class ConversationEngine {
       .filter(Boolean)
       .join("\n\n");
 
-    const messages = await this.memory.mapRecentToModelMessages(
+    const persistedMessages = await this.memory.mapRecentToModelMessages(
       {
         threadId: input.threadId,
         resourceId: input.resourceId
       },
       assembled.maxRecentMessages
     );
+    const messages =
+      input.persistUserMessage === false
+        ? [...persistedMessages, { role: "user" as const, content: normalizedText }].slice(-assembled.maxRecentMessages)
+        : persistedMessages;
 
     const tools: ToolSet = this.toolRegistry.getToolSet({
       channel: input.channel,
       userMessage: normalizedText,
-      requestApproval: input.requestApproval
+      requestApproval: input.requestApproval,
+      allowedToolNames: input.allowedToolNames,
+      preapprovedToolNames: input.preapprovedToolNames
     });
 
     const model = this.modelFactory.getChatModel();
-    const result = streamText({
+    const result = this.streamTextImpl({
       model,
       system,
       messages,
@@ -199,6 +244,8 @@ export class ConversationEngine {
     let fullText = "";
     let toolFailed = false;
     let lastToolError = "";
+    let streamFailed = false;
+    let lastStreamError = "";
     try {
       for await (const chunk of result.fullStream) {
         if (chunk.type === "text-delta") {
@@ -241,12 +288,7 @@ export class ConversationEngine {
 
         if (chunk.type === "tool-error") {
           toolFailed = true;
-          const errorMessage =
-            chunk.error instanceof Error
-              ? chunk.error.message
-              : typeof chunk.error === "string"
-                ? chunk.error
-                : "工具调用失败";
+          const errorMessage = normalizeErrorMessage(chunk.error, "工具调用失败");
           lastToolError = errorMessage.trim() || lastToolError;
           input.stream?.onToolResult?.({
             toolCallId: chunk.toolCallId,
@@ -255,6 +297,24 @@ export class ConversationEngine {
             success: false,
             error: errorMessage
           });
+          continue;
+        }
+
+        if (chunk.type === "error") {
+          streamFailed = true;
+          lastStreamError = normalizeErrorMessage(chunk.error, "LLM 调用失败，请稍后重试。");
+          continue;
+        }
+
+        if (chunk.type === "abort") {
+          streamFailed = true;
+          lastStreamError = lastStreamError || "LLM 回复已中断。";
+          continue;
+        }
+
+        if ((chunk.type === "finish" || chunk.type === "finish-step") && chunk.finishReason === "error") {
+          streamFailed = true;
+          lastStreamError = lastStreamError || "LLM 调用失败，请稍后重试。";
         }
       }
     } finally {
@@ -262,6 +322,10 @@ export class ConversationEngine {
     }
 
     const trimmedText = fullText.trim();
+    if (streamFailed) {
+      throw new Error(lastStreamError || "LLM 调用失败，请稍后重试。");
+    }
+
     if (!trimmedText && toolFailed) {
       throw new Error(lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。");
     }

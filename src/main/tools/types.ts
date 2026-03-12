@@ -31,6 +31,8 @@ export interface ToolExecutionContext {
   userMessage: string;
   getConfig: () => AppConfig;
   requestApproval?: ToolApprovalHandler;
+  allowedToolNames?: string[];
+  preapprovedToolNames?: string[];
 }
 
 export interface ToolDefinition<TInput extends Record<string, unknown> = Record<string, unknown>> {
