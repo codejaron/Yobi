@@ -46,7 +46,7 @@ export function PetRuntimeCard({
     <Card>
       <CardHeader>
         <CardTitle>后台与桌宠</CardTitle>
-        <CardDescription>后台保活、桌宠窗口和实时语音配置。</CardDescription>
+        <CardDescription>后台保活和桌宠窗口配置。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
@@ -177,76 +177,6 @@ export function PetRuntimeCard({
             {pttHotkeyNotice ? (
               <p className="text-xs text-muted-foreground">{pttHotkeyNotice}</p>
             ) : null}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">
-          <Label>实时语音模式</Label>
-          <Switch
-            checked={config.realtimeVoice.enabled}
-            onChange={(checked) =>
-              setConfig({
-                ...config,
-                realtimeVoice: {
-                  ...config.realtimeVoice,
-                  enabled: checked
-                }
-              })
-            }
-          />
-        </div>
-
-        <div className="grid gap-3 rounded-md border border-border/70 bg-white/70 px-3 py-3 sm:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label>会话模式</Label>
-            <select
-              className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={config.realtimeVoice.mode}
-              onChange={(event) =>
-                setConfig({
-                  ...config,
-                  realtimeVoice: {
-                    ...config.realtimeVoice,
-                    mode: event.target.value as AppConfig["realtimeVoice"]["mode"]
-                  }
-                })
-              }
-            >
-              <option value="ptt">PTT（稳定串行）</option>
-              <option value="free">自由对话（全流式）</option>
-            </select>
-          </div>
-
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-background px-3 py-2">
-            <Label>自动打断</Label>
-            <Switch
-              checked={config.realtimeVoice.autoInterrupt}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  realtimeVoice: {
-                    ...config.realtimeVoice,
-                    autoInterrupt: checked
-                  }
-                })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between rounded-md border border-border/70 bg-background px-3 py-2">
-            <Label>AEC</Label>
-            <Switch
-              checked={config.realtimeVoice.aecEnabled}
-              onChange={(checked) =>
-                setConfig({
-                  ...config,
-                  realtimeVoice: {
-                    ...config.realtimeVoice,
-                    aecEnabled: checked
-                  }
-                })
-              }
-            />
           </div>
         </div>
       </CardContent>

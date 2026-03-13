@@ -12,6 +12,7 @@ import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ConversationEngine } from "@main/core/conversation";
 import { SentenceChunkBuffer } from "./realtime-voice-chunker";
+import { shouldAutoStartVoiceSession } from "./realtime-voice-lifecycle";
 import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
 import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voice-state";
 import { estimateSpeechProbabilityFromRms } from "./realtime-voice-vad";
@@ -143,7 +144,12 @@ export class RealtimeVoiceService {
     const config = this.input.getConfig();
     this.state = createEmptyVoiceState(config.realtimeVoice.mode);
     this.ensureVad();
-    if (config.realtimeVoice.enabled) {
+    if (
+      shouldAutoStartVoiceSession({
+        enabled: config.realtimeVoice.enabled,
+        mode: config.realtimeVoice.mode
+      })
+    ) {
       void this.startSession({
         mode: config.realtimeVoice.mode
       });

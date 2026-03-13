@@ -5,6 +5,7 @@ import { registerIpcHandlers } from "./ipc";
 import { createRuntime } from "./app-runtime";
 import { openSafeWebUrl } from "./utils/external-links";
 import { appLogger as logger } from "@main/runtime/singletons";
+import { buildPetContextMenuTemplate } from "@main/pet/context-menu";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PET_ENABLED_CHANNEL = "runtime:pet-enabled";
@@ -100,6 +101,47 @@ async function disablePetWindowFromMenu(sourceWindow: BrowserWindow): Promise<vo
   }
 }
 
+async function toggleFreeConversationFromMenu(sourceWindow: BrowserWindow): Promise<void> {
+  const current = runtime.getConfig();
+  const enabled = current.realtimeVoice.enabled && current.realtimeVoice.mode === "free";
+
+  try {
+    if (enabled) {
+      await runtime.saveConfig({
+        ...current,
+        realtimeVoice: {
+          ...current.realtimeVoice,
+          enabled: false,
+          mode: "ptt",
+          autoInterrupt: true,
+          aecEnabled: true
+        }
+      });
+      await runtime.stopVoiceSession();
+      return;
+    }
+
+    await runtime.saveConfig({
+      ...current,
+      realtimeVoice: {
+        ...current.realtimeVoice,
+        enabled: true,
+        mode: "free",
+        autoInterrupt: true,
+        aecEnabled: true
+      }
+    });
+    await runtime.startVoiceSession({
+      mode: "free"
+    });
+  } catch (error) {
+    logger.warn("index", "toggle-free-conversation-from-menu-failed", undefined, error);
+    if (!sourceWindow.isDestroyed()) {
+      sourceWindow.focus();
+    }
+  }
+}
+
 function registerShellMenuIpc(): void {
   ipcMain.on(
     "pet:menu:show",
@@ -111,20 +153,20 @@ function registerShellMenuIpc(): void {
 
       const x = Number.isFinite(payload?.x) ? Math.round(payload?.x ?? 0) : undefined;
       const y = Number.isFinite(payload?.y) ? Math.round(payload?.y ?? 0) : undefined;
-      const menu = Menu.buildFromTemplate([
-        {
-          label: "打开 Yobi 控制台",
-          click: () => {
+      const current = runtime.getConfig();
+      const menu = Menu.buildFromTemplate(
+        buildPetContextMenuTemplate(current, {
+          openConsole: () => {
             openMainConsoleWindow();
-          }
-        },
-        {
-          label: "退出桌宠",
-          click: () => {
+          },
+          disablePet: () => {
             void disablePetWindowFromMenu(sourceWindow);
+          },
+          toggleFreeConversation: () => {
+            void toggleFreeConversationFromMenu(sourceWindow);
           }
-        }
-      ]);
+        })
+      );
 
       menu.popup({
         window: sourceWindow,

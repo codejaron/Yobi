@@ -1,0 +1,38 @@
+import type { MenuItemConstructorOptions } from "electron";
+import type { AppConfig } from "@shared/types";
+
+interface PetContextMenuActions {
+  openConsole: () => void;
+  disablePet: () => void;
+  toggleFreeConversation: () => void;
+}
+
+export function buildPetContextMenuTemplate(
+  config: AppConfig,
+  actions: PetContextMenuActions
+): MenuItemConstructorOptions[] {
+  const freeConversationEnabled = config.realtimeVoice.enabled && config.realtimeVoice.mode === "free";
+
+  return [
+    {
+      label: "打开 Yobi 控制台",
+      click: actions.openConsole
+    },
+    {
+      type: "separator"
+    },
+    {
+      label: "自由对话",
+      type: "checkbox",
+      checked: freeConversationEnabled,
+      click: actions.toggleFreeConversation
+    },
+    {
+      type: "separator"
+    },
+    {
+      label: "退出桌宠",
+      click: actions.disablePet
+    }
+  ];
+}
