@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { BrowserWindow, MessagePortMain } from "electron";
+import type { BrowserWindow, IpcMainEvent } from "electron";
 import type { AppLogger } from "./logger";
 
 export type VoiceHostCommand =
@@ -26,7 +26,7 @@ export type VoiceHostMessage =
   | { type: "capture-started" }
   | { type: "capture-stopped" }
   | { type: "capture-error"; message: string }
-  | { type: "pcm-frame"; pcm: ArrayBuffer; sampleRate: number }
+  | { type: "pcm-frame"; pcm: number[]; sampleRate: number }
   | { type: "playback-started"; id: string; text: string; queueLength: number }
   | { type: "playback-ended"; id: string; text: string; queueLength: number }
   | { type: "playback-cleared"; queueLength: number }
@@ -37,10 +37,12 @@ type Listener = (message: VoiceHostMessage) => void;
 
 export class VoiceHostWindowController {
   private window: BrowserWindow | null = null;
-  private port: MessagePortMain | null = null;
   private listeners = new Set<Listener>();
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
+  private readonly commandChannel = "voice-host:command";
+  private readonly eventChannel = "voice-host:event";
+  private eventListenerRegistered = false;
 
   constructor(private readonly logger: AppLogger) {}
 
@@ -52,7 +54,7 @@ export class VoiceHostWindowController {
   }
 
   async ensureReady(): Promise<void> {
-    if (this.port && this.window && !this.window.isDestroyed()) {
+    if (this.window && !this.window.isDestroyed()) {
       return;
     }
 
@@ -68,15 +70,10 @@ export class VoiceHostWindowController {
 
   async send(command: VoiceHostCommand): Promise<void> {
     await this.ensureReady();
-    this.port?.postMessage(command);
+    this.window?.webContents.send(this.commandChannel, command);
   }
 
   close(): void {
-    try {
-      this.port?.close();
-    } catch {}
-    this.port = null;
-
     if (this.window && !this.window.isDestroyed()) {
       this.window.close();
     }
@@ -85,7 +82,12 @@ export class VoiceHostWindowController {
   }
 
   private async createWindow(): Promise<void> {
+    this.logger.info("voice-host", "create-window:start");
     const electron = await import("electron");
+    if (!this.eventListenerRegistered) {
+      electron.ipcMain.on(this.eventChannel, this.handleIpcEvent);
+      this.eventListenerRegistered = true;
+    }
     const appPath = electron.app.getAppPath();
     const preloadPath = path.join(appPath, "src", "preload", "voice-host.cjs");
     const htmlPath = path.join(appPath, "resources", "voice-host.html");
@@ -108,38 +110,60 @@ export class VoiceHostWindowController {
       }
     });
 
+    window.webContents.on("did-finish-load", () => {
+      this.logger.info("voice-host", "webcontents:did-finish-load");
+    });
+
+    window.webContents.on(
+      "did-fail-load",
+      (_event, errorCode, errorDescription, validatedUrl) => {
+        this.logger.warn("voice-host", "webcontents:did-fail-load", {
+          errorCode,
+          errorDescription,
+          validatedUrl
+        });
+      }
+    );
+
+    window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+      this.logger.info("voice-host-renderer", message, {
+        level,
+        line,
+        sourceId
+      });
+    });
+
+    window.webContents.on("render-process-gone", (_event, detail) => {
+      this.logger.warn("voice-host", "webcontents:render-process-gone", {
+        reason: detail.reason,
+        exitCode: detail.exitCode
+      });
+    });
+
     window.on("closed", () => {
+      this.logger.info("voice-host", "create-window:closed");
       this.window = null;
-      try {
-        this.port?.close();
-      } catch {}
-      this.port = null;
       this.resolveReady = null;
     });
 
     await window.loadFile(htmlPath);
 
-    const channel = new electron.MessageChannelMain();
-    this.port = channel.port1;
-    this.port.on("message", (event) => {
-      const payload = event.data as VoiceHostMessage;
-      if (payload?.type === "host-ready") {
-        this.resolveReady?.();
-        this.resolveReady = null;
-      }
-
-      for (const listener of this.listeners) {
-        try {
-          listener(payload);
-        } catch (error) {
-          this.logger.warn("voice-host", "message-listener-failed", undefined, error);
-        }
-      }
-    });
-    this.port.start();
+    try {
+      const probe = await window.webContents.executeJavaScript(
+        `({
+          hasVoiceHost: typeof window.voiceHost === "object" && window.voiceHost !== null,
+          hasOnCommand: Boolean(window.voiceHost && typeof window.voiceHost.onCommand === "function"),
+          hasEmit: Boolean(window.voiceHost && typeof window.voiceHost.emit === "function")
+        })`,
+        true
+      );
+      this.logger.info("voice-host", "renderer:probe", probe as Record<string, unknown>);
+    } catch (error) {
+      this.logger.warn("voice-host", "renderer:probe-failed", undefined, error);
+    }
 
     this.window = window;
-    window.webContents.postMessage("voice-host:port", null, [channel.port2]);
+    this.logger.info("voice-host", "create-window:command-ready");
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -155,4 +179,26 @@ export class VoiceHostWindowController {
       };
     });
   }
+
+  private readonly handleIpcEvent = (event: IpcMainEvent, payload: VoiceHostMessage): void => {
+    if (!this.window || this.window.isDestroyed() || event.sender.id !== this.window.webContents.id) {
+      return;
+    }
+
+    if (payload?.type !== "pcm-frame" && payload?.type !== "speech-level") {
+      this.logger.info("voice-host", `message:${payload?.type ?? "unknown"}`);
+    }
+    if (payload?.type === "host-ready") {
+      this.resolveReady?.();
+      this.resolveReady = null;
+    }
+
+    for (const listener of this.listeners) {
+      try {
+        listener(payload);
+      } catch (error) {
+        this.logger.warn("voice-host", "message-listener-failed", undefined, error);
+      }
+    }
+  };
 }

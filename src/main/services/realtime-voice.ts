@@ -54,6 +54,15 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function toLogPreview(text: string, maxChars = 120): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxChars)}...`;
+}
+
 function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
   return {
     sessionId: null,
@@ -266,6 +275,10 @@ export class RealtimeVoiceService {
 
     this.state = createVoiceSessionState({
       sessionId,
+      mode,
+      target
+    });
+    this.input.logger.info("realtime-voice", "session:start", {
       mode,
       target
     });
@@ -490,6 +503,9 @@ export class RealtimeVoiceService {
     this.speechStartedAtMs = Date.now();
     this.lastSpeechAtMs = this.speechStartedAtMs;
     this.speechBuffers = [];
+    this.input.logger.info("realtime-voice", "speech:start", {
+      sessionId: this.state.sessionId ?? "unknown"
+    });
     this.state = {
       ...this.state,
       userTranscript: "",
@@ -530,6 +546,10 @@ export class RealtimeVoiceService {
     }
 
     this.speechActive = false;
+    this.input.logger.info("realtime-voice", "speech:finish", {
+      sessionId: this.state.sessionId ?? "unknown",
+      bufferedBytes: this.speechBuffers.reduce((sum, item) => sum + item.length, 0)
+    });
     this.applyState({
       type: "speech-ended"
     });
@@ -566,6 +586,11 @@ export class RealtimeVoiceService {
         userTranscript: text,
         updatedAt: nowIso()
       };
+      this.input.logger.info("realtime-voice", "speech:transcribed", {
+        sessionId: this.state.sessionId ?? "unknown",
+        textLength: text.length,
+        textPreview: toLogPreview(text)
+      });
       this.emit({
         type: "user-transcript",
         text,
@@ -599,6 +624,7 @@ export class RealtimeVoiceService {
     }
 
     if (message.type === "capture-error") {
+      this.input.logger.warn("realtime-voice", "capture:error", undefined, new Error(message.message));
       this.fail(message.message);
       return;
     }
@@ -777,6 +803,11 @@ export class RealtimeVoiceService {
           ttsProvider: config.voice.ttsProvider
         }
       }
+    });
+    this.input.logger.info("realtime-voice", "llm:user-input", {
+      sessionId,
+      textLength: text.length,
+      textPreview: toLogPreview(text)
     });
     await this.input.onRecordUserActivity?.({
       channel: "console",
@@ -1018,6 +1049,9 @@ export class RealtimeVoiceService {
   }
 
   private fail(message: string): void {
+    this.input.logger.warn("realtime-voice", "session:error", {
+      phase: this.state.phase
+    }, new Error(message));
     this.state = reduceVoiceSessionState(this.state, {
       type: "error",
       message

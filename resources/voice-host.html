@@ -7,12 +7,17 @@
   <body>
     <script>
       (() => {
+        console.info("voice-host:script-start");
         const voiceHost = window.voiceHost;
-        if (!voiceHost || typeof voiceHost.onPort !== "function") {
+        if (!voiceHost || typeof voiceHost.onCommand !== "function" || typeof voiceHost.emit !== "function") {
+          console.error("voice-host:missing-api", {
+            hasVoiceHost: Boolean(voiceHost),
+            hasOnCommand: Boolean(voiceHost && voiceHost.onCommand),
+            hasEmit: Boolean(voiceHost && voiceHost.emit)
+          });
           return;
         }
-
-        let port = null;
+        console.info("voice-host:api-ready");
         let captureStream = null;
         let captureContext = null;
         let captureSource = null;
@@ -35,11 +40,15 @@
         };
 
         const emit = (payload, transfer = []) => {
-          if (!port) {
+          if (transfer && transfer.length > 0) {
+            voiceHost.emit({
+              ...payload,
+              pcm: payload.pcm
+            });
             return;
           }
 
-          port.postMessage(payload, transfer);
+          voiceHost.emit(payload);
         };
 
         const clearPlaybackMonitor = async () => {
@@ -245,7 +254,7 @@
             });
             captureNode.port.onmessage = (event) => {
               const floatChunk = event.data;
-              if (!floatChunk || !port) {
+              if (!floatChunk) {
                 return;
               }
 
@@ -253,10 +262,9 @@
               emit(
                 {
                   type: "pcm-frame",
-                  pcm: pcm16.buffer,
+                  pcm: Array.from(new Uint8Array(pcm16.buffer)),
                   sampleRate: 16000
-                },
-                [pcm16.buffer]
+                }
               );
             };
 
@@ -343,12 +351,13 @@
           }
         };
 
-        voiceHost.onPort((nextPort) => {
-          port = nextPort;
-          port.onmessage = (event) => {
-            handleCommand(event.data);
-          };
-          port.start();
+        voiceHost.onCommand((payload) => {
+          console.info("voice-host:command-received", payload && payload.type ? payload.type : "unknown");
+          handleCommand(payload);
+        });
+
+        queueMicrotask(() => {
+          console.info("voice-host:ipc-ready");
           emit({ type: "host-ready" });
         });
       })();
