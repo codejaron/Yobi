@@ -40,7 +40,7 @@ export function ConsoleChatPage() {
   } = useConsoleChatController();
 
   return (
-    <div className="h-[calc(100vh-140px)] min-h-[680px] max-h-[900px]">
+    <div className="h-full min-h-0">
       <ConsoleChatPane
         busy={busy}
         clearingHistory={clearingHistory}

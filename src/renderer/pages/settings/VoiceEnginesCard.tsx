@@ -116,7 +116,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
         type: "success",
         message: status.ready
           ? "模型下载完成，SenseVoice 已自动加载。"
-          : "模型下载完成。请点击右上角“保存配置”后，应用会切换到本地 SenseVoice。"
+          : "模型下载完成。配置会自动保存，应用将自动切换到本地 SenseVoice。"
       });
     } catch (error) {
       setNotice({
@@ -169,7 +169,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
     : downloaded && !ready
     ? runtimeEnabled
       ? "已下载；应用正在后台加载模型。"
-      : "已下载；请点击右上角“保存配置”后，应用才会切换到本地 SenseVoice。"
+      : "已下载；配置自动保存后，应用会切换到本地 SenseVoice。"
     : "下载后即可用于离线识别，并返回语言 / 情感 / 事件元信息。";
 
   return (
@@ -182,7 +182,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="rounded-md border border-border/70 bg-white/70 p-3 text-xs text-muted-foreground">
-          修改语音 provider、模型或凭证后，需要点击右上角“保存配置”才会真正切换运行时引擎。
+          修改语音 provider、模型或凭证后，配置会自动保存并切换运行时引擎。
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">

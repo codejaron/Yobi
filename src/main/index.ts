@@ -6,6 +6,7 @@ import { createRuntime } from "./app-runtime";
 import { openSafeWebUrl } from "./utils/external-links";
 import { appLogger as logger } from "@main/runtime/singletons";
 import { buildPetContextMenuTemplate } from "@main/pet/context-menu";
+import { getMainWindowOptions } from "@main/window-options";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PET_ENABLED_CHANNEL = "runtime:pet-enabled";
@@ -17,12 +18,7 @@ let shutdownPromise: Promise<void> | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 1080,
-    minHeight: 720,
-    title: "Yobi Companion",
-    backgroundColor: "#f5efe7",
+    ...getMainWindowOptions(process.platform),
     webPreferences: {
       preload: path.join(app.getAppPath(), "src", "preload", "index.cjs"),
       contextIsolation: true,

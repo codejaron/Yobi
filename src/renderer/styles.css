@@ -70,6 +70,12 @@
     @apply border-border;
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
     @apply bg-background text-foreground font-body antialiased;
     background-image:
@@ -77,6 +83,7 @@
       radial-gradient(circle at 85% 20%, rgba(57, 123, 149, 0.16), transparent 45%),
       linear-gradient(140deg, rgba(255, 255, 255, 0.75), rgba(255, 248, 240, 0.9));
     min-height: 100vh;
+    overflow: hidden;
   }
 
   .dark body {
@@ -84,6 +91,19 @@
       radial-gradient(circle at 12% 10%, rgba(66, 153, 184, 0.16), transparent 35%),
       radial-gradient(circle at 84% 18%, rgba(241, 138, 64, 0.1), transparent 38%),
       linear-gradient(160deg, rgba(18, 24, 37, 0.98), rgba(12, 17, 28, 1));
+  }
+
+  .window-drag-region {
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+
+  .window-drag-region button,
+  .window-drag-region input,
+  .window-drag-region select,
+  .window-drag-region textarea,
+  .window-drag-region a {
+    -webkit-app-region: no-drag;
   }
 }
 

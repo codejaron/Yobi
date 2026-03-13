@@ -3,12 +3,6 @@ import type { CommandApprovalDecision, VoiceInputContext, VoiceSessionState } fr
 import { Loader2, Mic, Square } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle
-} from "@renderer/components/ui/card";
 import { Input } from "@renderer/components/ui/input";
 import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { AssistantProcessView } from "./AssistantProcessView";
@@ -110,24 +104,19 @@ export function ConsoleChatPane({
   );
 
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div>
-          <CardTitle>对话窗口</CardTitle>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <Badge className="status-badge status-badge--neutral">
               语音 {voiceSession?.phase ?? "idle"}
             </Badge>
+            {recognitionLabels.map((label) => (
+              <Badge key={label} className="status-badge status-badge--info">
+                {label}
+              </Badge>
+            ))}
           </div>
-          {recognitionLabels.length > 0 ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-              {recognitionLabels.map((label) => (
-                <Badge key={label} className="status-badge status-badge--info">
-                  {label}
-                </Badge>
-              ))}
-            </div>
-          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -148,8 +137,8 @@ export function ConsoleChatPane({
             {clearingHistory ? "清空中..." : "清空历史记录"}
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+      </div>
+      <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
         {skillsCatalog ? (
           <div className="status-surface status-surface--info rounded-xl px-4 py-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
@@ -330,7 +319,7 @@ export function ConsoleChatPane({
             <p className="mt-2 text-xs text-muted-foreground">{micHint}</p>
           ) : null}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

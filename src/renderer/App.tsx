@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppConfig,
   AppStatus,
@@ -6,8 +6,6 @@ import type {
   ThemeMode
 } from "@shared/types";
 import { SideNav } from "@renderer/components/layout/SideNav";
-import { Button } from "@renderer/components/ui/button";
-import { Badge } from "@renderer/components/ui/badge";
 import { applyThemeMode, subscribeSystemTheme, writeCachedThemeMode } from "@renderer/lib/theme";
 import type { PageId } from "./types";
 
@@ -44,29 +42,6 @@ const SettingsPage = lazy(async () => {
   return { default: module.SettingsPage };
 });
 
-function pageTitle(page: PageId): string {
-  switch (page) {
-    case "dashboard":
-      return "运行仪表盘";
-    case "providers":
-      return "Provider 与模型路由";
-    case "console":
-      return "聊天控制台";
-    case "scheduler":
-      return "定时任务";
-    case "skills":
-      return "Skills";
-    case "memory":
-      return "Mind Center";
-    case "mcp":
-      return "MCP 工具中心";
-    case "settings":
-      return "行为与通道设置";
-    default:
-      return "Yobi Companion";
-  }
-}
-
 function themeModeLabel(mode: ThemeMode): string {
   if (mode === "dark") {
     return "暗黑";
@@ -79,19 +54,23 @@ function themeModeLabel(mode: ThemeMode): string {
   return "跟随系统";
 }
 
-function connectionBadgeClass(connected: boolean | undefined): string {
-  return connected ? "status-badge status-badge--success" : "status-badge status-badge--warn";
+function configFingerprint(config: AppConfig): string {
+  return JSON.stringify(config);
 }
 
 export default function App() {
   const [activePage, setActivePage] = useState<PageId>("dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [committedConfig, setCommittedConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [mindSnapshot, setMindSnapshot] = useState<MindSnapshot | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [themeSaving, setThemeSaving] = useState(false);
+  const [autoSaving, setAutoSaving] = useState(false);
   const [notice, setNotice] = useState("启动中...");
+  const latestConfigRef = useRef<AppConfig | null>(null);
+  const latestCommittedConfigRef = useRef<AppConfig | null>(null);
+  const saveInFlightRef = useRef(false);
+  const pendingSaveRef = useRef(false);
 
   const loadWithTimeout = useCallback(async <T,>(promise: Promise<T>, label: string, timeoutMs = 5000): Promise<T> => {
     return new Promise<T>((resolve, reject) => {
@@ -248,31 +227,96 @@ export default function App() {
     });
   }, [config?.appearance.themeMode]);
 
-  const saveConfig = useCallback(async () => {
-    if (!config) {
+  useEffect(() => {
+    latestConfigRef.current = config;
+  }, [config]);
+
+  useEffect(() => {
+    latestCommittedConfigRef.current = committedConfig;
+  }, [committedConfig]);
+
+  const persistConfigChanges = useCallback(async () => {
+    if (saveInFlightRef.current) {
+      pendingSaveRef.current = true;
       return;
     }
 
-    setSaving(true);
+    const draft = latestConfigRef.current;
+    const committed = latestCommittedConfigRef.current;
+    if (!draft || !committed) {
+      return;
+    }
+
+    const draftFingerprint = configFingerprint(draft);
+    if (draftFingerprint === configFingerprint(committed)) {
+      return;
+    }
+
+    saveInFlightRef.current = true;
+    setAutoSaving(true);
+
     try {
-      const saved = await window.companion.saveConfig(config);
-      setConfig(saved);
+      const saved = await window.companion.saveConfig(draft);
+      latestCommittedConfigRef.current = saved;
       setCommittedConfig(saved);
       writeCachedThemeMode(saved.appearance.themeMode);
-      setNotice(`已保存 (${new Date().toLocaleTimeString()})`);
+
+      setConfig((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return configFingerprint(current) === draftFingerprint ? saved : current;
+      });
+
+      setNotice(`已自动保存 (${new Date().toLocaleTimeString()})`);
       await refreshStatus();
+    } catch (error) {
+      setNotice(error instanceof Error ? `自动保存失败：${error.message}` : "自动保存失败");
     } finally {
-      setSaving(false);
+      saveInFlightRef.current = false;
+      setAutoSaving(false);
+
+      if (pendingSaveRef.current) {
+        pendingSaveRef.current = false;
+        void persistConfigChanges();
+      }
     }
-  }, [config, refreshStatus]);
+  }, [refreshStatus]);
+
+  const configFingerprintValue = useMemo(
+    () => (config ? configFingerprint(config) : ""),
+    [config]
+  );
+  const committedConfigFingerprintValue = useMemo(
+    () => (committedConfig ? configFingerprint(committedConfig) : ""),
+    [committedConfig]
+  );
+
+  useEffect(() => {
+    if (!config || !committedConfig) {
+      return;
+    }
+
+    if (configFingerprintValue === committedConfigFingerprintValue) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void persistConfigChanges();
+    }, 800);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [committedConfig, committedConfigFingerprintValue, config, configFingerprintValue, persistConfigChanges]);
 
   const handleThemeModeChange = useCallback(
-    async (mode: ThemeMode) => {
-      if (!config || !committedConfig || themeSaving || config.appearance.themeMode === mode) {
+    (mode: ThemeMode) => {
+      if (!config || config.appearance.themeMode === mode) {
         return;
       }
 
-      const previousThemeMode = config.appearance.themeMode;
       const nextVisibleConfig: AppConfig = {
         ...config,
         appearance: {
@@ -280,58 +324,13 @@ export default function App() {
           themeMode: mode
         }
       };
-      const nextCommittedConfig: AppConfig = {
-        ...committedConfig,
-        appearance: {
-          ...committedConfig.appearance,
-          themeMode: mode
-        }
-      };
 
       setConfig(nextVisibleConfig);
-      setCommittedConfig(nextCommittedConfig);
       writeCachedThemeMode(mode);
       applyThemeMode(mode);
-      setThemeSaving(true);
-
-      try {
-        const saved = await window.companion.saveConfig(nextCommittedConfig);
-        setCommittedConfig(saved);
-        setConfig((current) =>
-          current
-            ? {
-                ...current,
-                appearance: {
-                  ...current.appearance,
-                  themeMode: saved.appearance.themeMode
-                }
-              }
-            : current
-        );
-        writeCachedThemeMode(saved.appearance.themeMode);
-        applyThemeMode(saved.appearance.themeMode);
-        setNotice(`主题已切换为${themeModeLabel(saved.appearance.themeMode)}`);
-      } catch (error) {
-        setCommittedConfig(committedConfig);
-        setConfig((current) =>
-          current
-            ? {
-                ...current,
-                appearance: {
-                  ...current.appearance,
-                  themeMode: previousThemeMode
-                }
-              }
-            : current
-        );
-        writeCachedThemeMode(previousThemeMode);
-        applyThemeMode(previousThemeMode);
-        setNotice(error instanceof Error ? `主题保存失败：${error.message}` : "主题保存失败");
-      } finally {
-        setThemeSaving(false);
-      }
+      setNotice(`主题已切换为${themeModeLabel(mode)}，正在自动保存...`);
     },
-    [committedConfig, config, themeSaving]
+    [config]
   );
 
   const content = useMemo(() => {
@@ -438,55 +437,40 @@ export default function App() {
           config={config}
           status={status}
           setConfig={setConfig}
-          themeSaving={themeSaving}
+          themeSaving={autoSaving}
           onThemeModeChange={handleThemeModeChange}
         />
       </Suspense>
     );
-  }, [activePage, config, handleThemeModeChange, refreshStatus, status, mindSnapshot, refreshMindSnapshot, themeSaving]);
-
-  const showPageHeader = activePage !== "console" && activePage !== "dashboard";
+  }, [activePage, autoSaving, config, handleThemeModeChange, refreshStatus, status, mindSnapshot, refreshMindSnapshot]);
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-[1440px] gap-6 p-6 lg:grid-cols-[248px_1fr]">
+    <div
+      className={`grid h-screen min-h-0 grid-rows-[36px_minmax(0,1fr)] ${
+        sidebarCollapsed ? "grid-cols-[60px_minmax(0,1fr)]" : "grid-cols-[248px_minmax(0,1fr)]"
+      }`}
+    >
+      <div className="window-drag-region col-span-2 border-b border-border/70 bg-card/82 backdrop-blur-md" />
+
       <SideNav
         active={activePage}
         onSelect={setActivePage}
         themeMode={config?.appearance.themeMode ?? "system"}
         onThemeModeChange={handleThemeModeChange}
-        themeSaving={themeSaving}
+        themeSaving={autoSaving}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
       />
 
-      <main className={showPageHeader ? "space-y-6" : undefined}>
-        {showPageHeader ? (
-          <section className="page-hero flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="font-display text-3xl tracking-tight text-foreground">
-                {pageTitle(activePage)}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">{notice}</p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Badge className={connectionBadgeClass(status?.telegramConnected)}>
-                Telegram {status?.telegramConnected ? "Online" : "Offline"}
-              </Badge>
-              <Badge className={connectionBadgeClass(status?.qqConnected)}>
-                QQ {status?.qqConnected ? "Online" : "Offline"}
-              </Badge>
-              <Badge className={connectionBadgeClass(status?.feishuConnected)}>
-                Feishu {status?.feishuConnected ? "Online" : "Offline"}
-              </Badge>
-              {config ? (
-                <Button onClick={saveConfig} disabled={saving}>
-                  {saving ? "保存中..." : "保存配置"}
-                </Button>
-              ) : null}
-            </div>
-          </section>
-        ) : null}
-
-        {content}
+      <main className="min-h-0 min-w-0 overflow-hidden bg-card/72 backdrop-blur-md">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="min-h-0 flex-1 overflow-auto p-5">
+            {activePage === "settings" ? (
+              <div className="mb-3 text-xs text-muted-foreground">{notice}</div>
+            ) : null}
+            {content}
+          </div>
+        </div>
       </main>
     </div>
   );
