@@ -564,7 +564,9 @@ export function useConsoleChatController(): ConsoleChatController {
       return;
     }
 
-    const started = await window.companion.startVoiceSession();
+    const started = await window.companion.startVoiceSession({
+      mode: "free"
+    });
     setVoiceSession(started);
   }, [voiceSession?.sessionId]);
 

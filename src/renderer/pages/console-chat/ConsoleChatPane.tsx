@@ -50,7 +50,6 @@ interface ConsoleChatPaneProps {
   voiceSession: VoiceSessionState | null;
   pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
-  interruptVoiceSession: () => Promise<void>;
   sttReady: boolean;
   micHint: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -100,7 +99,6 @@ export function ConsoleChatPane({
   voiceSession,
   pendingVoiceContext,
   toggleVoiceSession,
-  interruptVoiceSession,
   sttReady,
   micHint,
   onSubmit,
@@ -120,20 +118,6 @@ export function ConsoleChatPane({
             <Badge className="status-badge status-badge--neutral">
               语音 {voiceSession?.phase ?? "idle"}
             </Badge>
-            <span>
-              模式 {voiceSession?.mode ?? "ptt"}
-            </span>
-            {voiceSession?.sessionId ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                type="button"
-                onClick={() => void interruptVoiceSession()}
-                className="h-7 px-2 text-xs"
-              >
-                打断语音
-              </Button>
-            ) : null}
           </div>
           {recognitionLabels.length > 0 ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">

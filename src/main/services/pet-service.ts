@@ -26,6 +26,7 @@ import { StateStore } from "@main/kernel/state-store";
 import { shouldPublishEmotionState } from "@main/pet/emotion-state-sync";
 import { shouldUseUnifiedRealtimeVoice } from "@main/services/pet-voice-mode";
 import type { VoiceSessionEvent, VoiceSessionPhase } from "@shared/types";
+import { resolveAssistantSpeechRoute } from "@main/services/assistant-speech-policy";
 
 interface PetServiceInput {
   paths: CompanionPaths;
@@ -424,13 +425,24 @@ export class PetService {
 
   private async emitPetSpeech(text: string): Promise<void> {
     const normalized = text.trim();
-    if (!normalized || !this.input.getConfig().realtimeVoice.speechReplyEnabled) {
+    if (!normalized) {
       return;
     }
 
-    if (!shouldUseUnifiedRealtimeVoice(this.input.getConfig()) && this.input.pet.isOnline()) {
+    const config = this.input.getConfig();
+    const route = resolveAssistantSpeechRoute({
+      speechReplyEnabled: config.realtimeVoice.speechReplyEnabled,
+      petOnline: this.input.pet.isOnline(),
+      unifiedRealtimeVoice: shouldUseUnifiedRealtimeVoice(config),
+      realtimeSessionActive: this.input.realtimeVoice.isActive()
+    });
+
+    if (route === "none") {
+      return;
+    }
+
+    if (route === "pet") {
       try {
-        const config = this.input.getConfig();
         const audio = await this.input.voiceRouter.synthesize({
           text: normalized,
           edgeConfig: {

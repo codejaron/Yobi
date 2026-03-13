@@ -27,7 +27,6 @@ export function ConsoleChatPage() {
     voiceSession,
     pendingVoiceContext,
     toggleVoiceSession,
-    interruptVoiceSession,
     chatBottomRef,
     chatListRef,
     inputRef,
@@ -72,7 +71,6 @@ export function ConsoleChatPage() {
         voiceSession={voiceSession}
         pendingVoiceContext={pendingVoiceContext}
         toggleVoiceSession={toggleVoiceSession}
-        interruptVoiceSession={interruptVoiceSession}
         sttReady={sttReady}
         micHint={micHint}
         onSubmit={handleSubmit}

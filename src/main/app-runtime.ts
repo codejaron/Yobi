@@ -992,16 +992,7 @@ export class CompanionRuntime {
       await this.pushToConfiguredChannels(normalizedMessage, input.pushTargets);
     }
 
-    try {
-      await this.realtimeVoice.speakText(normalizedMessage);
-    } catch (error) {
-      this.logger.warn("kernel", "proactive:speech-failed", undefined, error);
-    }
-
-    this.pet.emitEvent({
-      type: "talking",
-      value: "talking"
-    });
+    this.petService.emitPetTalkingReply(normalizedMessage);
     if (input.recordProactive) {
       await this.recordProactiveActivity();
     }

@@ -70,3 +70,17 @@ test("reduceVoiceSessionState: stop returns session to idle", () => {
 
   assert.equal(state.phase, "idle");
 });
+
+test("reduceVoiceSessionState: ptt session starts in idle until push-to-talk begins", () => {
+  const state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "ptt",
+    target: {
+      resourceId: "resource-1",
+      threadId: "thread-1"
+    }
+  });
+
+  const started = reduceVoiceSessionState(state, { type: "session-started" });
+  assert.equal(started.phase, "idle");
+});

@@ -76,7 +76,7 @@ export function reduceVoiceSessionState(
         errorMessage: null,
         lastInterruptReason: null,
         userTranscriptMetadata: null
-      }, "listening");
+      }, state.mode === "free" ? "listening" : "idle");
     case "speech-started":
       return withPhase(state, "user-speaking");
     case "speech-ended":
