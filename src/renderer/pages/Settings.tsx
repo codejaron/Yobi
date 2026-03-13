@@ -598,7 +598,9 @@ export function SettingsPage({
                               {snapshot.detail}
                             </div>
                           </div>
-                          <Badge className={toneClassName(snapshot.tone)}>{snapshot.badge}</Badge>
+                          <Badge className={`${toneClassName(snapshot.tone)} shrink-0 whitespace-nowrap`}>
+                            {snapshot.badge}
+                          </Badge>
                         </div>
                       </button>
                     );
@@ -625,7 +627,9 @@ export function SettingsPage({
               </p>
               <p className="mt-3 text-sm text-foreground/80">{activeSnapshot.detail}</p>
             </div>
-            <Badge className={toneClassName(activeSnapshot.tone)}>{activeSnapshot.badge}</Badge>
+            <Badge className={`${toneClassName(activeSnapshot.tone)} shrink-0 whitespace-nowrap`}>
+              {activeSnapshot.badge}
+            </Badge>
           </CardContent>
         </Card>
 
