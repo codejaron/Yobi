@@ -379,6 +379,7 @@ export const appConfigSchema = z
     realtimeVoice: z
       .object({
         enabled: z.boolean().default(false),
+        speechReplyEnabled: z.boolean().default(true),
         mode: realtimeVoiceModeSchema.default("ptt"),
         vadThreshold: z.number().min(0).max(1).default(0.5),
         minSpeechMs: z.number().int().min(50).max(10_000).default(180),
@@ -1356,6 +1357,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   realtimeVoice: {
     enabled: false,
+    speechReplyEnabled: true,
     mode: "ptt",
     vadThreshold: 0.5,
     minSpeechMs: 180,

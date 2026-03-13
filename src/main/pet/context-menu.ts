@@ -5,6 +5,7 @@ interface PetContextMenuActions {
   openConsole: () => void;
   disablePet: () => void;
   toggleFreeConversation: () => void;
+  toggleSpeechReply: () => void;
 }
 
 export function buildPetContextMenuTemplate(
@@ -17,6 +18,15 @@ export function buildPetContextMenuTemplate(
     {
       label: "打开 Yobi 控制台",
       click: actions.openConsole
+    },
+    {
+      type: "separator"
+    },
+    {
+      label: "语音回复",
+      type: "checkbox",
+      checked: config.realtimeVoice.speechReplyEnabled,
+      click: actions.toggleSpeechReply
     },
     {
       type: "separator"

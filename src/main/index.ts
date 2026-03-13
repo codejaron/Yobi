@@ -112,9 +112,7 @@ async function toggleFreeConversationFromMenu(sourceWindow: BrowserWindow): Prom
         realtimeVoice: {
           ...current.realtimeVoice,
           enabled: false,
-          mode: "ptt",
-          autoInterrupt: true,
-          aecEnabled: true
+          mode: "ptt"
         }
       });
       await runtime.stopVoiceSession();
@@ -126,9 +124,7 @@ async function toggleFreeConversationFromMenu(sourceWindow: BrowserWindow): Prom
       realtimeVoice: {
         ...current.realtimeVoice,
         enabled: true,
-        mode: "free",
-        autoInterrupt: true,
-        aecEnabled: true
+        mode: "free"
       }
     });
     await runtime.startVoiceSession({
@@ -161,6 +157,20 @@ function registerShellMenuIpc(): void {
           },
           disablePet: () => {
             void disablePetWindowFromMenu(sourceWindow);
+          },
+          toggleSpeechReply: () => {
+            void runtime.saveConfig({
+              ...current,
+              realtimeVoice: {
+                ...current.realtimeVoice,
+                speechReplyEnabled: !current.realtimeVoice.speechReplyEnabled
+              }
+            }).catch((error) => {
+              logger.warn("index", "toggle-speech-reply-from-menu-failed", undefined, error);
+              if (!sourceWindow.isDestroyed()) {
+                sourceWindow.focus();
+              }
+            });
           },
           toggleFreeConversation: () => {
             void toggleFreeConversationFromMenu(sourceWindow);

@@ -424,11 +424,11 @@ export class PetService {
 
   private async emitPetSpeech(text: string): Promise<void> {
     const normalized = text.trim();
-    if (!normalized || !this.input.pet.isOnline()) {
+    if (!normalized || !this.input.getConfig().realtimeVoice.speechReplyEnabled) {
       return;
     }
 
-    if (!shouldUseUnifiedRealtimeVoice(this.input.getConfig())) {
+    if (!shouldUseUnifiedRealtimeVoice(this.input.getConfig()) && this.input.pet.isOnline()) {
       try {
         const config = this.input.getConfig();
         const audio = await this.input.voiceRouter.synthesize({
