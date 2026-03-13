@@ -12,15 +12,11 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { Label } from "@renderer/components/ui/label";
 
-const MODEL_OPTIONS: Array<{
-  value: AppConfig["whisperLocal"]["modelSize"];
-  label: string;
-  hint: string;
-}> = [
-  { value: "tiny", label: "tiny", hint: "75MB · 最快" },
-  { value: "base", label: "base", hint: "148MB · 推荐" },
-  { value: "small", label: "small", hint: "488MB · 最准" }
-];
+const LOCAL_MODEL = {
+  value: "SenseVoiceSmall-int8" as AppConfig["senseVoiceLocal"]["modelName"],
+  label: "SenseVoice-Small INT8",
+  hint: "Q8_0 · 离线识别 + 语言 / 情感 / 事件"
+};
 
 interface VoiceEnginesCardProps {
   config: AppConfig;
@@ -33,6 +29,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
   const [runtimeEnabled, setRuntimeEnabled] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
   const [ready, setReady] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     type: "success" | "error";
     message: string;
@@ -40,52 +37,53 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
 
   const asrProvider = config.voice.asrProvider;
   const ttsProvider = config.voice.ttsProvider;
-  const usingWhisper = asrProvider === "whisper-local";
+  const usingSenseVoice = asrProvider === "sensevoice-local";
   const usingAlibaba = asrProvider === "alibaba" || ttsProvider === "alibaba";
   const usingEdgeTts = ttsProvider === "edge";
 
-  const refreshWhisperStatus = useCallback(async () => {
-    const status = await window.companion.getWhisperModelStatus({
-      modelSize: config.whisperLocal.modelSize
+  const refreshSenseVoiceStatus = useCallback(async () => {
+    const status = await window.companion.getSenseVoiceModelStatus({
+      modelName: config.senseVoiceLocal.modelName
     });
     setRuntimeEnabled(status.enabled);
     setDownloaded(status.downloaded);
     setReady(status.ready);
+    setStatusError(status.errorMessage ?? null);
     return status;
-  }, [config.whisperLocal.modelSize]);
+  }, [config.senseVoiceLocal.modelName]);
 
   useEffect(() => {
-    if (!usingWhisper) {
+    if (!usingSenseVoice) {
       return;
     }
 
-    void refreshWhisperStatus().catch(() => undefined);
-  }, [refreshWhisperStatus, usingWhisper]);
+    void refreshSenseVoiceStatus().catch(() => undefined);
+  }, [refreshSenseVoiceStatus, usingSenseVoice]);
 
   useEffect(() => {
-    return window.companion.onWhisperModelDownloadProgress((event) => {
-      if (event.modelSize !== config.whisperLocal.modelSize) {
+    return window.companion.onSenseVoiceModelDownloadProgress((event) => {
+      if (event.modelName !== config.senseVoiceLocal.modelName) {
         return;
       }
 
       setDownloading(event.percent < 100);
       setDownloadProgress(event.percent);
     });
-  }, [config.whisperLocal.modelSize]);
+  }, [config.senseVoiceLocal.modelName]);
 
   useEffect(() => {
-    if (!usingWhisper || !runtimeEnabled || !downloaded || ready || downloading) {
+    if (!usingSenseVoice || !runtimeEnabled || !downloaded || ready || downloading) {
       return;
     }
 
     const timer = window.setTimeout(() => {
-      void refreshWhisperStatus().catch(() => undefined);
+      void refreshSenseVoiceStatus().catch(() => undefined);
     }, 1000);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [downloaded, downloading, ready, refreshWhisperStatus, runtimeEnabled, usingWhisper]);
+  }, [downloaded, downloading, ready, refreshSenseVoiceStatus, runtimeEnabled, usingSenseVoice]);
 
   const updateVoiceConfig = useCallback(
     (patch: Partial<AppConfig["voice"]>) => {
@@ -100,7 +98,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
     [config, setConfig]
   );
 
-  const handleDownloadWhisperModel = useCallback(async () => {
+  const handleDownloadSenseVoiceModel = useCallback(async () => {
     if (downloading) {
       return;
     }
@@ -110,15 +108,15 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
     setNotice(null);
 
     try {
-      await window.companion.ensureWhisperModel({
-        modelSize: config.whisperLocal.modelSize
+      await window.companion.ensureSenseVoiceModel({
+        modelName: config.senseVoiceLocal.modelName
       });
-      const status = await refreshWhisperStatus();
+      const status = await refreshSenseVoiceStatus();
       setNotice({
         type: "success",
         message: status.ready
-          ? "模型下载完成，Whisper 已自动加载。"
-          : "模型下载完成。请点击右上角“保存配置”后，应用会切换到本地 Whisper。"
+          ? "模型下载完成，SenseVoice 已自动加载。"
+          : "模型下载完成。请点击右上角“保存配置”后，应用会切换到本地 SenseVoice。"
       });
     } catch (error) {
       setNotice({
@@ -129,13 +127,20 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
       setDownloading(false);
       setDownloadProgress(null);
     }
-  }, [config.whisperLocal.modelSize, downloading, refreshWhisperStatus]);
+  }, [config.senseVoiceLocal.modelName, downloading, refreshSenseVoiceStatus]);
 
-  const whisperStatusBadge = useMemo(() => {
+  const senseVoiceStatusBadge = useMemo(() => {
     if (downloading) {
       return {
         className: "status-badge status-badge--info",
         label: `下载中 ${downloadProgress ?? 0}%`
+      };
+    }
+
+    if (statusError) {
+      return {
+        className: "status-badge status-badge--danger",
+        label: "不可用"
       };
     }
 
@@ -157,13 +162,15 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
       className: "status-badge status-badge--neutral",
       label: "未下载"
     };
-  }, [downloadProgress, downloaded, downloading, ready]);
+  }, [downloadProgress, downloaded, downloading, ready, statusError]);
 
-  const whisperStatusHint = downloaded && !ready
+  const senseVoiceStatusHint = statusError
+    ? statusError
+    : downloaded && !ready
     ? runtimeEnabled
       ? "已下载；应用正在后台加载模型。"
-      : "已下载；请点击右上角“保存配置”后，应用才会切换到本地 Whisper。"
-    : "下载后即可用于离线识别。";
+      : "已下载；请点击右上角“保存配置”后，应用才会切换到本地 SenseVoice。"
+    : "下载后即可用于离线识别，并返回语言 / 情感 / 事件元信息。";
 
   return (
     <Card>
@@ -191,7 +198,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
               }
             >
               <option value="none">无</option>
-              <option value="whisper-local">本地 Whisper</option>
+              <option value="sensevoice-local">本地 SenseVoice</option>
               <option value="alibaba">阿里百炼</option>
             </select>
           </div>
@@ -213,52 +220,36 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
           </div>
         </div>
 
-        {usingWhisper ? (
+        {usingSenseVoice ? (
           <div className="space-y-4 rounded-xl border border-border/70 bg-white/60 p-4">
             <div>
-              <h3 className="text-sm font-medium text-foreground">本地 Whisper（ASR）</h3>
+              <h3 className="text-sm font-medium text-foreground">本地 SenseVoice（ASR）</h3>
               <p className="text-xs text-muted-foreground">
-                完全离线，不需要 API Key。首次使用需联网下载模型文件。
+                完全离线，不需要 API Key。首次使用需联网下载固定的 Small INT8 模型。
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <Label>Whisper 模型</Label>
-              <select
-                className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                value={config.whisperLocal.modelSize}
-                disabled={downloading}
-                onChange={(event) =>
-                  setConfig({
-                    ...config,
-                    whisperLocal: {
-                      ...config.whisperLocal,
-                      modelSize: event.target.value as AppConfig["whisperLocal"]["modelSize"]
-                    }
-                  })
-                }
-              >
-                {MODEL_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}（{option.hint}）
-                  </option>
-                ))}
-              </select>
+              <Label>本地模型</Label>
+              <div className="flex min-h-10 items-center rounded-md border border-border bg-background px-3 py-2 text-sm">
+                {LOCAL_MODEL.label}
+                <span className="ml-2 text-xs text-muted-foreground">{LOCAL_MODEL.hint}</span>
+              </div>
             </div>
 
             <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-white/70 px-3 py-3">
               <div className="space-y-1">
                 <Label>模型状态</Label>
                 <div className="flex items-center gap-2">
-                  <Badge className={whisperStatusBadge.className}>{whisperStatusBadge.label}</Badge>
-                  <span className="text-xs text-muted-foreground">{whisperStatusHint}</span>
+                  <Badge className={senseVoiceStatusBadge.className}>{senseVoiceStatusBadge.label}</Badge>
+                  <span className="text-xs text-muted-foreground">{senseVoiceStatusHint}</span>
                 </div>
               </div>
 
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => void handleDownloadWhisperModel()}
+                onClick={() => void handleDownloadSenseVoiceModel()}
                 disabled={downloading}
               >
                 {downloading ? "下载中..." : downloaded ? "刷新状态" : "下载模型"}
@@ -431,7 +422,7 @@ export function VoiceEnginesCard({ config, setConfig }: VoiceEnginesCardProps) {
           <div className="space-y-1.5">
             <Label>请求超时（毫秒）</Label>
             <p className="text-xs text-muted-foreground">
-              作用于阿里语音请求与 Edge TTS；本地 Whisper 不受影响。
+              作用于阿里语音请求与 Edge TTS；本地 SenseVoice 不受影响。
             </p>
             <Input
               value={String(config.voice.requestTimeoutMs)}

@@ -2,7 +2,13 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { app } from "electron";
-import type { AppConfig, EmotionalState, KernelStateDocument } from "@shared/types";
+import type {
+  AppConfig,
+  EmotionalState,
+  KernelStateDocument,
+  VoiceInputContext,
+  VoiceTranscriptionResult
+} from "@shared/types";
 import { DEFAULT_PET_EMOTION_CONFIG } from "@shared/pet-emotion";
 import { CompanionPaths } from "@main/storage/paths";
 import { appLogger as logger } from "@main/runtime/singletons";
@@ -114,7 +120,7 @@ export class PetService {
     };
   }
 
-  async chatFromPet(text: string): Promise<{ replyText: string }> {
+  async chatFromPet(text: string, voiceContext?: VoiceInputContext): Promise<{ replyText: string }> {
     const normalized = text.trim();
     if (!normalized) {
       return { replyText: "" };
@@ -130,7 +136,8 @@ export class PetService {
         this.input.channelRouter.handleConsole({
           text: normalized,
           resourceId: this.input.primaryResourceId,
-          threadId: this.input.primaryThreadId
+          threadId: this.input.primaryThreadId,
+          voiceContext
         }),
         this.input.chatReplyTimeoutMs,
         "LLM 回复超时"
@@ -162,16 +169,14 @@ export class PetService {
   async transcribeVoiceInput(input: {
     pcm16Base64?: string;
     sampleRate?: number;
-  }): Promise<{
-    text: string;
-  }> {
+  }): Promise<VoiceTranscriptionResult> {
     const pcm16Base64 = typeof input.pcm16Base64 === "string" ? input.pcm16Base64.trim() : "";
     if (!pcm16Base64) {
       throw new Error("录音数据为空。");
     }
 
     if (!this.input.voiceRouter.isAsrReady()) {
-      throw new Error("语音识别尚未就绪，请在设置里启用本地 Whisper 或阿里语音，并确认模型已下载完成。");
+      throw new Error("语音识别尚未就绪，请在设置里启用本地 SenseVoice 或阿里语音，并确认模型已下载完成。");
     }
 
     let pcm: Buffer;
@@ -186,14 +191,10 @@ export class PetService {
     }
 
     const sampleRate = Number.isFinite(input.sampleRate) ? Number(input.sampleRate) : 16_000;
-    const text = await this.input.voiceRouter.transcribePcm16({
+    return this.input.voiceRouter.transcribePcm16({
       pcm,
       sampleRate
     });
-
-    return {
-      text
-    };
   }
 
   async transcribeAndSendFromPet(input: {
@@ -202,6 +203,7 @@ export class PetService {
   }): Promise<{
     sent: boolean;
     text: string;
+    metadata?: VoiceTranscriptionResult["metadata"];
     replyText?: string;
     message?: string;
   }> {
@@ -223,10 +225,19 @@ export class PetService {
       };
     }
 
-    const replied = await this.chatFromPet(text);
+    const replied = await this.chatFromPet(
+      text,
+      transcribed.metadata
+        ? {
+            provider: this.input.getConfig().voice.asrProvider,
+            metadata: transcribed.metadata
+          }
+        : undefined
+    );
     return {
       sent: true,
       text,
+      metadata: transcribed.metadata,
       replyText: replied.replyText
     };
   }

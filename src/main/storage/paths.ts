@@ -117,6 +117,10 @@ export class CompanionPaths {
     return path.join(this.modelsDir, "whisper");
   }
 
+  get senseVoiceModelsDir(): string {
+    return path.join(this.modelsDir, "sensevoice");
+  }
+
   get vadModelsDir(): string {
     return path.join(this.modelsDir, "vad");
   }
@@ -176,6 +180,7 @@ export class CompanionPaths {
     mkdirSync(this.modelsDir, { recursive: true });
     mkdirSync(this.embeddingModelsDir, { recursive: true });
     mkdirSync(this.whisperModelsDir, { recursive: true });
+    mkdirSync(this.senseVoiceModelsDir, { recursive: true });
     mkdirSync(this.vadModelsDir, { recursive: true });
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });

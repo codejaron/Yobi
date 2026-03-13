@@ -23,6 +23,9 @@ Thumbs.db
 
 resources/models/
 resources/openclaw-runtime/
+resources/sensevoice/
 resources/live2dcubismcore.min.js
 resources/vendor/*.min.js
 resources/vendor/live2dcubismcore.min.js
+
+fbank_lfr_cmvn_feature.json

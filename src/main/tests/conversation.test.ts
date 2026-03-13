@@ -195,6 +195,92 @@ test("ConversationEngine: persists toolTrace metadata for successful tool calls"
   });
 });
 
+test("ConversationEngine: persists voice recognition metadata and injects hidden voice context", async () => {
+  const config = cloneConfig();
+  const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
+  let seenSystem = "";
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async (input: { role: string; text: string; metadata?: Record<string, unknown> }) => {
+        remembered.push(input);
+      },
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    ((input: { system: string }) => {
+      seenSystem = input.system;
+      return {
+        fullStream: (async function* () {
+          yield {
+            type: "text-delta",
+            text: "收到"
+          };
+        })(),
+        totalUsage: Promise.resolve(undefined)
+      };
+    }) as any
+  );
+
+  await conversation.reply({
+    text: "今天有点开心",
+    channel: "console",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    voiceContext: {
+      provider: "sensevoice-local",
+      metadata: {
+        language: "zh",
+        emotion: "happy",
+        event: "speech",
+        rawTags: ["zh", "HAPPY", "Speech"]
+      }
+    }
+  });
+
+  assert.equal(remembered[0]?.role, "user");
+  assert.deepEqual(remembered[0]?.metadata?.speechRecognition, {
+    provider: "sensevoice-local",
+    language: "zh",
+    emotion: "happy",
+    event: "speech",
+    rawTags: ["zh", "HAPPY", "Speech"]
+  });
+  assert.match(seenSystem, /\[VOICE INPUT CONTEXT\]/);
+  assert.match(seenSystem, /language: zh/i);
+  assert.match(seenSystem, /emotion: happy/i);
+});
+
 test("ConversationEngine: surfaces stream error chunks instead of falling back to empty-reply copy", async () => {
   const config = cloneConfig();
   const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];

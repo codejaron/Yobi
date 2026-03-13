@@ -13,8 +13,10 @@ import type {
   ScheduledTaskInput,
   ScheduledTaskRun,
   UserProfile,
+  VoiceInputContext,
   VoiceSessionEvent,
   VoiceSessionState,
+  VoiceTranscriptionResult,
   RealtimeVoiceMode,
   VoiceSessionTarget
 } from "./types";
@@ -27,19 +29,20 @@ export interface CursorHistoryPage {
 
 export interface SpeechRecognitionStatus {
   ready: boolean;
-  provider: "whisper-local" | "alibaba" | "none";
+  provider: "sensevoice-local" | "alibaba" | "none";
   message: string;
 }
 
-export interface WhisperModelStatus {
+export interface SenseVoiceModelStatus {
   enabled: boolean;
-  modelSize: AppConfig["whisperLocal"]["modelSize"];
+  modelName: AppConfig["senseVoiceLocal"]["modelName"];
   downloaded: boolean;
   ready: boolean;
+  errorMessage?: string | null;
 }
 
-export interface WhisperModelProgressEvent {
-  modelSize: AppConfig["whisperLocal"]["modelSize"];
+export interface SenseVoiceModelProgressEvent {
+  modelName: AppConfig["senseVoiceLocal"]["modelName"];
   percent: number;
 }
 
@@ -47,13 +50,13 @@ export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
   getSpeechRecognitionStatus(): Promise<SpeechRecognitionStatus>;
-  ensureWhisperModel(input?: {
-    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+  ensureSenseVoiceModel(input?: {
+    modelName?: AppConfig["senseVoiceLocal"]["modelName"];
   }): Promise<{ ready: boolean; path: string }>;
-  getWhisperModelStatus(input?: {
-    modelSize?: AppConfig["whisperLocal"]["modelSize"];
-  }): Promise<WhisperModelStatus>;
-  onWhisperModelDownloadProgress(listener: (event: WhisperModelProgressEvent) => void): () => void;
+  getSenseVoiceModelStatus(input?: {
+    modelName?: AppConfig["senseVoiceLocal"]["modelName"];
+  }): Promise<SenseVoiceModelStatus>;
+  onSenseVoiceModelDownloadProgress(listener: (event: SenseVoiceModelProgressEvent) => void): () => void;
 
   listHistory(query?: { query?: string; limit?: number; offset?: number }): Promise<HistoryMessage[]>;
   clearHistory(): Promise<void>;
@@ -102,11 +105,12 @@ export interface CompanionApi {
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 
   sendConsoleChat(text: string): Promise<{ requestId: string }>;
+  sendConsoleChatWithVoice(input: { text: string; voiceContext?: VoiceInputContext }): Promise<{ requestId: string }>;
   stopConsoleChat(requestId: string): Promise<{ accepted: boolean }>;
   transcribeVoice(input: {
     pcm16Base64: string;
     sampleRate: number;
-  }): Promise<{ text: string }>;
+  }): Promise<VoiceTranscriptionResult>;
   getVoiceSessionState(): Promise<VoiceSessionState>;
   startVoiceSession(input?: {
     mode?: RealtimeVoiceMode;

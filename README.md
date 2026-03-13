@@ -123,12 +123,12 @@ npm run dev
 
 设置页支持：
 
-- **ASR**：`none` / `whisper-local` / `alibaba`
+- **ASR**：`none` / `sensevoice-local` / `alibaba`
 - **TTS**：`edge` / `alibaba`
 
 说明：
 
-- 本地 Whisper 首次使用时可在设置页直接下载模型。
+- 本地 SenseVoice 首次使用时可在设置页直接下载 `SenseVoice-Small INT8` 模型。
 - 默认语义记忆 embedding 也会在后台尝试准备本地 GGUF；未就绪时系统自动回退为 BM25-only。
 - 修改语音 provider 或凭证后，需要在设置页保存配置，运行时才会真正切换引擎。
 
@@ -219,7 +219,7 @@ xattr -dr com.apple.quarantine /Applications/Yobi.app
 │   └── state.json
 ├── models/
 │   ├── embedding/
-│   └── whisper/
+│   └── sensevoice/
 ├── browser-profile/
 ├── skills/
 ├── skills-registry.json

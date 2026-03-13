@@ -1,5 +1,5 @@
 import type { FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
-import type { CommandApprovalDecision, VoiceSessionState } from "@shared/types";
+import type { CommandApprovalDecision, VoiceInputContext, VoiceSessionState } from "@shared/types";
 import { Loader2, Mic, Square } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -48,6 +48,7 @@ interface ConsoleChatPaneProps {
   micButtonLabel: string;
   stoppingRequest: boolean;
   voiceSession: VoiceSessionState | null;
+  pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
   interruptVoiceSession: () => Promise<void>;
   sttReady: boolean;
@@ -55,6 +56,18 @@ interface ConsoleChatPaneProps {
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   stopCurrentRequest: () => Promise<void>;
   clearHistory: () => Promise<void>;
+}
+
+function formatRecognitionMeta(meta: VoiceInputContext["metadata"] | null): Array<string> {
+  if (!meta) {
+    return [];
+  }
+
+  return [
+    meta.language ? `语言 ${meta.language}` : "",
+    meta.emotion ? `情感 ${meta.emotion}` : "",
+    meta.event ? `事件 ${meta.event}` : ""
+  ].filter(Boolean);
 }
 
 export function ConsoleChatPane({
@@ -85,6 +98,7 @@ export function ConsoleChatPane({
   micButtonLabel,
   stoppingRequest,
   voiceSession,
+  pendingVoiceContext,
   toggleVoiceSession,
   interruptVoiceSession,
   sttReady,
@@ -93,6 +107,10 @@ export function ConsoleChatPane({
   stopCurrentRequest,
   clearHistory
 }: ConsoleChatPaneProps) {
+  const recognitionLabels = formatRecognitionMeta(
+    voiceSession?.userTranscriptMetadata ?? pendingVoiceContext?.metadata ?? null
+  );
+
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -117,6 +135,15 @@ export function ConsoleChatPane({
               </Button>
             ) : null}
           </div>
+          {recognitionLabels.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              {recognitionLabels.map((label) => (
+                <Badge key={label} className="status-badge status-badge--info">
+                  {label}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -270,7 +297,7 @@ export function ConsoleChatPane({
               title={
                 sttReady
                   ? "单击开始录音，再次单击结束识别"
-                  : micHint || "请先在设置里启用本地 Whisper 或阿里语音"
+                  : micHint || "请先在设置里启用本地 SenseVoice 或阿里语音"
               }
             >
               {transcribing ? (

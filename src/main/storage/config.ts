@@ -16,9 +16,9 @@ function normalizeVoiceProviders(config: AppConfig): AppConfig {
       asrProvider,
       ttsProvider
     },
-    whisperLocal: {
-      ...config.whisperLocal,
-      enabled: asrProvider === "whisper-local"
+    senseVoiceLocal: {
+      ...config.senseVoiceLocal,
+      enabled: asrProvider === "sensevoice-local"
     },
     alibabaVoice: {
       ...config.alibabaVoice,
@@ -134,7 +134,6 @@ function migrateRawConfig(raw: unknown): unknown {
   }
 
   const voice = isPlainRecord(migratedRaw.voice) ? voiceOrDefault(migratedRaw.voice) : {};
-  const whisperLocal = isPlainRecord(migratedRaw.whisperLocal) ? migratedRaw.whisperLocal : {};
   const alibabaVoice = isPlainRecord(migratedRaw.alibabaVoice) ? migratedRaw.alibabaVoice : {};
   const legacyRuntimeConfig = isPlainRecord(migratedRaw.openclaw) ? migratedRaw.openclaw : null;
   const tools = isPlainRecord(migratedRaw.tools) ? migratedRaw.tools : {};
@@ -189,19 +188,22 @@ function migrateRawConfig(raw: unknown): unknown {
   delete migratedRaw.openclaw;
 
   if (typeof voice.asrProvider !== "string") {
-    if (whisperLocal.enabled === true) {
-      voice.asrProvider = "whisper-local";
-    } else if (alibabaVoice.enabled === true) {
+    if (alibabaVoice.enabled === true) {
       voice.asrProvider = "alibaba";
     } else {
       voice.asrProvider = "none";
     }
   }
 
+  if (voice.asrProvider === "whisper-local") {
+    voice.asrProvider = "none";
+  }
+
   if (typeof voice.ttsProvider !== "string") {
     voice.ttsProvider = alibabaVoice.enabled === true ? "alibaba" : "edge";
   }
 
+  delete migratedRaw.whisperLocal;
   migratedRaw.voice = voice;
   return mergeWithDefaults(DEFAULT_CONFIG, migratedRaw);
 }

@@ -8,7 +8,7 @@ test("buildInterruptedAssistantCommit: keeps only the played assistant prefix", 
     playedText: "你好呀，",
     sessionId: "voice-session-1",
     mode: "free",
-    asrProvider: "whisper-local",
+    asrProvider: "sensevoice-local",
     ttsProvider: "edge"
   });
 

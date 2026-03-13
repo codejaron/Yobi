@@ -48,6 +48,7 @@ export function createVoiceSessionState(input: CreateVoiceSessionStateInput): Vo
       source: "voice"
     },
     userTranscript: "",
+    userTranscriptMetadata: null,
     assistantTranscript: "",
     lastInterruptReason: null,
     errorMessage: null,
@@ -73,7 +74,8 @@ export function reduceVoiceSessionState(
       return withPhase({
         ...state,
         errorMessage: null,
-        lastInterruptReason: null
+        lastInterruptReason: null,
+        userTranscriptMetadata: null
       }, "listening");
     case "speech-started":
       return withPhase(state, "user-speaking");
@@ -116,6 +118,7 @@ export function reduceVoiceSessionState(
         ...withPhase(state, "idle"),
         lastInterruptReason: null,
         errorMessage: null,
+        userTranscriptMetadata: null,
         playback: createPlaybackState()
       };
     case "error":

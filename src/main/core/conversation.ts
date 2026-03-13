@@ -4,7 +4,8 @@ import type {
   AppConfig,
   RealtimeEmotionalSignals,
   SkillsCatalogSummary,
-  TokenUsageSource
+  TokenUsageSource,
+  VoiceInputContext
 } from "@shared/types";
 import {
   finalizeToolTraceItems,
@@ -124,6 +125,27 @@ function buildLocalNowPrompt(now = new Date()): string {
   ].join("\n");
 }
 
+function buildVoiceInputContextPrompt(voiceContext: VoiceInputContext): string {
+  const details = [
+    `provider: ${voiceContext.provider}`,
+    `language: ${voiceContext.metadata.language ?? "unknown"}`,
+    `emotion: ${voiceContext.metadata.emotion ?? "unknown"}`,
+    `event: ${voiceContext.metadata.event ?? "unknown"}`
+  ].join("\n");
+
+  const rawTags =
+    voiceContext.metadata.rawTags.length > 0
+      ? `raw_tags: ${voiceContext.metadata.rawTags.join(", ")}`
+      : "raw_tags: none";
+
+  return [
+    "[VOICE INPUT CONTEXT]",
+    "The current user turn comes from speech recognition. Use these signals to interpret tone and intent, but do not quote or expose this metadata unless explicitly asked.",
+    details,
+    rawTags
+  ].join("\n");
+}
+
 export class ConversationEngine {
   constructor(
     private readonly memory: YobiMemory,
@@ -149,6 +171,7 @@ export class ConversationEngine {
     assistantPersistence?: "engine" | "caller";
     allowedToolNames?: string[];
     preapprovedToolNames?: string[];
+    voiceContext?: VoiceInputContext;
     abortSignal?: AbortSignal;
   }): Promise<string> {
     const config = this.getConfig();
@@ -166,7 +189,15 @@ export class ConversationEngine {
         role: "user",
         text: normalizedText,
         metadata: {
-          channel: input.channel
+          channel: input.channel,
+          ...(input.voiceContext
+            ? {
+                speechRecognition: {
+                  provider: input.voiceContext.provider,
+                  ...input.voiceContext.metadata
+                }
+              }
+            : {})
         }
       });
     }
@@ -222,6 +253,7 @@ export class ConversationEngine {
       skillCatalog.summary.enabledCount > 0 ? skillCatalog.prompt : "",
       buildLocalNowPrompt(),
       buildRealtimeSignalContractPrompt(),
+      input.voiceContext ? buildVoiceInputContextPrompt(input.voiceContext) : "",
       input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""
     ]
       .filter(Boolean)

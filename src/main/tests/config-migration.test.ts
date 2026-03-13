@@ -108,3 +108,37 @@ test("ConfigStore: migrates legacy realtime voice shape without losing enabled f
     await fs.rm(baseDir, { recursive: true, force: true });
   }
 });
+
+test("ConfigStore: downgrades legacy whisper-local ASR to none without resetting the rest of config", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-whisper-downgrade-"));
+
+  try {
+    const paths = new CompanionPaths(baseDir);
+    paths.ensureLayout();
+
+    const legacyConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Record<string, any>;
+    legacyConfig.voice.asrProvider = "whisper-local";
+    legacyConfig.whisperLocal = {
+      enabled: true,
+      modelSize: "small"
+    };
+    delete legacyConfig.senseVoiceLocal;
+    legacyConfig.voice.ttsProvider = "alibaba";
+    legacyConfig.alibabaVoice.enabled = true;
+    legacyConfig.alibabaVoice.apiKey = "demo-key";
+
+    await fs.writeFile(paths.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, "utf8");
+
+    const store = new ConfigStore(paths);
+    await store.init();
+    const config = store.getConfig();
+
+    assert.equal(config.voice.asrProvider, "none");
+    assert.equal(config.voice.ttsProvider, "alibaba");
+    assert.equal(config.alibabaVoice.apiKey, "demo-key");
+    assert.equal(config.senseVoiceLocal.enabled, false);
+    assert.equal(config.senseVoiceLocal.modelName, "SenseVoiceSmall-int8");
+  } finally {
+    await fs.rm(baseDir, { recursive: true, force: true });
+  }
+});

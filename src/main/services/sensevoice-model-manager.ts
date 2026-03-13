@@ -5,18 +5,16 @@ import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import type { AppConfig } from "@shared/types";
 
-const MODEL_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const MODEL_BASE_URL = "https://huggingface.co/lovemefan/sense-voice-gguf/resolve/main";
 
-type WhisperModelSize = AppConfig["whisperLocal"]["modelSize"];
+type SenseVoiceModelName = AppConfig["senseVoiceLocal"]["modelName"];
 
-const MODELS: Record<WhisperModelSize, { file: string; sizeMB: number }> = {
-  tiny: { file: "ggml-tiny.bin", sizeMB: 75 },
-  base: { file: "ggml-base.bin", sizeMB: 148 },
-  small: { file: "ggml-small.bin", sizeMB: 488 }
+const MODELS: Record<SenseVoiceModelName, { file: string; sizeMB: number }> = {
+  "SenseVoiceSmall-int8": { file: "sense-voice-small-q8_0.gguf", sizeMB: 205 }
 };
 
-function resolveModelEntry(modelSize: string): { file: string; sizeMB: number } {
-  return MODELS[modelSize as WhisperModelSize] ?? MODELS.base;
+function resolveModelEntry(modelName: string): { file: string; sizeMB: number } {
+  return MODELS[modelName as SenseVoiceModelName] ?? MODELS["SenseVoiceSmall-int8"];
 }
 
 function asMessage(error: unknown): string {
@@ -43,36 +41,36 @@ function toFriendlyDownloadError(fileName: string, error: unknown): Error {
   const message = asMessage(error);
   if (shouldRetryDownload(error)) {
     return new Error(
-      `下载 Whisper 模型 ${fileName} 时连接被中断。更像是网络到 Hugging Face 不稳定或被阻断，不是主程序逻辑崩溃。请稍后重试，必要时切换网络或代理。原始错误：${message}`
+      `下载 SenseVoice 模型 ${fileName} 时连接被中断。请稍后重试，必要时切换网络或代理。原始错误：${message}`
     );
   }
 
-  return new Error(`下载 Whisper 模型 ${fileName} 失败：${message}`);
+  return new Error(`下载 SenseVoice 模型 ${fileName} 失败：${message}`);
 }
 
-export class WhisperModelManager {
+export class SenseVoiceModelManager {
   constructor(private readonly modelsDir: string) {
     if (!existsSync(modelsDir)) {
       mkdirSync(modelsDir, { recursive: true });
     }
   }
 
-  getModelPath(modelSize: string): string {
-    return join(this.modelsDir, resolveModelEntry(modelSize).file);
+  getModelPath(modelName: string): string {
+    return join(this.modelsDir, resolveModelEntry(modelName).file);
   }
 
-  isModelDownloaded(modelSize: string): boolean {
-    return existsSync(this.getModelPath(modelSize));
+  isModelDownloaded(modelName: string): boolean {
+    return existsSync(this.getModelPath(modelName));
   }
 
-  async ensureModel(modelSize: string, onProgress?: (percent: number) => void): Promise<string> {
-    const modelPath = this.getModelPath(modelSize);
+  async ensureModel(modelName: string, onProgress?: (percent: number) => void): Promise<string> {
+    const modelPath = this.getModelPath(modelName);
     if (existsSync(modelPath)) {
       onProgress?.(100);
       return modelPath;
     }
 
-    const entry = resolveModelEntry(modelSize);
+    const entry = resolveModelEntry(modelName);
 
     try {
       return await this.downloadModel(entry, modelPath, onProgress);

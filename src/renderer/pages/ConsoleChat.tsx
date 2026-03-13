@@ -25,6 +25,7 @@ export function ConsoleChatPage() {
     micButtonLabel,
     stoppingRequest,
     voiceSession,
+    pendingVoiceContext,
     toggleVoiceSession,
     interruptVoiceSession,
     chatBottomRef,
@@ -69,6 +70,7 @@ export function ConsoleChatPage() {
         micButtonLabel={micButtonLabel}
         stoppingRequest={stoppingRequest}
         voiceSession={voiceSession}
+        pendingVoiceContext={pendingVoiceContext}
         toggleVoiceSession={toggleVoiceSession}
         interruptVoiceSession={interruptVoiceSession}
         sttReady={sttReady}

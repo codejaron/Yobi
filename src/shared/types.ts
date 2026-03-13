@@ -131,6 +131,7 @@ export const scheduledTaskRunStatusSchema = z.enum([
 export const themeModeSchema = z.enum(["system", "light", "dark"]);
 export const realtimeVoiceModeSchema = z.enum(["ptt", "free"]);
 export const realtimeVoiceFirstChunkStrategySchema = z.enum(["aggressive", "balanced"]);
+export const senseVoiceLocalModelNameSchema = z.enum(["SenseVoiceSmall-int8"]);
 
 export const scheduledTaskSchema = z
   .object({
@@ -327,7 +328,7 @@ export const appConfigSchema = z
       .strict(),
     voice: z
       .object({
-        asrProvider: z.enum(["none", "whisper-local", "alibaba"]).default("none"),
+        asrProvider: z.enum(["none", "sensevoice-local", "alibaba"]).default("none"),
         ttsProvider: z.enum(["edge", "alibaba"]).default("edge"),
         ttsVoice: z.string().default("zh-CN-XiaoxiaoNeural"),
         ttsRate: z.string().default("+0%"),
@@ -346,10 +347,10 @@ export const appConfigSchema = z
         ttsVoice: z.string().default("longxiaochun_v3")
       })
       .strict(),
-    whisperLocal: z
+    senseVoiceLocal: z
       .object({
         enabled: z.boolean().default(false),
-        modelSize: z.enum(["tiny", "base", "small"]).default("base")
+        modelName: senseVoiceLocalModelNameSchema.default("SenseVoiceSmall-int8")
       })
       .strict(),
     background: z
@@ -640,6 +641,23 @@ export interface VoicePlaybackState {
   currentText: string;
 }
 
+export interface SpeechRecognitionMetadata {
+  language: string | null;
+  emotion: string | null;
+  event: string | null;
+  rawTags: string[];
+}
+
+export interface VoiceInputContext {
+  provider: AppConfig["voice"]["asrProvider"];
+  metadata: SpeechRecognitionMetadata;
+}
+
+export interface VoiceTranscriptionResult {
+  text: string;
+  metadata: SpeechRecognitionMetadata | null;
+}
+
 export interface VoiceHistoryMeta {
   source: "voice";
   sessionId: string;
@@ -657,6 +675,7 @@ export interface HistoryMessageMeta {
     items: ToolTraceItem[];
   };
   voice?: VoiceHistoryMeta;
+  speechRecognition?: VoiceInputContext;
 }
 
 export interface VoiceSessionState {
@@ -665,6 +684,7 @@ export interface VoiceSessionState {
   mode: RealtimeVoiceMode;
   target: VoiceSessionTarget | null;
   userTranscript: string;
+  userTranscriptMetadata: SpeechRecognitionMetadata | null;
   assistantTranscript: string;
   lastInterruptReason: "vad" | "manual" | "system" | null;
   errorMessage: string | null;
@@ -689,6 +709,7 @@ export type VoiceSessionEvent =
       type: "user-transcript";
       text: string;
       isFinal: boolean;
+      metadata?: SpeechRecognitionMetadata | null;
       timestamp: string;
     }
   | {
@@ -1314,9 +1335,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     ttsModel: "cosyvoice-v3-flash",
     ttsVoice: "longxiaochun_v3"
   },
-  whisperLocal: {
+  senseVoiceLocal: {
     enabled: false,
-    modelSize: "base"
+    modelName: "SenseVoiceSmall-int8"
   },
   background: {
     keepAwake: true

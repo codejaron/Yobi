@@ -415,7 +415,10 @@ export class AlibabaVoiceService {
       },
       flush: async () => {
         if (settled) {
-          return finishedPromise;
+          return finishedPromise.then((text) => ({
+            text,
+            metadata: null
+          }));
         }
 
         await readyPromise;
@@ -435,7 +438,10 @@ export class AlibabaVoiceService {
           );
         }
 
-        return finishedPromise;
+        return finishedPromise.then((text) => ({
+          text,
+          metadata: null
+        }));
       },
       abort: async () => {
         if (settled) {

@@ -1,6 +1,7 @@
 import type { ChatReplyStreamListener } from "@main/core/conversation";
 import type { ConversationEngine } from "@main/core/conversation";
 import type { ToolApprovalHandler } from "@main/tools/types";
+import type { VoiceInputContext } from "@shared/types";
 
 export class ChannelRouter {
   constructor(private readonly conversation: ConversationEngine) {}
@@ -9,6 +10,7 @@ export class ChannelRouter {
     text: string;
     resourceId: string;
     threadId: string;
+    voiceContext?: VoiceInputContext;
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
     abortSignal?: AbortSignal;
@@ -18,6 +20,7 @@ export class ChannelRouter {
       channel: "console",
       resourceId: input.resourceId,
       threadId: input.threadId,
+      voiceContext: input.voiceContext,
       stream: input.stream,
       requestApproval: input.requestApproval,
       abortSignal: input.abortSignal

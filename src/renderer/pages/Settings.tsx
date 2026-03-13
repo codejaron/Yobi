@@ -161,8 +161,8 @@ function themeModeDetail(themeMode: ThemeMode): string {
 }
 
 function providerLabel(provider: AppConfig["voice"]["asrProvider"] | AppConfig["voice"]["ttsProvider"]): string {
-  if (provider === "whisper-local") {
-    return "Whisper";
+  if (provider === "sensevoice-local") {
+    return "SenseVoice";
   }
 
   if (provider === "alibaba") {

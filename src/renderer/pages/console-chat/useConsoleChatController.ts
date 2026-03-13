@@ -4,6 +4,7 @@ import type {
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
+  VoiceInputContext,
   VoiceSessionEvent,
   VoiceSessionState
 } from "@shared/types";
@@ -53,6 +54,7 @@ export interface ConsoleChatController {
   micButtonLabel: string;
   stoppingRequest: boolean;
   voiceSession: VoiceSessionState | null;
+  pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
   interruptVoiceSession: () => Promise<void>;
   chatBottomRef: React.RefObject<HTMLDivElement | null>;
@@ -118,7 +120,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [micHint, setMicHint] = useState("");
   const [sttUnavailableHint, setSttUnavailableHint] = useState(
-    "未启用任何语音识别引擎。请先在设置里开启本地 Whisper 或配置阿里语音。"
+    "未启用任何语音识别引擎。请先在设置里开启本地 SenseVoice 或配置阿里语音。"
   );
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
@@ -127,6 +129,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [approvalIndex, setApprovalIndex] = useState(0);
   const [stoppingRequestId, setStoppingRequestId] = useState<string | null>(null);
   const [voiceSession, setVoiceSession] = useState<VoiceSessionState | null>(null);
+  const [pendingVoiceContext, setPendingVoiceContext] = useState<VoiceInputContext | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
@@ -356,6 +359,7 @@ export function useConsoleChatController(): ConsoleChatController {
       const recorder = new Pcm16Recorder();
       await recorder.start();
       recorderRef.current = recorder;
+      setPendingVoiceContext(null);
       setMicState("recording");
       setMicHint("录音中，再点一次结束。");
     } catch (error) {
@@ -399,6 +403,14 @@ export function useConsoleChatController(): ConsoleChatController {
       }
 
       setDraft((current) => appendRecognizedText(current, recognizedText));
+      setPendingVoiceContext(
+        transcribed.metadata
+          ? {
+              provider: "sensevoice-local",
+              metadata: transcribed.metadata
+            }
+          : null
+      );
       setMicHint("识别完成，按回车发送。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "语音识别失败，请稍后重试。";
@@ -663,8 +675,14 @@ export function useConsoleChatController(): ConsoleChatController {
       ]);
 
       try {
-        const started = await window.companion.sendConsoleChat(text);
+        const started = pendingVoiceContext
+          ? await window.companion.sendConsoleChatWithVoice({
+              text,
+              voiceContext: pendingVoiceContext
+            })
+          : await window.companion.sendConsoleChat(text);
         setActiveRequestId(started.requestId);
+        setPendingVoiceContext(null);
         setLiveMessages((prev) => {
           if (prev.some((item) => item.requestId === started.requestId && item.role === "assistant")) {
             return prev;
@@ -688,7 +706,7 @@ export function useConsoleChatController(): ConsoleChatController {
         ]);
       }
     },
-    [activeRequestId, draft]
+    [activeRequestId, draft, pendingVoiceContext]
   );
 
   const stopCurrentRequest = useCallback(async () => {
@@ -785,6 +803,7 @@ export function useConsoleChatController(): ConsoleChatController {
     micButtonLabel,
     stoppingRequest,
     voiceSession,
+    pendingVoiceContext,
     toggleVoiceSession,
     interruptVoiceSession,
     chatBottomRef,

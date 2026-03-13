@@ -1,6 +1,3 @@
-import { createRequire } from "node:module";
-import path from "node:path";
-import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type {
   AppConfig,
@@ -20,15 +17,6 @@ import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voi
 import { estimateSpeechProbabilityFromRms } from "./realtime-voice-vad";
 import { VoiceHostWindowController, type VoiceHostMessage } from "./voice-host-window";
 import { VoiceProviderRouter, type StreamingAsrSession, type StreamingTtsSession } from "./voice-router";
-
-const require = createRequire(import.meta.url);
-
-type VadContextLike = {
-  getWindowSamples: () => number;
-  process: (samples: Float32Array) => number;
-  reset: () => void;
-  free: () => void;
-};
 
 interface RealtimeVoiceServiceInput {
   paths: CompanionPaths;
@@ -70,6 +58,7 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
     mode,
     target: null,
     userTranscript: "",
+    userTranscriptMetadata: null,
     assistantTranscript: "",
     lastInterruptReason: null,
     errorMessage: null,
@@ -106,82 +95,14 @@ function pcm16Rms(chunk: Buffer): number {
   return Math.sqrt(energy / sampleCount);
 }
 
-function pcm16ToFloat32(pcm: Buffer): Float32Array {
-  const safeLength = pcm.length - (pcm.length % 2);
-  const sampleCount = safeLength / 2;
-  const output = new Float32Array(sampleCount);
-  for (let index = 0; index < sampleCount; index += 1) {
-    output[index] = pcm.readInt16LE(index * 2) / 0x8000;
-  }
-  return output;
-}
-
 class LocalVad {
-  private ctx: VadContextLike | null = null;
-  private pending = new Float32Array(0);
-
-  constructor(modelPath: string | null, private readonly logger: AppLogger) {
-    if (!modelPath || !existsSync(modelPath)) {
-      this.logger.warn("realtime-voice", "vad-model-missing", {
-        modelPath: modelPath ?? ""
-      });
-      return;
-    }
-
-    try {
-      const whisper = require("whisper-cpp-node") as {
-        createVadContext?: (input: {
-          model: string;
-          threshold?: number;
-          n_threads?: number;
-          no_prints?: boolean;
-        }) => VadContextLike;
-      };
-      if (typeof whisper.createVadContext === "function") {
-        this.ctx = whisper.createVadContext({
-          model: modelPath,
-          threshold: 0.5,
-          n_threads: 1,
-          no_prints: true
-        });
-      }
-    } catch (error) {
-      this.logger.warn("realtime-voice", "vad-init-failed", undefined, error);
-    }
-  }
-
   process(chunk: Buffer): number {
-    if (!this.ctx) {
-      return estimateSpeechProbabilityFromRms(pcm16Rms(chunk));
-    }
-
-    const samples = pcm16ToFloat32(chunk);
-    const merged = new Float32Array(this.pending.length + samples.length);
-    merged.set(this.pending, 0);
-    merged.set(samples, this.pending.length);
-
-    const windowSamples = this.ctx.getWindowSamples();
-    let cursor = 0;
-    let probability = 0;
-    while (cursor + windowSamples <= merged.length) {
-      const slice = merged.subarray(cursor, cursor + windowSamples);
-      probability = Math.max(probability, this.ctx.process(slice));
-      cursor += windowSamples;
-    }
-
-    this.pending = merged.subarray(cursor);
-    return probability;
+    return estimateSpeechProbabilityFromRms(pcm16Rms(chunk));
   }
 
-  reset(): void {
-    this.pending = new Float32Array(0);
-    this.ctx?.reset();
-  }
+  reset(): void {}
 
-  dispose(): void {
-    this.ctx?.free();
-    this.ctx = null;
-  }
+  dispose(): void {}
 }
 
 export class RealtimeVoiceService {
@@ -212,7 +133,9 @@ export class RealtimeVoiceService {
     this.host = new VoiceHostWindowController(input.logger);
     this.state = createEmptyVoiceState(this.input.getConfig().realtimeVoice.mode);
     this.host.onMessage((message) => {
-      void this.handleHostMessage(message);
+      void this.handleHostMessage(message).catch((error) => {
+        this.fail(error instanceof Error ? error.message : "实时语音处理失败");
+      });
     });
   }
 
@@ -457,8 +380,7 @@ export class RealtimeVoiceService {
       return;
     }
 
-    const modelPath = path.join(this.input.paths.vadModelsDir, "ggml-silero-v6.2.0.bin");
-    this.vad = new LocalVad(modelPath, this.input.logger);
+    this.vad = new LocalVad();
   }
 
   private resetSpeechTracking(): void {
@@ -509,6 +431,7 @@ export class RealtimeVoiceService {
     this.state = {
       ...this.state,
       userTranscript: "",
+      userTranscriptMetadata: null,
       updatedAt: nowIso()
     };
     this.applyState({
@@ -520,12 +443,14 @@ export class RealtimeVoiceService {
         this.state = {
           ...this.state,
           userTranscript: text,
+          userTranscriptMetadata: null,
           updatedAt: nowIso()
         };
         this.emit({
           type: "user-transcript",
           text,
           isFinal: false,
+          metadata: null,
           timestamp: nowIso()
         });
         this.emitState();
@@ -566,11 +491,13 @@ export class RealtimeVoiceService {
     }
 
     try {
-      const text = (await asrSession.flush()).trim();
+      const recognized = await asrSession.flush();
+      const text = recognized.text.trim();
       if (!text) {
         this.state = {
           ...this.state,
           userTranscript: "",
+          userTranscriptMetadata: null,
           updatedAt: nowIso()
         };
         if (this.state.mode === "free") {
@@ -584,6 +511,7 @@ export class RealtimeVoiceService {
       this.state = {
         ...this.state,
         userTranscript: text,
+        userTranscriptMetadata: recognized.metadata,
         updatedAt: nowIso()
       };
       this.input.logger.info("realtime-voice", "speech:transcribed", {
@@ -595,10 +523,11 @@ export class RealtimeVoiceService {
         type: "user-transcript",
         text,
         isFinal: true,
+        metadata: recognized.metadata,
         timestamp: nowIso()
       });
       this.emitState();
-      await this.handleUserTurn(text);
+      await this.handleUserTurn(text, recognized.metadata);
     } catch (error) {
       this.fail(error instanceof Error ? error.message : "语音识别失败");
     } finally {
@@ -778,7 +707,10 @@ export class RealtimeVoiceService {
     }
   }
 
-  private async handleUserTurn(text: string): Promise<void> {
+  private async handleUserTurn(
+    text: string,
+    metadata: VoiceSessionState["userTranscriptMetadata"] = null
+  ): Promise<void> {
     const sessionId = this.state.sessionId;
     const target = this.state.target;
     if (!sessionId || !target) {
@@ -801,7 +733,15 @@ export class RealtimeVoiceService {
           playedTextLength: 0,
           asrProvider: config.voice.asrProvider,
           ttsProvider: config.voice.ttsProvider
-        }
+        },
+        ...(metadata
+          ? {
+              speechRecognition: {
+                provider: config.voice.asrProvider,
+                ...metadata
+              }
+            }
+          : {})
       }
     });
     this.input.logger.info("realtime-voice", "llm:user-input", {
@@ -850,6 +790,12 @@ export class RealtimeVoiceService {
           threadId: target.threadId,
           persistUserMessage: false,
           assistantPersistence: "caller",
+          voiceContext: metadata
+            ? {
+                provider: config.voice.asrProvider,
+                metadata
+              }
+            : undefined,
           abortSignal: this.replyAbortController?.signal,
           stream: {
             onVisibleTextDelta: (delta) => {

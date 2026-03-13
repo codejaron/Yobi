@@ -27,6 +27,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enable long paths on Windows
+        if: matrix.os == 'windows-latest'
+        run: git config --global core.longpaths true
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -53,6 +57,9 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Build SenseVoice backend
+        run: npm run build:sensevoice-backend
 
       - name: Build app
         run: npm run build

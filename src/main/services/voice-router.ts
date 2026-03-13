@@ -1,8 +1,8 @@
-import type { AppConfig } from "@shared/types";
+import type { AppConfig, VoiceTranscriptionResult } from "@shared/types";
 import { AlibabaVoiceService } from "./alibaba-voice";
 import { VoiceService, type VoiceConfig } from "./voice";
-import { WhisperModelManager } from "./whisper-model-manager";
-import { WhisperLocalService } from "./whisper-local";
+import { SenseVoiceModelManager } from "./sensevoice-model-manager";
+import { SenseVoiceLocalService } from "./sensevoice-local";
 
 const DEFAULT_ALIBABA_ASR_MODEL = "fun-asr-realtime";
 const DEFAULT_ALIBABA_TTS_MODEL = "cosyvoice-v3-flash";
@@ -10,7 +10,7 @@ const DEFAULT_ALIBABA_TTS_VOICE = "longxiaochun_v3";
 
 export interface StreamingAsrSession {
   pushPcm: (chunk: Buffer) => Promise<void>;
-  flush: () => Promise<string>;
+  flush: () => Promise<VoiceTranscriptionResult>;
   abort: () => Promise<void>;
 }
 
@@ -43,24 +43,24 @@ export class VoiceProviderRouter {
     private readonly getConfig: () => AppConfig,
     private readonly edgeVoice: VoiceService = new VoiceService(),
     private readonly alibabaVoice: AlibabaVoiceService = new AlibabaVoiceService(),
-    private readonly whisperLocal: WhisperLocalService = new WhisperLocalService()
+    private readonly senseVoiceLocal: SenseVoiceLocalService = new SenseVoiceLocalService()
   ) {}
 
   syncLocalAsrState(modelsDir: string): void {
     const config = this.getConfig();
-    if (config.voice.asrProvider !== "whisper-local") {
-      this.whisperLocal.reset();
+    if (config.voice.asrProvider !== "sensevoice-local") {
+      this.senseVoiceLocal.reset();
       return;
     }
 
-    const manager = new WhisperModelManager(modelsDir);
-    const modelSize = config.whisperLocal.modelSize;
-    if (!manager.isModelDownloaded(modelSize)) {
-      this.whisperLocal.reset();
+    const manager = new SenseVoiceModelManager(modelsDir);
+    const modelName = config.senseVoiceLocal.modelName;
+    if (!manager.isModelDownloaded(modelName)) {
+      this.senseVoiceLocal.reset();
       return;
     }
 
-    this.whisperLocal.configureModel(manager.getModelPath(modelSize));
+    this.senseVoiceLocal.configureModel(manager.getModelPath(modelName));
   }
 
   isAlibabaSttReady(): boolean {
@@ -68,14 +68,14 @@ export class VoiceProviderRouter {
     return config.voice.asrProvider === "alibaba" && hasAlibabaCredentials(config);
   }
 
-  getWhisperFailureReason(): string | null {
-    return this.whisperLocal.getLoadErrorMessage();
+  getSenseVoiceFailureReason(): string | null {
+    return this.senseVoiceLocal.getLoadErrorMessage();
   }
 
   isAsrReady(): boolean {
     const config = this.getConfig();
-    if (config.voice.asrProvider === "whisper-local") {
-      return this.whisperLocal.isReady();
+    if (config.voice.asrProvider === "sensevoice-local") {
+      return this.senseVoiceLocal.isReady();
     }
 
     if (config.voice.asrProvider === "alibaba") {
@@ -88,10 +88,10 @@ export class VoiceProviderRouter {
   async transcribePcm16(input: {
     pcm: Buffer;
     sampleRate: number;
-  }): Promise<string> {
+  }): Promise<VoiceTranscriptionResult> {
     const config = this.getConfig();
-    if (config.voice.asrProvider === "whisper-local") {
-      return this.whisperLocal.transcribe(input);
+    if (config.voice.asrProvider === "sensevoice-local") {
+      return this.senseVoiceLocal.transcribe(input);
     }
 
     if (config.voice.asrProvider === "alibaba") {
@@ -99,7 +99,7 @@ export class VoiceProviderRouter {
         throw new Error("阿里语音识别未就绪，请先填写 API Key。");
       }
 
-      return this.alibabaVoice.transcribe({
+      const text = await this.alibabaVoice.transcribe({
         apiKey: config.alibabaVoice.apiKey.trim(),
         region: config.alibabaVoice.region,
         pcm: input.pcm,
@@ -107,9 +107,13 @@ export class VoiceProviderRouter {
         model: resolveAlibabaAsrModel(config),
         timeoutMs: Math.max(6000, config.voice.requestTimeoutMs)
       });
+      return {
+        text,
+        metadata: null
+      };
     }
 
-    throw new Error("未启用任何语音识别引擎。请在设置中选择本地 Whisper 或阿里百炼。");
+    throw new Error("未启用任何语音识别引擎。请在设置中选择本地 SenseVoice 或阿里百炼。");
   }
 
   createStreamingAsrSession(input: {
@@ -117,8 +121,8 @@ export class VoiceProviderRouter {
     onPartial?: (text: string) => void;
   }): StreamingAsrSession {
     const config = this.getConfig();
-    if (config.voice.asrProvider === "whisper-local") {
-      return this.whisperLocal.createStreamingSession(input);
+    if (config.voice.asrProvider === "sensevoice-local") {
+      return this.senseVoiceLocal.createStreamingSession(input);
     }
 
     if (config.voice.asrProvider === "alibaba") {

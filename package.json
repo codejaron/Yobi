@@ -7,8 +7,10 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "prebuild": "npm run prebuild:live2d-core",
+    "prebuild": "npm run prebuild:live2d-core && npm run prebuild:sensevoice-assets",
     "prebuild:live2d-core": "node build/prebuild-live2d-core.mjs",
+    "prebuild:sensevoice-assets": "node build/prebuild-sensevoice-assets.mjs",
+    "build:sensevoice-backend": "node build/build-sensevoice-backend.mjs",
     "build": "electron-vite build",
     "dist:mac": "npm run build && npx electron-builder --mac dmg --publish never",
     "dist:win": "npm run build && npx electron-builder --win nsis --publish never",
@@ -45,7 +47,6 @@
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.1",
     "uiohook-napi": "^1.5.4",
-    "whisper-cpp-node": "^0.2.12",
     "zod": "^4.1.5"
   },
   "devDependencies": {
@@ -69,8 +70,16 @@
     "artifactName": "Yobi-${version}.${ext}",
     "icon": "build/icon.png",
     "asarUnpack": [
-      "node_modules/@whisper-cpp-node/**",
       "node_modules/@node-llama-cpp/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/sensevoice/bin",
+        "to": "sensevoice/bin",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "directories": {
       "output": "release"

@@ -9,7 +9,7 @@ import type { CompanionRuntime } from "./app-runtime";
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
 const VOICE_SESSION_EVENT_CHANNEL = "runtime:voice-session-event";
-const WHISPER_MODEL_PROGRESS_CHANNEL = "runtime:whisper-model-progress";
+const SENSEVOICE_MODEL_PROGRESS_CHANNEL = "runtime:sensevoice-model-progress";
 
 interface IpcSubscription {
   unsubscribe: () => void;
@@ -36,20 +36,20 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("config:save", (_, config: AppConfig) => runtime.saveConfig(config));
   ipcMain.handle("voice:stt:status", () => runtime.getSpeechRecognitionStatus());
   ipcMain.handle(
-    "whisper:model:ensure",
+    "sensevoice:model:ensure",
     async (
       event,
       payload: {
-        modelSize?: AppConfig["whisperLocal"]["modelSize"];
+        modelName?: AppConfig["senseVoiceLocal"]["modelName"];
       }
     ) => {
-      const modelSize = payload?.modelSize ?? "base";
-      return runtime.ensureWhisperModel({
-        modelSize,
+      const modelName = payload?.modelName ?? "SenseVoiceSmall-int8";
+      return runtime.ensureSenseVoiceModel({
+        modelName,
         onProgress: (percent) => {
           if (!event.sender.isDestroyed()) {
-            event.sender.send(WHISPER_MODEL_PROGRESS_CHANNEL, {
-              modelSize,
+            event.sender.send(SENSEVOICE_MODEL_PROGRESS_CHANNEL, {
+              modelName,
               percent
             });
           }
@@ -58,13 +58,13 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     }
   );
   ipcMain.handle(
-    "whisper:model:status",
+    "sensevoice:model:status",
     (
       _,
       payload: {
-        modelSize?: AppConfig["whisperLocal"]["modelSize"];
+        modelName?: AppConfig["senseVoiceLocal"]["modelName"];
       }
-    ) => runtime.getWhisperModelStatus(payload)
+    ) => runtime.getSenseVoiceModelStatus(payload)
   );
 
   ipcMain.handle("history:list", (_, query: { query?: string; limit?: number; offset?: number }) =>
@@ -199,8 +199,40 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     ) => runtime.transcribeAndSendFromPet(payload)
   );
 
-  ipcMain.handle("console:chat:send", (_, payload: { text?: string }) =>
-    runtime.startConsoleChat(payload?.text ?? "")
+  ipcMain.handle(
+    "console:chat:send",
+    (
+      _,
+      payload: {
+        text?: string;
+        voiceContext?: {
+          provider?: AppConfig["voice"]["asrProvider"];
+          metadata?: {
+            language?: string | null;
+            emotion?: string | null;
+            event?: string | null;
+            rawTags?: string[];
+          };
+        };
+      }
+    ) =>
+      runtime.startConsoleChat({
+        text: payload?.text ?? "",
+        voiceContext:
+          payload?.voiceContext?.provider &&
+          payload?.voiceContext?.metadata &&
+          Array.isArray(payload.voiceContext.metadata.rawTags)
+            ? {
+                provider: payload.voiceContext.provider,
+                metadata: {
+                  language: payload.voiceContext.metadata.language ?? null,
+                  emotion: payload.voiceContext.metadata.emotion ?? null,
+                  event: payload.voiceContext.metadata.event ?? null,
+                  rawTags: payload.voiceContext.metadata.rawTags
+                }
+              }
+            : undefined
+      })
   );
   ipcMain.handle("console:chat:stop", (_, payload: { requestId?: string }) =>
     runtime.stopConsoleChat(payload?.requestId ?? "")

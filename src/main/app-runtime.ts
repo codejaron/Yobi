@@ -15,7 +15,9 @@ import {
   type VoiceSessionEvent,
   type VoiceSessionState,
   type RealtimeVoiceMode,
-  type VoiceSessionTarget
+  type VoiceInputContext,
+  type VoiceSessionTarget,
+  type VoiceTranscriptionResult
 } from "@shared/types";
 import {
   type RuntimeInboundChannel
@@ -31,7 +33,7 @@ import { setTokenRecorder } from "@main/services/token/token-usage-reporter";
 import {
   ensureKernelBootstrap
 } from "@main/kernel/init";
-import { WhisperModelManager } from "@main/services/whisper-model-manager";
+import { SenseVoiceModelManager } from "@main/services/sensevoice-model-manager";
 import { buildRuntimeRegistry, type RuntimeRegistry } from "@main/runtime/runtime-registry";
 
 interface HistoryQuery {
@@ -48,6 +50,7 @@ interface ConsoleRequestHandle {
   finalized: boolean;
   finishReason?: "completed" | "aborted" | "error";
   finalEventEmitted: boolean;
+  voiceContext?: VoiceInputContext;
 }
 
 export class CompanionRuntime {
@@ -135,7 +138,7 @@ export class CompanionRuntime {
     this.logger.info("runtime", "init:start");
     setTokenRecorder((event) => this.tokenStatsService.record(event));
     await this.configStore.init();
-    this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
+    this.voiceRouter.syncLocalAsrState(this.paths.senseVoiceModelsDir);
     await ensureKernelBootstrap(this.paths);
     await this.skillManager.init();
     await this.scheduledTaskService.init();
@@ -202,30 +205,30 @@ export class CompanionRuntime {
 
   getSpeechRecognitionStatus(): {
     ready: boolean;
-    provider: "whisper-local" | "alibaba" | "none";
+    provider: "sensevoice-local" | "alibaba" | "none";
     message: string;
   } {
     const config = this.getConfig();
 
-    if (config.voice.asrProvider === "whisper-local") {
-      const manager = new WhisperModelManager(this.paths.whisperModelsDir);
-      if (!manager.isModelDownloaded(config.whisperLocal.modelSize)) {
+    if (config.voice.asrProvider === "sensevoice-local") {
+      const manager = new SenseVoiceModelManager(this.paths.senseVoiceModelsDir);
+      if (!manager.isModelDownloaded(config.senseVoiceLocal.modelName)) {
         return {
           ready: false,
-          provider: "whisper-local",
-          message: "本地 Whisper 已选中，但模型尚未下载。请先到设置页下载模型。"
+          provider: "sensevoice-local",
+          message: "本地 SenseVoice 已选中，但模型尚未下载。请先到设置页下载模型。"
         };
       }
 
-      const whisperError = this.voiceRouter.getWhisperFailureReason();
+      const senseVoiceError = this.voiceRouter.getSenseVoiceFailureReason();
       return {
         ready: this.voiceRouter.isAsrReady(),
-        provider: "whisper-local",
+        provider: "sensevoice-local",
         message: this.voiceRouter.isAsrReady()
-          ? "本地 Whisper 已就绪。"
-          : whisperError
-            ? "本地 Whisper 初始化失败：" + whisperError
-            : "本地 Whisper 正在加载模型，请稍候再试。"
+          ? "本地 SenseVoice 已就绪。"
+          : senseVoiceError
+            ? "本地 SenseVoice 初始化失败：" + senseVoiceError
+            : "本地 SenseVoice 正在加载模型，请稍候再试。"
       };
     }
 
@@ -242,23 +245,26 @@ export class CompanionRuntime {
     return {
       ready: false,
       provider: "none",
-      message: "未启用任何语音识别引擎。请先在设置里开启本地 Whisper 或配置阿里语音。"
+      message: "未启用任何语音识别引擎。请先在设置里开启本地 SenseVoice 或配置阿里语音。"
     };
   }
 
-  async ensureWhisperModel(input: {
-    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+  async ensureSenseVoiceModel(input: {
+    modelName?: AppConfig["senseVoiceLocal"]["modelName"];
     onProgress?: (progress: number) => void;
   }): Promise<{
     ready: boolean;
     path: string;
   }> {
-    const manager = new WhisperModelManager(this.paths.whisperModelsDir);
-    const modelSize = input.modelSize ?? "base";
-    const path = await manager.ensureModel(modelSize, input.onProgress);
+    const manager = new SenseVoiceModelManager(this.paths.senseVoiceModelsDir);
+    const modelName = input.modelName ?? "SenseVoiceSmall-int8";
+    const path = await manager.ensureModel(modelName, input.onProgress);
 
-    if (this.getConfig().voice.asrProvider === "whisper-local" && this.getConfig().whisperLocal.modelSize === modelSize) {
-      this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
+    if (
+      this.getConfig().voice.asrProvider === "sensevoice-local" &&
+      this.getConfig().senseVoiceLocal.modelName === modelName
+    ) {
+      this.voiceRouter.syncLocalAsrState(this.paths.senseVoiceModelsDir);
       this.lifecycleCoordinator.applyConfigEffects();
       await this.emitStatus();
     }
@@ -269,26 +275,32 @@ export class CompanionRuntime {
     };
   }
 
-  getWhisperModelStatus(input?: {
-    modelSize?: AppConfig["whisperLocal"]["modelSize"];
+  getSenseVoiceModelStatus(input?: {
+    modelName?: AppConfig["senseVoiceLocal"]["modelName"];
   }): {
     enabled: boolean;
-    modelSize: AppConfig["whisperLocal"]["modelSize"];
+    modelName: AppConfig["senseVoiceLocal"]["modelName"];
     downloaded: boolean;
     ready: boolean;
+    errorMessage?: string | null;
   } {
     const config = this.getConfig();
-    const modelSize = input?.modelSize ?? config.whisperLocal.modelSize;
-    const manager = new WhisperModelManager(this.paths.whisperModelsDir);
+    const modelName = input?.modelName ?? config.senseVoiceLocal.modelName;
+    const manager = new SenseVoiceModelManager(this.paths.senseVoiceModelsDir);
+    const errorMessage =
+      config.voice.asrProvider === "sensevoice-local" && config.senseVoiceLocal.modelName === modelName
+        ? this.voiceRouter.getSenseVoiceFailureReason()
+        : null;
 
     return {
-      enabled: config.voice.asrProvider === "whisper-local",
-      modelSize,
-      downloaded: manager.isModelDownloaded(modelSize),
+      enabled: config.voice.asrProvider === "sensevoice-local",
+      modelName,
+      downloaded: manager.isModelDownloaded(modelName),
       ready:
-        config.voice.asrProvider === "whisper-local" &&
-        config.whisperLocal.modelSize === modelSize &&
-        this.voiceRouter.isAsrReady()
+        config.voice.asrProvider === "sensevoice-local" &&
+        config.senseVoiceLocal.modelName === modelName &&
+        this.voiceRouter.isAsrReady(),
+      errorMessage
     };
   }
 
@@ -320,7 +332,7 @@ export class CompanionRuntime {
     const previousConfig = this.configStore.getConfig();
     const saved = await this.configStore.saveConfig(nextConfig);
 
-    this.voiceRouter.syncLocalAsrState(this.paths.whisperModelsDir);
+    this.voiceRouter.syncLocalAsrState(this.paths.senseVoiceModelsDir);
     this.lifecycleCoordinator.applyConfigEffects();
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
@@ -447,7 +459,8 @@ export class CompanionRuntime {
     return this.dataCoordinator.getConsoleChatHistory(input);
   }
 
-  async startConsoleChat(text: string): Promise<{ requestId: string }> {
+  async startConsoleChat(input: string | { text?: string; voiceContext?: VoiceInputContext }): Promise<{ requestId: string }> {
+    const text = typeof input === "string" ? input : input?.text ?? "";
     const normalized = text.trim();
     if (!normalized) {
       throw new Error("消息不能为空");
@@ -457,7 +470,8 @@ export class CompanionRuntime {
     this.activeConsoleRequests.set(requestId, {
       abortController: new AbortController(),
       finalized: false,
-      finalEventEmitted: false
+      finalEventEmitted: false,
+      voiceContext: typeof input === "string" ? undefined : input?.voiceContext
     });
     queueMicrotask(() => {
       void this.runConsoleChatRequest(requestId, normalized);
@@ -495,12 +509,12 @@ export class CompanionRuntime {
   }
 
 
-  async chatFromPet(text: string): Promise<{ replyText: string }> {
+  async chatFromPet(text: string, voiceContext?: VoiceInputContext): Promise<{ replyText: string }> {
     await this.recordUserActivity({
       channel: "console",
       text
     });
-    const result = await this.petService.chatFromPet(text);
+    const result = await this.petService.chatFromPet(text, voiceContext);
     if (result.replyText.trim()) {
       await this.kernel.onAssistantMessage();
     }
@@ -510,9 +524,7 @@ export class CompanionRuntime {
   async transcribeVoiceInput(input: {
     pcm16Base64?: string;
     sampleRate?: number;
-  }): Promise<{
-    text: string;
-  }> {
+  }): Promise<VoiceTranscriptionResult> {
     return this.petService.transcribeVoiceInput(input);
   }
 
@@ -522,6 +534,7 @@ export class CompanionRuntime {
   }): Promise<{
     sent: boolean;
     text: string;
+    metadata?: VoiceTranscriptionResult["metadata"];
     replyText?: string;
     message?: string;
   }> {
@@ -597,6 +610,7 @@ export class CompanionRuntime {
           text,
           resourceId: PRIMARY_RESOURCE_ID,
           threadId: PRIMARY_THREAD_ID,
+          voiceContext: handle.voiceContext,
           abortSignal: handle.abortController.signal,
           stream: {
             onSkillsCatalog: (payload) => {

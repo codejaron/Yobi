@@ -10,14 +10,14 @@ const api = {
   getSpeechRecognitionStatus() {
     return ipcRenderer.invoke('voice:stt:status');
   },
-  ensureWhisperModel(input) {
-    return ipcRenderer.invoke('whisper:model:ensure', input ?? {});
+  ensureSenseVoiceModel(input) {
+    return ipcRenderer.invoke('sensevoice:model:ensure', input ?? {});
   },
-  getWhisperModelStatus(input) {
-    return ipcRenderer.invoke('whisper:model:status', input ?? {});
+  getSenseVoiceModelStatus(input) {
+    return ipcRenderer.invoke('sensevoice:model:status', input ?? {});
   },
-  onWhisperModelDownloadProgress(listener) {
-    const channel = 'runtime:whisper-model-progress';
+  onSenseVoiceModelDownloadProgress(listener) {
+    const channel = 'runtime:sensevoice-model-progress';
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on(channel, wrapped);
     return () => ipcRenderer.removeListener(channel, wrapped);
@@ -112,6 +112,9 @@ const api = {
   },
   sendConsoleChat(text) {
     return ipcRenderer.invoke('console:chat:send', { text });
+  },
+  sendConsoleChatWithVoice(input) {
+    return ipcRenderer.invoke('console:chat:send', input ?? {});
   },
   stopConsoleChat(requestId) {
     return ipcRenderer.invoke('console:chat:stop', { requestId });
