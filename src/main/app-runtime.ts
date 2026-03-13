@@ -245,7 +245,7 @@ export class CompanionRuntime {
     return {
       ready: false,
       provider: "none",
-      message: "未启用任何语音识别引擎。请先在设置里开启本地 SenseVoice 或配置阿里语音。"
+      message: "未配置语音识别。请先在设置里选择本地 SenseVoice 或阿里语音。"
     };
   }
 

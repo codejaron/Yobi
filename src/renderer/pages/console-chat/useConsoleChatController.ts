@@ -14,6 +14,8 @@ import {
   hasAssistantVisibleContent
 } from "@shared/tool-trace";
 import { getNextConsoleChatAutoFollowState } from "@shared/console-chat-scroll";
+import { getConsoleComposerKeyAction } from "@shared/console-chat-composer";
+import { shouldDisableConsoleMicButton } from "@shared/console-chat-voice";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
 import {
@@ -33,7 +35,6 @@ export interface ConsoleChatController {
   messages: ConsoleMessage[];
   draft: string;
   setDraft: (value: string) => void;
-  sttReady: boolean;
   micState: "idle" | "recording" | "transcribing";
   micHint: string;
   activeRequestId: string | null;
@@ -59,12 +60,12 @@ export interface ConsoleChatController {
   interruptVoiceSession: () => Promise<void>;
   chatBottomRef: React.RefObject<HTMLDivElement | null>;
   chatListRef: React.RefObject<HTMLDivElement | null>;
-  inputRef: React.RefObject<HTMLInputElement | null>;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
   clearHistory: () => Promise<void>;
   handleChatScroll: (event: UIEvent<HTMLDivElement>) => void;
   handleSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   stopCurrentRequest: () => Promise<void>;
-  handleInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  handleInputKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   toggleMicRecording: () => void;
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
 }
@@ -116,12 +117,8 @@ export function useConsoleChatController(): ConsoleChatController {
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [draft, setDraft] = useState("");
-  const [sttReady, setSttReady] = useState(false);
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [micHint, setMicHint] = useState("");
-  const [sttUnavailableHint, setSttUnavailableHint] = useState(
-    "未启用任何语音识别引擎。请先在设置里开启本地 SenseVoice 或配置阿里语音。"
-  );
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [skillsCatalog, setSkillsCatalog] = useState<ConsoleSkillsCatalogState | null>(null);
@@ -133,7 +130,7 @@ export function useConsoleChatController(): ConsoleChatController {
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const autoFollowRef = useRef(true);
   const loadingMoreHistoryRef = useRef(false);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
@@ -321,22 +318,18 @@ export function useConsoleChatController(): ConsoleChatController {
     }
   }, []);
 
-  const refreshSttAvailability = useCallback(async (): Promise<{
+  const checkSttAvailability = useCallback(async (): Promise<{
     ready: boolean;
     message: string;
   }> => {
     try {
       const status = await window.companion.getSpeechRecognitionStatus();
-      setSttReady(status.ready);
-      setSttUnavailableHint(status.message);
       return {
         ready: status.ready,
         message: status.message
       };
     } catch {
-      setSttReady(false);
       const message = "语音识别状态检查失败，请稍后重试。";
-      setSttUnavailableHint(message);
       return {
         ready: false,
         message
@@ -349,7 +342,7 @@ export function useConsoleChatController(): ConsoleChatController {
       return;
     }
 
-    const status = await refreshSttAvailability();
+    const status = await checkSttAvailability();
     if (!status.ready) {
       setMicHint(status.message);
       return;
@@ -368,7 +361,7 @@ export function useConsoleChatController(): ConsoleChatController {
       setMicHint(message);
       setMicState("idle");
     }
-  }, [micState, refreshSttAvailability]);
+  }, [checkSttAvailability, micState]);
 
   const stopMicRecording = useCallback(async () => {
     if (micState !== "recording") {
@@ -581,21 +574,6 @@ export function useConsoleChatController(): ConsoleChatController {
   }, [loadLatestHistory]);
 
   useEffect(() => {
-    void refreshSttAvailability();
-  }, [refreshSttAvailability]);
-
-  useEffect(() => {
-    if (!sttReady && micState === "idle") {
-      setMicHint(sttUnavailableHint);
-      return;
-    }
-
-    if (sttReady && micState === "idle" && micHint === sttUnavailableHint) {
-      setMicHint("");
-    }
-  }, [micHint, micState, sttReady, sttUnavailableHint]);
-
-  useEffect(() => {
     if (!historyLoaded) {
       return;
     }
@@ -731,12 +709,15 @@ export function useConsoleChatController(): ConsoleChatController {
   }, [activeRequestId, stoppingRequestId]);
 
   const handleInputKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (!pendingApproval) {
-        return;
-      }
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      const action = getConsoleComposerKeyAction({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        pendingApproval: pendingApproval !== null,
+        isComposing: event.nativeEvent.isComposing
+      });
 
-      if (event.key === "ArrowUp") {
+      if (action === "approval-up") {
         event.preventDefault();
         setApprovalIndex((current) =>
           current <= 0 ? APPROVAL_OPTIONS.length - 1 : current - 1
@@ -744,7 +725,7 @@ export function useConsoleChatController(): ConsoleChatController {
         return;
       }
 
-      if (event.key === "ArrowDown") {
+      if (action === "approval-down") {
         event.preventDefault();
         setApprovalIndex((current) =>
           current >= APPROVAL_OPTIONS.length - 1 ? 0 : current + 1
@@ -752,9 +733,15 @@ export function useConsoleChatController(): ConsoleChatController {
         return;
       }
 
-      if (event.key === "Enter") {
+      if (action === "approval-confirm") {
         event.preventDefault();
         void submitApproval(APPROVAL_OPTIONS[approvalIndex]?.decision ?? "allow-once");
+        return;
+      }
+
+      if (action === "submit") {
+        event.preventDefault();
+        event.currentTarget.form?.requestSubmit();
       }
     },
     [approvalIndex, pendingApproval, submitApproval]
@@ -764,11 +751,12 @@ export function useConsoleChatController(): ConsoleChatController {
   const recording = micState === "recording";
   const transcribing = micState === "transcribing";
   const inputDisabled = (busy && !pendingApproval) || transcribing;
-  const micButtonDisabled =
-    (pendingApproval !== null && !recording) ||
-    transcribing ||
-    busy ||
-    (!sttReady && !recording);
+  const micButtonDisabled = shouldDisableConsoleMicButton({
+    pendingApproval: pendingApproval !== null,
+    recording,
+    transcribing,
+    busy
+  });
   const micButtonLabel = transcribing ? "识别中" : recording ? "结束" : "语音";
   const stoppingRequest = stoppingRequestId !== null && stoppingRequestId === activeRequestId;
 
@@ -784,7 +772,6 @@ export function useConsoleChatController(): ConsoleChatController {
     messages,
     draft,
     setDraft,
-    sttReady,
     micState,
     micHint,
     activeRequestId,

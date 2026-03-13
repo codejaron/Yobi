@@ -1,9 +1,10 @@
+import { useLayoutEffect } from "react";
 import type { FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type { CommandApprovalDecision, VoiceInputContext, VoiceSessionState } from "@shared/types";
 import { Loader2, Mic, Square } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { Input } from "@renderer/components/ui/input";
+import { Textarea } from "@renderer/components/ui/textarea";
 import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { AssistantProcessView } from "./AssistantProcessView";
 import { APPROVAL_OPTIONS } from "./types";
@@ -32,9 +33,9 @@ interface ConsoleChatPaneProps {
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
   draft: string;
   setDraft: (value: string) => void;
-  inputRef: RefObject<HTMLInputElement | null>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
   inputDisabled: boolean;
-  onInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onInputKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   toggleMicRecording: () => void;
   micButtonDisabled: boolean;
   recording: boolean;
@@ -44,7 +45,6 @@ interface ConsoleChatPaneProps {
   voiceSession: VoiceSessionState | null;
   pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
-  sttReady: boolean;
   micHint: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   stopCurrentRequest: () => Promise<void>;
@@ -93,7 +93,6 @@ export function ConsoleChatPane({
   voiceSession,
   pendingVoiceContext,
   toggleVoiceSession,
-  sttReady,
   micHint,
   onSubmit,
   stopCurrentRequest,
@@ -102,6 +101,19 @@ export function ConsoleChatPane({
   const recognitionLabels = formatRecognitionMeta(
     voiceSession?.userTranscriptMetadata ?? pendingVoiceContext?.metadata ?? null
   );
+
+  useLayoutEffect(() => {
+    const node = inputRef.current;
+    if (!node) {
+      return;
+    }
+
+    const maxHeight = 176;
+    node.style.height = "0px";
+    const nextHeight = Math.min(node.scrollHeight, maxHeight);
+    node.style.height = `${Math.max(44, nextHeight)}px`;
+    node.style.overflowY = node.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [draft, inputRef]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -250,14 +262,16 @@ export function ConsoleChatPane({
             </div>
           ) : null}
 
-          <form onSubmit={onSubmit} className="flex gap-2">
-            <Input
+          <form onSubmit={onSubmit} className="flex items-end gap-2">
+            <Textarea
               ref={inputRef}
+              rows={1}
               value={draft}
               placeholder="和 Yobi 说点什么"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onInputKeyDown}
               disabled={inputDisabled}
+              className="max-h-44 min-h-[44px] flex-1 resize-none rounded-xl border-border/80 bg-card/95 px-4 py-3 text-[15px] leading-6 shadow-sm"
             />
             <Button
               type="button"
@@ -267,11 +281,7 @@ export function ConsoleChatPane({
               className={`h-11 min-w-[88px] shrink-0 whitespace-nowrap ${
                 recording ? "theme-recording-button" : ""
               }`}
-              title={
-                sttReady
-                  ? "单击开始录音，再次单击结束识别"
-                  : micHint || "请先在设置里启用本地 SenseVoice 或阿里语音"
-              }
+              title={micHint || "单击开始录音，再次单击结束识别"}
             >
               {transcribing ? (
                 <>

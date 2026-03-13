@@ -113,7 +113,7 @@ export class VoiceProviderRouter {
       };
     }
 
-    throw new Error("未启用任何语音识别引擎。请在设置中选择本地 SenseVoice 或阿里百炼。");
+    throw new Error("未配置语音识别。请先在设置中选择本地 SenseVoice 或阿里百炼。");
   }
 
   createStreamingAsrSession(input: {
@@ -140,7 +140,7 @@ export class VoiceProviderRouter {
       });
     }
 
-    throw new Error("未启用任何流式语音识别引擎。");
+    throw new Error("未配置流式语音识别。");
   }
 
   async synthesize(input: {

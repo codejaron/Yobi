@@ -6,7 +6,6 @@ export function ConsoleChatPage() {
     messages,
     draft,
     setDraft,
-    sttReady,
     micHint,
     pendingApproval,
     skillsCatalog,
@@ -71,7 +70,6 @@ export function ConsoleChatPage() {
         voiceSession={voiceSession}
         pendingVoiceContext={pendingVoiceContext}
         toggleVoiceSession={toggleVoiceSession}
-        sttReady={sttReady}
         micHint={micHint}
         onSubmit={handleSubmit}
         stopCurrentRequest={stopCurrentRequest}
