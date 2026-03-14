@@ -142,3 +142,37 @@ test("ConfigStore: downgrades legacy whisper-local ASR to none without resetting
     await fs.rm(baseDir, { recursive: true, force: true });
   }
 });
+
+test("ConfigStore: fills kernel OpenFeelz defaults for configs without personality fields", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-openfeelz-defaults-"));
+
+  try {
+    const paths = new CompanionPaths(baseDir);
+    paths.ensureLayout();
+
+    const legacyConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Record<string, any>;
+    delete legacyConfig.kernel.personality;
+    delete legacyConfig.kernel.emotionSignals.connectionTrustScale;
+    delete legacyConfig.kernel.emotionSignals.ruminationThreshold;
+    delete legacyConfig.kernel.emotionSignals.ruminationMaxStages;
+
+    await fs.writeFile(paths.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, "utf8");
+
+    const store = new ConfigStore(paths);
+    await store.init();
+    const config = store.getConfig();
+
+    assert.deepEqual(config.kernel.personality, {
+      openness: 0.5,
+      conscientiousness: 0.5,
+      extraversion: 0.5,
+      agreeableness: 0.5,
+      neuroticism: 0.5
+    });
+    assert.equal(config.kernel.emotionSignals.connectionTrustScale, 0.5);
+    assert.equal(config.kernel.emotionSignals.ruminationThreshold, 0.7);
+    assert.equal(config.kernel.emotionSignals.ruminationMaxStages, 4);
+  } finally {
+    await fs.rm(baseDir, { recursive: true, force: true });
+  }
+});

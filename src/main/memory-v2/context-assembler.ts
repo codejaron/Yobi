@@ -8,6 +8,7 @@ import {
   type RelationshipStage,
   type UserProfile
 } from "@shared/types";
+import { computeBaseline } from "@main/kernel/openfeelz";
 import { estimateTokenCount } from "./token-utils";
 
 export interface ContextAssemblerInput {
@@ -188,18 +189,51 @@ function buildRelationshipBlock(relationship: RelationshipGuide, stage: Relation
 
 function buildStateBlock(state: KernelStateDocument): string {
   const emotional = state.emotional;
-
-  return [
+  const baseline = computeBaseline(state.personality);
+  const lines = [
     "[STATE]",
-    `mood=${formatSigned(emotional.mood)} range=[-1.00,1.00] higher=more_positive`,
-    `energy=${formatUnit(emotional.energy)} range=[0.00,1.00] higher=more_energetic`,
+    `relationship_stage=${state.relationship.stage}`,
+    `trust=${formatUnit(emotional.dimensions.trust)} range=[0.00,1.00] higher=more_trusting`,
     `connection=${formatUnit(emotional.connection)} range=[0.00,1.00] higher=more_connected`,
-    `curiosity=${formatUnit(emotional.curiosity)} range=[0.00,1.00] higher=more_curious`,
-    `confidence=${formatUnit(emotional.confidence)} range=[0.00,1.00] higher=more_confident`,
-    `irritation=${formatUnit(emotional.irritation)} range=[0.00,1.00] higher=more_irritable`,
-    `session_reentry_active=${String(Boolean(state.sessionReentry?.active))} values=[true,false]`,
-    `session_reentry_gap_hours=${state.sessionReentry?.active ? Math.max(0, state.sessionReentry.gapHours) : 0} range=[0,+inf)`
-  ].join("\n");
+    `sessionWarmth=${formatUnit(emotional.sessionWarmth)} range=[0.00,1.00] higher=warmer_session`,
+    `active_ruminations=${state.ruminationQueue.length} range=[0,+inf)`
+  ];
+
+  const padDimensions = [
+    ["pleasure", emotional.dimensions.pleasure, baseline.pleasure],
+    ["arousal", emotional.dimensions.arousal, baseline.arousal],
+    ["dominance", emotional.dimensions.dominance, baseline.dominance]
+  ] as const;
+  for (const [name, value, resting] of padDimensions) {
+    if (Math.abs(value - resting) <= 0.15) {
+      continue;
+    }
+    lines.push(`${name}=${formatSigned(value)} baseline=${formatSigned(resting)} range=[-1.00,1.00]`);
+  }
+
+  const ekmanEntries = [
+    ["happiness", emotional.ekman.happiness],
+    ["sadness", emotional.ekman.sadness],
+    ["anger", emotional.ekman.anger],
+    ["fear", emotional.ekman.fear],
+    ["disgust", emotional.ekman.disgust],
+    ["surprise", emotional.ekman.surprise]
+  ] as const;
+  for (const [name, value] of ekmanEntries) {
+    if (value <= 0.01) {
+      continue;
+    }
+    lines.push(`${name}=${formatUnit(value)} range=[0.00,1.00]`);
+  }
+
+  const ruminationLabels = state.ruminationQueue
+    .slice()
+    .sort((left, right) => right.intensity - left.intensity)
+    .slice(0, 2)
+    .map((entry) => entry.label);
+  lines.push(`rumination_labels=${JSON.stringify(ruminationLabels)}`);
+
+  return lines.join("\n");
 }
 
 function buildProfileBlock(profile: UserProfile, limits: ProfileListLimits): string {

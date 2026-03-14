@@ -1,13 +1,23 @@
 import type { EmotionalState } from "@shared/types";
 
-const EMOTION_KEYS: Array<keyof EmotionalState> = [
-  "mood",
-  "energy",
-  "connection",
-  "curiosity",
-  "confidence",
-  "irritation"
-];
+function flattenEmotion(state: EmotionalState): number[] {
+  return [
+    state.dimensions.pleasure,
+    state.dimensions.arousal,
+    state.dimensions.dominance,
+    state.dimensions.curiosity,
+    state.dimensions.energy,
+    state.dimensions.trust,
+    state.ekman.happiness,
+    state.ekman.sadness,
+    state.ekman.anger,
+    state.ekman.fear,
+    state.ekman.disgust,
+    state.ekman.surprise,
+    state.connection,
+    state.sessionWarmth
+  ];
+}
 
 export function hasEmotionalDeltaAtLeast(
   previous: EmotionalState | null | undefined,
@@ -18,7 +28,9 @@ export function hasEmotionalDeltaAtLeast(
     return true;
   }
 
-  return EMOTION_KEYS.some((key) => Math.abs(next[key] - previous[key]) >= epsilon);
+  const previousValues = flattenEmotion(previous);
+  const nextValues = flattenEmotion(next);
+  return previousValues.some((value, index) => Math.abs(nextValues[index] - value) >= epsilon);
 }
 
 export function shouldPublishEmotionState(input: {

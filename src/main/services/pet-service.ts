@@ -47,7 +47,7 @@ interface PetServiceInput {
 
 export class PetService {
   private petPttRecording = false;
-  private latestEmotionalState: EmotionalState = { ...DEFAULT_PET_EMOTION_CONFIG.defaultEmotion };
+  private latestEmotionalState: EmotionalState = cloneEmotionalState(DEFAULT_PET_EMOTION_CONFIG.defaultEmotion);
   private lastPublishedEmotionalState: EmotionalState | null = null;
   private lastPublishedAtMs = 0;
   private lastVoicePhase: VoiceSessionPhase = "idle";
@@ -473,9 +473,7 @@ export class PetService {
   }
 
   private handleKernelStateSnapshot(state: KernelStateDocument): void {
-    this.latestEmotionalState = {
-      ...state.emotional
-    };
+    this.latestEmotionalState = cloneEmotionalState(state.emotional);
     this.publishEmotionState();
   }
 
@@ -500,9 +498,7 @@ export class PetService {
       return;
     }
 
-    const next = {
-      ...this.latestEmotionalState
-    };
+    const next = cloneEmotionalState(this.latestEmotionalState);
     this.input.pet.emitEvent({
       type: "emotion-state",
       emotional: next
@@ -587,4 +583,17 @@ export class PetService {
       });
     }
   }
+}
+
+function cloneEmotionalState(state: EmotionalState): EmotionalState {
+  return {
+    dimensions: {
+      ...state.dimensions
+    },
+    ekman: {
+      ...state.ekman
+    },
+    connection: state.connection,
+    sessionWarmth: state.sessionWarmth
+  };
 }

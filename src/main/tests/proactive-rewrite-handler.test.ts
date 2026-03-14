@@ -1,16 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { AppConfig, EmotionalState } from "@shared/types";
+import { createDefaultEmotionalState, type AppConfig, type EmotionalState } from "@shared/types";
 import type { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
 import { WorkerProactiveRewriteHandler } from "../kernel/task-handlers.js";
 
 const baseEmotional: EmotionalState = {
-  mood: 0,
-  energy: 0.5,
-  connection: 0.5,
-  curiosity: 0.5,
-  confidence: 0.5,
-  irritation: 0.1
+  ...createDefaultEmotionalState("familiar"),
+  connection: 0.5
 };
 
 test("WorkerProactiveRewriteHandler: skips rewrite when worker unavailable", async () => {

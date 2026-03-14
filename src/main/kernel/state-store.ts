@@ -1,5 +1,10 @@
-import type { KernelStateDocument } from "@shared/types";
-import { DEFAULT_KERNEL_STATE } from "@shared/types";
+import type { KernelStateDocument, OCEANPersonality, RelationshipStage, RuminationEntry } from "@shared/types";
+import {
+  DEFAULT_KERNEL_STATE,
+  DEFAULT_OCEAN_PERSONALITY,
+  createDefaultEmotionalState,
+  getSessionWarmthBaseline
+} from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { readJsonFile, writeJsonFileAtomic } from "@main/storage/fs";
 
@@ -8,9 +13,7 @@ type StateListener = (state: KernelStateDocument) => void;
 
 export class StateStore {
   private loaded = false;
-  private state: KernelStateDocument = {
-    ...DEFAULT_KERNEL_STATE
-  };
+  private state: KernelStateDocument = cloneState(DEFAULT_KERNEL_STATE);
   private dirty = false;
   private readonly listeners = new Set<StateListener>();
 
@@ -21,25 +24,14 @@ export class StateStore {
       return;
     }
 
-    const raw = await readJsonFile<KernelStateDocument>(this.paths.statePath, DEFAULT_KERNEL_STATE);
+    const raw = await readJsonFile<unknown>(this.paths.statePath, DEFAULT_KERNEL_STATE);
     this.state = normalizeState(raw);
     this.loaded = true;
     this.emit(this.getSnapshot());
   }
 
   getSnapshot(): KernelStateDocument {
-    return {
-      ...this.state,
-      emotional: {
-        ...this.state.emotional
-      },
-    relationship: {
-      ...this.state.relationship
-    },
-    sessionReentry: this.state.sessionReentry ? { ...this.state.sessionReentry } : null,
-    lastDecayAt: this.state.lastDecayAt,
-      lastDailyTaskDayKey: this.state.lastDailyTaskDayKey
-    };
+    return cloneState(this.state);
   }
 
   subscribe(listener: StateListener, options?: { emitCurrent?: boolean }): () => void {
@@ -75,7 +67,7 @@ export class StateStore {
   }
 
   private async flushInternal(): Promise<void> {
-    await writeJsonFileAtomic(this.paths.statePath, this.state);
+    await writeJsonFileAtomic(this.paths.statePath, toPersistedState(this.state));
     this.dirty = false;
   }
 
@@ -90,6 +82,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function clamp01(value: number): number {
+  return clamp(value, 0, 1);
+}
+
 function toNumber(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -97,68 +93,201 @@ function toNumber(value: unknown, fallback: number): number {
   return value;
 }
 
-function normalizeState(input: KernelStateDocument): KernelStateDocument {
-  const stage = input.relationship?.stage;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneState(state: KernelStateDocument): KernelStateDocument {
   return {
     emotional: {
-      mood: clamp(toNumber(input.emotional?.mood, DEFAULT_KERNEL_STATE.emotional.mood), -1, 1),
-      energy: clamp(toNumber(input.emotional?.energy, DEFAULT_KERNEL_STATE.emotional.energy), 0, 1),
-      connection: clamp(
-        toNumber(input.emotional?.connection, DEFAULT_KERNEL_STATE.emotional.connection),
-        0,
-        1
-      ),
-      curiosity: clamp(
-        toNumber(input.emotional?.curiosity, DEFAULT_KERNEL_STATE.emotional.curiosity),
-        0,
-        1
-      ),
-      confidence: clamp(
-        toNumber(input.emotional?.confidence, DEFAULT_KERNEL_STATE.emotional.confidence),
-        0,
-        1
-      ),
-      irritation: clamp(
-        toNumber(input.emotional?.irritation, DEFAULT_KERNEL_STATE.emotional.irritation),
-        0,
-        1
-      )
+      dimensions: {
+        ...state.emotional.dimensions
+      },
+      ekman: {
+        ...state.emotional.ekman
+      },
+      connection: state.emotional.connection,
+      sessionWarmth: state.emotional.sessionWarmth
     },
+    personality: {
+      ...state.personality
+    },
+    ruminationQueue: state.ruminationQueue.map((entry) => ({ ...entry })),
     relationship: {
-      stage:
-        stage === "stranger" ||
-        stage === "acquaintance" ||
-        stage === "familiar" ||
-        stage === "close" ||
-        stage === "intimate"
-          ? stage
-          : DEFAULT_KERNEL_STATE.relationship.stage,
-      upgradeStreak: Math.max(0, Math.floor(toNumber(input.relationship?.upgradeStreak, 0))),
-      downgradeStreak: Math.max(0, Math.floor(toNumber(input.relationship?.downgradeStreak, 0)))
+      ...state.relationship
+    },
+    lastDecayAt: state.lastDecayAt,
+    lastDailyTaskDayKey: state.lastDailyTaskDayKey ?? null,
+    sessionReentry: state.sessionReentry ? { ...state.sessionReentry } : null,
+    updatedAt: state.updatedAt
+  };
+}
+
+function normalizeRelationshipStage(value: unknown): RelationshipStage {
+  return value === "stranger" ||
+    value === "acquaintance" ||
+    value === "familiar" ||
+    value === "close" ||
+    value === "intimate"
+    ? value
+    : DEFAULT_KERNEL_STATE.relationship.stage;
+}
+
+function isLegacyEmotionalShape(value: unknown): boolean {
+  return isRecord(value) && (
+    "mood" in value ||
+    "confidence" in value ||
+    "irritation" in value ||
+    ("energy" in value && !("dimensions" in value))
+  );
+}
+
+function normalizePersonality(value: unknown): OCEANPersonality {
+  const source = isRecord(value) ? value : {};
+  return {
+    openness: clamp01(toNumber(source.openness, DEFAULT_OCEAN_PERSONALITY.openness)),
+    conscientiousness: clamp01(
+      toNumber(source.conscientiousness, DEFAULT_OCEAN_PERSONALITY.conscientiousness)
+    ),
+    extraversion: clamp01(toNumber(source.extraversion, DEFAULT_OCEAN_PERSONALITY.extraversion)),
+    agreeableness: clamp01(toNumber(source.agreeableness, DEFAULT_OCEAN_PERSONALITY.agreeableness)),
+    neuroticism: clamp01(toNumber(source.neuroticism, DEFAULT_OCEAN_PERSONALITY.neuroticism))
+  };
+}
+
+function normalizeRuminationQueue(value: unknown): RuminationEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const label = typeof entry.label === "string" ? entry.label.trim() : "";
+    if (!label) {
+      return [];
+    }
+
+    const triggeredAt =
+      typeof entry.triggeredAt === "string" && Number.isFinite(new Date(entry.triggeredAt).getTime())
+        ? new Date(entry.triggeredAt).toISOString()
+        : new Date().toISOString();
+
+    return [
+      {
+        label,
+        intensity: clamp01(toNumber(entry.intensity, 0)),
+        remainingStages: Math.max(0, Math.floor(toNumber(entry.remainingStages, 0))),
+        triggeredAt
+      }
+    ].filter((normalized) => normalized.remainingStages > 0 && normalized.intensity >= 0.05);
+  });
+}
+
+function normalizeEmotionalState(value: unknown, stage: RelationshipStage): KernelStateDocument["emotional"] {
+  if (isLegacyEmotionalShape(value)) {
+    return createDefaultEmotionalState(stage);
+  }
+
+  if (!isRecord(value)) {
+    return createDefaultEmotionalState(stage);
+  }
+
+  const defaults = createDefaultEmotionalState(stage);
+  const dimensions = isRecord(value.dimensions) ? value.dimensions : {};
+  const ekman = isRecord(value.ekman) ? value.ekman : {};
+
+  return {
+    dimensions: {
+      pleasure: clamp(toNumber(dimensions.pleasure, defaults.dimensions.pleasure), -1, 1),
+      arousal: clamp(toNumber(dimensions.arousal, defaults.dimensions.arousal), -1, 1),
+      dominance: clamp(toNumber(dimensions.dominance, defaults.dimensions.dominance), -1, 1),
+      curiosity: clamp01(toNumber(dimensions.curiosity, defaults.dimensions.curiosity)),
+      energy: clamp01(toNumber(dimensions.energy, defaults.dimensions.energy)),
+      trust: clamp01(toNumber(dimensions.trust, defaults.dimensions.trust))
+    },
+    ekman: {
+      happiness: clamp01(toNumber(ekman.happiness, defaults.ekman.happiness)),
+      sadness: clamp01(toNumber(ekman.sadness, defaults.ekman.sadness)),
+      anger: clamp01(toNumber(ekman.anger, defaults.ekman.anger)),
+      fear: clamp01(toNumber(ekman.fear, defaults.ekman.fear)),
+      disgust: clamp01(toNumber(ekman.disgust, defaults.ekman.disgust)),
+      surprise: clamp01(toNumber(ekman.surprise, defaults.ekman.surprise))
+    },
+    connection: clamp01(toNumber(value.connection, defaults.connection)),
+    sessionWarmth: clamp(
+      toNumber(value.sessionWarmth, getSessionWarmthBaseline(stage)),
+      getSessionWarmthBaseline(stage),
+      1
+    )
+  };
+}
+
+function normalizeState(input: unknown): KernelStateDocument {
+  const raw = isRecord(input) ? input : {};
+  const relationshipRaw = isRecord(raw.relationship) ? raw.relationship : {};
+  const stage = normalizeRelationshipStage(relationshipRaw.stage);
+  const emotional = normalizeEmotionalState(raw.emotional, stage);
+
+  return {
+    emotional,
+    personality: normalizePersonality(raw.personality),
+    ruminationQueue: normalizeRuminationQueue(raw.ruminationQueue),
+    relationship: {
+      stage,
+      upgradeStreak: Math.max(0, Math.floor(toNumber(relationshipRaw.upgradeStreak, 0))),
+      downgradeStreak: Math.max(0, Math.floor(toNumber(relationshipRaw.downgradeStreak, 0)))
     },
     lastDecayAt:
-      typeof input.lastDecayAt === "string" && Number.isFinite(new Date(input.lastDecayAt).getTime())
-        ? new Date(input.lastDecayAt).toISOString()
+      typeof raw.lastDecayAt === "string" && Number.isFinite(new Date(raw.lastDecayAt).getTime())
+        ? new Date(raw.lastDecayAt).toISOString()
         : null,
     lastDailyTaskDayKey:
-      typeof input.lastDailyTaskDayKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.lastDailyTaskDayKey)
-        ? input.lastDailyTaskDayKey
+      typeof raw.lastDailyTaskDayKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.lastDailyTaskDayKey)
+        ? raw.lastDailyTaskDayKey
         : null,
-    sessionReentry: input.sessionReentry
+    sessionReentry: isRecord(raw.sessionReentry)
       ? {
-          active: Boolean(input.sessionReentry.active),
-          gapHours: Math.max(0, Math.floor(toNumber(input.sessionReentry.gapHours, 0))),
-          gapLabel:
-            typeof input.sessionReentry.gapLabel === "string" ? input.sessionReentry.gapLabel : "",
+          active: Boolean(raw.sessionReentry.active),
+          gapHours: Math.max(0, Math.floor(toNumber(raw.sessionReentry.gapHours, 0))),
+          gapLabel: typeof raw.sessionReentry.gapLabel === "string" ? raw.sessionReentry.gapLabel : "",
           activatedAt:
-            typeof input.sessionReentry.activatedAt === "string"
-              ? input.sessionReentry.activatedAt
+            typeof raw.sessionReentry.activatedAt === "string" &&
+            Number.isFinite(new Date(raw.sessionReentry.activatedAt).getTime())
+              ? new Date(raw.sessionReentry.activatedAt).toISOString()
               : new Date().toISOString()
         }
       : null,
     updatedAt:
-      typeof input.updatedAt === "string" && Number.isFinite(new Date(input.updatedAt).getTime())
-        ? new Date(input.updatedAt).toISOString()
+      typeof raw.updatedAt === "string" && Number.isFinite(new Date(raw.updatedAt).getTime())
+        ? new Date(raw.updatedAt).toISOString()
         : new Date().toISOString()
+  };
+}
+
+function toPersistedState(state: KernelStateDocument): Record<string, unknown> {
+  return {
+    emotional: {
+      dimensions: {
+        ...state.emotional.dimensions
+      },
+      ekman: {
+        ...state.emotional.ekman
+      },
+      connection: state.emotional.connection
+    },
+    personality: {
+      ...state.personality
+    },
+    ruminationQueue: state.ruminationQueue.map((entry) => ({ ...entry })),
+    relationship: {
+      ...state.relationship
+    },
+    lastDecayAt: state.lastDecayAt,
+    lastDailyTaskDayKey: state.lastDailyTaskDayKey ?? null,
+    sessionReentry: state.sessionReentry ? { ...state.sessionReentry } : null,
+    updatedAt: state.updatedAt
   };
 }

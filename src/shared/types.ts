@@ -231,19 +231,24 @@ const kernelEmotionSignalsSchema = z
   .object({
     enabled: z.boolean().default(true),
     deltaScale: z.number().min(0).max(1).default(0.4),
-    moodPositiveStep: z.number().min(0).max(0.5).default(0.12),
-    moodNegativeStep: z.number().min(0).max(0.5).default(0.08),
     energyEngagementScale: z.number().min(0).max(0.5).default(0.1),
-    curiosityBoost: z.number().min(0).max(0.5).default(0.15),
-    confidenceGain: z.number().min(0).max(0.2).default(0.02),
-    confidenceDropOnFriction: z.number().min(0).max(0.5).default(0.1),
-    irritationBoostOnFriction: z.number().min(0).max(0.5).default(0.12),
-    minPositiveEngagement: z.number().min(0).max(1).default(0.6),
-    minPositiveTrustDelta: z.number().min(0).max(0.3).default(0.03),
+    connectionTrustScale: z.number().min(0).max(1).default(0.5),
+    ruminationThreshold: z.number().min(0).max(1).default(0.7),
+    ruminationMaxStages: z.number().int().min(1).max(12).default(4),
     windowMaxAbsDelta: z.number().min(0.01).max(1).default(0.2),
     stalenessFullEffectMinutes: z.number().int().min(1).max(1440).default(30),
     stalenessMaxAgeHours: z.number().int().min(1).max(168).default(24),
     stalenessMinScale: z.number().min(0).max(1).default(0.15)
+  })
+  .strict();
+
+const kernelPersonalitySchema = z
+  .object({
+    openness: z.number().min(0).max(1).default(0.5),
+    conscientiousness: z.number().min(0).max(1).default(0.5),
+    extraversion: z.number().min(0).max(1).default(0.5),
+    agreeableness: z.number().min(0).max(1).default(0.5),
+    neuroticism: z.number().min(0).max(1).default(0.5)
   })
   .strict();
 
@@ -273,18 +278,20 @@ const kernelSchema = z
       maxOutputTokens: 800,
       incrementalMessageThreshold: 20
     }),
+    personality: kernelPersonalitySchema.default({
+      openness: 0.5,
+      conscientiousness: 0.5,
+      extraversion: 0.5,
+      agreeableness: 0.5,
+      neuroticism: 0.5
+    }),
     emotionSignals: kernelEmotionSignalsSchema.default({
       enabled: true,
       deltaScale: 0.4,
-      moodPositiveStep: 0.12,
-      moodNegativeStep: 0.08,
       energyEngagementScale: 0.1,
-      curiosityBoost: 0.15,
-      confidenceGain: 0.02,
-      confidenceDropOnFriction: 0.1,
-      irritationBoostOnFriction: 0.12,
-      minPositiveEngagement: 0.6,
-      minPositiveTrustDelta: 0.03,
+      connectionTrustScale: 0.5,
+      ruminationThreshold: 0.7,
+      ruminationMaxStages: 4,
       windowMaxAbsDelta: 0.2,
       stalenessFullEffectMinutes: 30,
       stalenessMaxAgeHours: 24,
@@ -489,18 +496,20 @@ export const appConfigSchema = z
         maxOutputTokens: 800,
         incrementalMessageThreshold: 20
       },
+      personality: {
+        openness: 0.5,
+        conscientiousness: 0.5,
+        extraversion: 0.5,
+        agreeableness: 0.5,
+        neuroticism: 0.5
+      },
       emotionSignals: {
         enabled: true,
         deltaScale: 0.4,
-        moodPositiveStep: 0.12,
-        moodNegativeStep: 0.08,
         energyEngagementScale: 0.1,
-        curiosityBoost: 0.15,
-        confidenceGain: 0.02,
-        confidenceDropOnFriction: 0.1,
-        irritationBoostOnFriction: 0.12,
-        minPositiveEngagement: 0.6,
-        minPositiveTrustDelta: 0.03,
+        connectionTrustScale: 0.5,
+        ruminationThreshold: 0.7,
+        ruminationMaxStages: 4,
         windowMaxAbsDelta: 0.2,
         stalenessFullEffectMinutes: 30,
         stalenessMaxAgeHours: 24,
@@ -910,23 +919,139 @@ export const relationshipGuideSchema = z
 
 export type RelationshipGuide = z.output<typeof relationshipGuideSchema>;
 
-export interface EmotionalState {
-  mood: number;
-  energy: number;
-  connection: number;
+export const OPENFEELZ_CANONICAL_EMOTION_LABELS = [
+  "neutral",
+  "calm",
+  "happy",
+  "excited",
+  "sad",
+  "anxious",
+  "frustrated",
+  "angry",
+  "confused",
+  "focused",
+  "relieved",
+  "optimistic",
+  "curious",
+  "surprised",
+  "disgusted",
+  "fearful",
+  "trusting",
+  "connected",
+  "lonely",
+  "energized",
+  "fatigued"
+] as const;
+
+export const OPENFEELZ_ALIAS_EMOTION_LABELS = [
+  "joy",
+  "happiness",
+  "contentment",
+  "content",
+  "peaceful",
+  "peace",
+  "anger",
+  "rage",
+  "irritated",
+  "irritation",
+  "sadness",
+  "sorrow",
+  "disappointment",
+  "disappointed",
+  "fear",
+  "scared",
+  "terrified",
+  "anxiety",
+  "worried",
+  "worry",
+  "disgust",
+  "revulsion",
+  "surprise",
+  "shocked",
+  "astonished",
+  "curiosity",
+  "interest",
+  "interested",
+  "fascinated",
+  "confusion",
+  "bewildered",
+  "connection",
+  "warmth",
+  "warm",
+  "bonded",
+  "trust",
+  "loneliness",
+  "isolated",
+  "fatigue",
+  "tired",
+  "exhausted",
+  "depleted",
+  "excitement",
+  "thrilled",
+  "relief",
+  "optimism",
+  "hopeful",
+  "hope",
+  "energy",
+  "energetic",
+  "vigorous",
+  "focus",
+  "concentrated",
+  "attentive"
+] as const;
+
+export const OPENFEELZ_EMOTION_LABELS = [
+  ...OPENFEELZ_CANONICAL_EMOTION_LABELS,
+  ...OPENFEELZ_ALIAS_EMOTION_LABELS
+] as const;
+
+export type OpenFeelzEmotionLabel = (typeof OPENFEELZ_EMOTION_LABELS)[number];
+
+export interface EmotionalDimensions {
+  pleasure: number;
+  arousal: number;
+  dominance: number;
   curiosity: number;
-  confidence: number;
-  irritation: number;
+  energy: number;
+  trust: number;
 }
 
-export type RealtimeUserMood = "positive" | "neutral" | "negative" | "mixed";
+export interface EkmanEmotions {
+  happiness: number;
+  sadness: number;
+  anger: number;
+  fear: number;
+  disgust: number;
+  surprise: number;
+}
+
+export interface EmotionalState {
+  dimensions: EmotionalDimensions;
+  ekman: EkmanEmotions;
+  connection: number;
+  sessionWarmth: number;
+}
+
+export interface OCEANPersonality {
+  openness: number;
+  conscientiousness: number;
+  extraversion: number;
+  agreeableness: number;
+  neuroticism: number;
+}
+
+export interface RuminationEntry {
+  label: string;
+  intensity: number;
+  remainingStages: number;
+  triggeredAt: string;
+}
 
 export interface RealtimeEmotionalSignals {
-  user_mood: RealtimeUserMood;
+  emotion_label: string;
+  intensity: number;
   engagement: number;
   trust_delta: number;
-  friction: boolean;
-  curiosity_trigger: boolean;
 }
 
 export interface RelationshipState {
@@ -937,6 +1062,8 @@ export interface RelationshipState {
 
 export interface KernelStateDocument {
   emotional: EmotionalState;
+  personality: OCEANPersonality;
+  ruminationQueue: RuminationEntry[];
   relationship: RelationshipState;
   lastDecayAt: string | null;
   lastDailyTaskDayKey?: string | null;
@@ -1181,19 +1308,57 @@ export const DEFAULT_SCHEDULED_TASKS: ScheduledTasksDocument = {
   tasks: []
 };
 
-export const DEFAULT_EMOTIONAL_STATE: EmotionalState = {
-  mood: 0,
-  energy: 0.6,
-  connection: 0.25,
-  curiosity: 0.5,
-  confidence: 0.5,
-  irritation: 0.1
+export const DEFAULT_OCEAN_PERSONALITY: OCEANPersonality = {
+  openness: 0.5,
+  conscientiousness: 0.5,
+  extraversion: 0.5,
+  agreeableness: 0.5,
+  neuroticism: 0.5
 };
 
+export const SESSION_WARMTH_BASELINES: Record<RelationshipStage, number> = {
+  stranger: 0.2,
+  acquaintance: 0.35,
+  familiar: 0.5,
+  close: 0.68,
+  intimate: 0.82
+};
+
+export function getSessionWarmthBaseline(stage: RelationshipStage): number {
+  return SESSION_WARMTH_BASELINES[stage] ?? SESSION_WARMTH_BASELINES.stranger;
+}
+
+export function createDefaultEmotionalState(stage: RelationshipStage = "stranger"): EmotionalState {
+  return {
+    dimensions: {
+      pleasure: 0,
+      arousal: 0,
+      dominance: 0,
+      curiosity: 0.5,
+      energy: 0.5,
+      trust: 0.5
+    },
+    ekman: {
+      happiness: 0,
+      sadness: 0,
+      anger: 0,
+      fear: 0,
+      disgust: 0,
+      surprise: 0
+    },
+    connection: 0.25,
+    sessionWarmth: getSessionWarmthBaseline(stage)
+  };
+}
+
+export const DEFAULT_EMOTIONAL_STATE: EmotionalState = createDefaultEmotionalState();
+
 export const DEFAULT_KERNEL_STATE: KernelStateDocument = {
-  emotional: {
-    ...DEFAULT_EMOTIONAL_STATE
+  emotional: createDefaultEmotionalState(),
+  personality: {
+    ...DEFAULT_OCEAN_PERSONALITY
   },
+  ruminationQueue: [],
   relationship: {
     stage: "stranger",
     upgradeStreak: 0,
@@ -1432,18 +1597,20 @@ export const DEFAULT_CONFIG: AppConfig = {
       maxOutputTokens: 800,
       incrementalMessageThreshold: 20
     },
+    personality: {
+      openness: 0.5,
+      conscientiousness: 0.5,
+      extraversion: 0.5,
+      agreeableness: 0.5,
+      neuroticism: 0.5
+    },
     emotionSignals: {
       enabled: true,
       deltaScale: 0.4,
-      moodPositiveStep: 0.12,
-      moodNegativeStep: 0.08,
       energyEngagementScale: 0.1,
-      curiosityBoost: 0.15,
-      confidenceGain: 0.02,
-      confidenceDropOnFriction: 0.1,
-      irritationBoostOnFriction: 0.12,
-      minPositiveEngagement: 0.6,
-      minPositiveTrustDelta: 0.03,
+      connectionTrustScale: 0.5,
+      ruminationThreshold: 0.7,
+      ruminationMaxStages: 4,
       windowMaxAbsDelta: 0.2,
       stalenessFullEffectMinutes: 30,
       stalenessMaxAgeHours: 24,

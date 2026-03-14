@@ -105,8 +105,9 @@ function buildRealtimeSignalContractPrompt(): string {
   return [
     "[OUTPUT CONTRACT]",
     "每次最终回复末尾都必须追加一个隐藏标签：",
-    '<signals user_mood="positive|neutral|negative|mixed" engagement="0..1" trust_delta="-0.3..0.3" friction="true|false" curiosity_trigger="true|false" />',
-    '若无法判断，使用中性默认值：<signals user_mood="neutral" engagement="0.5" trust_delta="0" friction="false" curiosity_trigger="false" />。',
+    '<signals emotion_label="OpenFeelz upstream label" intensity="0..1" trust_delta="-0.3..0.3" engagement="0..1" />',
+    'emotion_label 必须使用 OpenFeelz 上游标签，例如 calm、happy、anxious、frustrated、curious、connected、fatigued、neutral。',
+    '若无法判断，使用中性默认值：<signals emotion_label="neutral" intensity="0.5" trust_delta="0" engagement="0.5" />。',
     "该标签必须放在回复最后，不要在可见文本中解释。"
   ].join("\n");
 }

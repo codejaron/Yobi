@@ -24,11 +24,10 @@ test("parseExtractionObject: 附带 emotional_signals 会被忽略", () => {
   const parsed = parseExtractionObject({
     operations: [],
     emotional_signals: {
-      user_mood: "positive",
+      emotion_label: "happy",
+      intensity: 0.8,
       engagement: 0.85,
-      trust_delta: 0.12,
-      friction: false,
-      curiosity_trigger: true
+      trust_delta: 0.12
     }
   });
 
@@ -39,11 +38,10 @@ test("parseExtractionObject: 非法 emotional_signals 同样会被忽略", () =>
   const parsed = parseExtractionObject({
     operations: [],
     emotional_signals: {
-      user_mood: "positive",
+      emotion_label: "grateful",
+      intensity: 1.2,
       engagement: 1.2,
-      trust_delta: 0.2,
-      friction: false,
-      curiosity_trigger: true
+      trust_delta: 0.2
     }
   });
 

@@ -1,25 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  advanceEmotionalRumination,
   applyElapsedEmotionalDecay,
   applyEmotionalSignalsToState,
   applyRealtimeEmotionalSignals,
   computeSignalAgeScale
 } from "../kernel/engine.js";
-import type { AppConfig, EmotionalState } from "@shared/types";
+import {
+  createDefaultEmotionalState,
+  DEFAULT_OCEAN_PERSONALITY,
+  type AppConfig,
+  type EmotionalState
+} from "@shared/types";
 
 const emotionSignalConfig: AppConfig["kernel"]["emotionSignals"] = {
   enabled: true,
   deltaScale: 0.4,
-  moodPositiveStep: 0.12,
-  moodNegativeStep: 0.08,
   energyEngagementScale: 0.1,
-  curiosityBoost: 0.15,
-  confidenceGain: 0.02,
-  confidenceDropOnFriction: 0.1,
-  irritationBoostOnFriction: 0.12,
-  minPositiveEngagement: 0.6,
-  minPositiveTrustDelta: 0.03,
+  connectionTrustScale: 0.5,
+  ruminationThreshold: 0.7,
+  ruminationMaxStages: 4,
   windowMaxAbsDelta: 0.2,
   stalenessFullEffectMinutes: 30,
   stalenessMaxAgeHours: 24,
@@ -27,12 +28,12 @@ const emotionSignalConfig: AppConfig["kernel"]["emotionSignals"] = {
 };
 
 const baseEmotional: EmotionalState = {
-  mood: 0,
-  energy: 0.6,
-  connection: 0.5,
-  curiosity: 0.4,
-  confidence: 0.5,
-  irritation: 0.1
+  ...createDefaultEmotionalState(),
+  dimensions: {
+    ...createDefaultEmotionalState().dimensions,
+    curiosity: 0.4
+  },
+  connection: 0.5
 };
 
 function assertApprox(actual: number, expected: number, epsilon = 1e-9): void {
@@ -58,55 +59,62 @@ test("computeSignalAgeScale: 超过 maxAge 变为 0", () => {
   assert.equal(scale, 0);
 });
 
-test("applyEmotionalSignalsToState: 正向信号驱动 mood/curiosity/confidence 增长", () => {
+test("applyEmotionalSignalsToState: 正向标签驱动 PAD、Ekman、trust 和 energy", () => {
   const next = applyEmotionalSignalsToState({
     emotional: baseEmotional,
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    ruminationQueue: [],
     signals: {
-      user_mood: "positive",
+      emotion_label: "happy",
+      intensity: 0.8,
       engagement: 0.8,
-      trust_delta: 0.08,
-      friction: false,
-      curiosity_trigger: true
+      trust_delta: 0.08
     },
     config: emotionSignalConfig,
     ageScale: 1
   });
 
-  assertApprox(next.mood, 0.048);
-  assertApprox(next.energy, 0.612);
-  assertApprox(next.connection, 0.532);
-  assertApprox(next.curiosity, 0.46);
-  assertApprox(next.confidence, 0.516);
-  assertApprox(next.irritation, 0.1);
+  assert.ok(next.emotional.dimensions.pleasure > baseEmotional.dimensions.pleasure);
+  assert.ok(next.emotional.dimensions.energy > baseEmotional.dimensions.energy);
+  assert.ok(next.emotional.dimensions.trust > baseEmotional.dimensions.trust);
+  assert.ok(next.emotional.connection > baseEmotional.connection);
+  assert.ok(next.emotional.ekman.happiness > 0);
+  assert.equal(next.ruminationQueue.length, 0);
 });
 
-test("applyEmotionalSignalsToState: friction 会压 confidence 并推高 irritation", () => {
+test("applyEmotionalSignalsToState: 强烈负向标签会触发 rumination", () => {
   const next = applyEmotionalSignalsToState({
     emotional: baseEmotional,
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    ruminationQueue: [],
     signals: {
-      user_mood: "mixed",
-      engagement: 0.9,
-      trust_delta: 0.2,
-      friction: true,
-      curiosity_trigger: false
+      emotion_label: "frustrated",
+      intensity: 0.95,
+      engagement: 0.3,
+      trust_delta: -0.08
     },
     config: emotionSignalConfig,
     ageScale: 1
   });
 
-  assertApprox(next.confidence, 0.48);
-  assertApprox(next.irritation, 0.148);
+  assert.ok(next.emotional.dimensions.pleasure < baseEmotional.dimensions.pleasure);
+  assert.ok(next.emotional.dimensions.arousal > baseEmotional.dimensions.arousal);
+  assert.ok(next.emotional.ekman.anger > 0);
+  assert.equal(next.ruminationQueue.length, 1);
+  assert.equal(next.ruminationQueue[0]?.label, "frustrated");
+  assert.equal(next.ruminationQueue[0]?.remainingStages, 4);
 });
 
-test("applyEmotionalSignalsToState: 单窗变化受 windowMaxAbsDelta 限幅", () => {
+test("applyEmotionalSignalsToState: trust_delta 按 connectionTrustScale 传递给 connection", () => {
   const next = applyEmotionalSignalsToState({
     emotional: baseEmotional,
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    ruminationQueue: [],
     signals: {
-      user_mood: "positive",
+      emotion_label: "neutral",
+      intensity: 0.5,
       engagement: 1,
-      trust_delta: 0.3,
-      friction: false,
-      curiosity_trigger: true
+      trust_delta: 0.3
     },
     config: {
       ...emotionSignalConfig,
@@ -115,86 +123,101 @@ test("applyEmotionalSignalsToState: 单窗变化受 windowMaxAbsDelta 限幅", (
     ageScale: 1
   });
 
-  assertApprox(next.mood, 0.048);
-  assertApprox(next.connection, 0.55);
-  assertApprox(next.curiosity, 0.45);
+  assertApprox(next.emotional.dimensions.trust, 0.55);
+  assertApprox(next.emotional.connection, 0.525);
 });
 
-test("applyRealtimeEmotionalSignals: 过期信号会按 staleness 配置衰减", () => {
+test("applyRealtimeEmotionalSignals: 过期信号会按 staleness 配置失效", () => {
   const next = applyRealtimeEmotionalSignals({
     emotional: baseEmotional,
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    ruminationQueue: [],
     signals: {
-      user_mood: "positive",
+      emotion_label: "happy",
+      intensity: 0.8,
       engagement: 0.8,
-      trust_delta: 0.08,
-      friction: false,
-      curiosity_trigger: true
+      trust_delta: 0.08
     },
     config: emotionSignalConfig,
     latestMessageTs: "2026-03-03T12:00:00.000Z",
     now: new Date("2026-03-04T12:00:00.000Z")
   });
 
-  assert.deepEqual(next, baseEmotional);
-});
-
-test("applyRealtimeEmotionalSignals: 有信号时按实时窗口更新情绪", () => {
-  const next = applyRealtimeEmotionalSignals({
+  assert.deepEqual(next, {
     emotional: baseEmotional,
-    signals: {
-      user_mood: "negative",
-      engagement: 0.2,
-      trust_delta: -0.08,
-      friction: true,
-      curiosity_trigger: false
-    },
-    config: emotionSignalConfig
+    ruminationQueue: []
   });
-
-  assert.ok(next.mood < baseEmotional.mood);
-  assert.ok(next.energy < baseEmotional.energy);
-  assert.ok(next.connection < baseEmotional.connection);
-  assert.ok(next.irritation > baseEmotional.irritation);
 });
 
 test("applyRealtimeEmotionalSignals: 无信号时保持原状态", () => {
   const next = applyRealtimeEmotionalSignals({
     emotional: baseEmotional,
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    ruminationQueue: [],
     signals: null,
     config: emotionSignalConfig
   });
 
-  assert.deepEqual(next, baseEmotional);
+  assert.deepEqual(next, {
+    emotional: baseEmotional,
+    ruminationQueue: []
+  });
 });
 
-
-test("applyElapsedEmotionalDecay: 按时间向默认基线指数回归", () => {
-  const next = applyElapsedEmotionalDecay(
-    {
+test("applyElapsedEmotionalDecay: PAD 和 Ekman 分别向 baseline/0 回归", () => {
+  const next = applyElapsedEmotionalDecay({
+    emotional: {
       ...baseEmotional,
-      mood: 0.8,
-      connection: 0.9,
-      irritation: 0.4
+      dimensions: {
+        ...baseEmotional.dimensions,
+        pleasure: 0.8
+      },
+      ekman: {
+        ...baseEmotional.ekman,
+        anger: 0.4
+      },
+      connection: 0.9
     },
-    12 * 60 * 60
-  );
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    deltaSeconds: 12 * 60 * 60
+  });
 
-  assert.ok(next.mood < 0.8);
-  assert.ok(next.mood > 0);
+  assert.ok(next.dimensions.pleasure < 0.8);
+  assert.ok(next.dimensions.pleasure > 0);
+  assert.ok(next.ekman.anger < 0.4);
+  assert.ok(next.ekman.anger > 0);
   assert.ok(next.connection < 0.9);
-  assert.ok(next.connection > 0.5);
-  assert.ok(next.irritation < 0.4);
-  assert.ok(next.irritation > 0.1);
+  assert.ok(next.connection > 0.25);
 });
 
 test("applyElapsedEmotionalDecay: connection 在 48 小时半衰期后回到一半增量", () => {
-  const next = applyElapsedEmotionalDecay(
-    {
+  const next = applyElapsedEmotionalDecay({
+    emotional: {
       ...baseEmotional,
       connection: 1
     },
-    48 * 60 * 60
-  );
+    personality: DEFAULT_OCEAN_PERSONALITY,
+    deltaSeconds: 48 * 60 * 60
+  });
 
   assertApprox(next.connection, 0.625);
+});
+
+test("advanceEmotionalRumination: 先施加本轮影响，再推进阶段和强度", () => {
+  const next = advanceEmotionalRumination({
+    emotional: baseEmotional,
+    ruminationQueue: [
+      {
+        label: "angry",
+        intensity: 0.9,
+        remainingStages: 4,
+        triggeredAt: "2026-03-04T12:00:00.000Z"
+      }
+    ]
+  });
+
+  assert.ok(next.emotional.dimensions.pleasure < baseEmotional.dimensions.pleasure);
+  assert.ok(next.emotional.ekman.anger > baseEmotional.ekman.anger);
+  assert.equal(next.ruminationQueue[0]?.remainingStages, 3);
+  assertApprox(next.ruminationQueue[0]?.intensity ?? 0, 0.72);
 });

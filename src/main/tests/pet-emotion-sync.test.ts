@@ -6,16 +6,9 @@ import {
   mergePetEmotionConfig,
   normalizePetEmotionName
 } from "@shared/pet-emotion";
-import type { EmotionalState } from "@shared/types";
+import { createDefaultEmotionalState, type EmotionalState } from "@shared/types";
 
-const baseEmotion: EmotionalState = {
-  mood: 0,
-  energy: 0.6,
-  connection: 0.25,
-  curiosity: 0.5,
-  confidence: 0.5,
-  irritation: 0.1
-};
+const baseEmotion: EmotionalState = createDefaultEmotionalState();
 
 test("shouldPublishEmotionState: 首次发布直接通过", () => {
   const result = shouldPublishEmotionState({
@@ -35,7 +28,10 @@ test("shouldPublishEmotionState: 等于 epsilon 的单步变化也会发送", ()
     previous: baseEmotion,
     next: {
       ...baseEmotion,
-      confidence: 0.52
+      dimensions: {
+        ...baseEmotion.dimensions,
+        trust: 0.52
+      }
     },
     epsilon: 0.02,
     heartbeatMs: 2000,
@@ -51,7 +47,10 @@ test("shouldPublishEmotionState: 小于 epsilon 且未到 heartbeat 时不发送
     previous: baseEmotion,
     next: {
       ...baseEmotion,
-      confidence: 0.519
+      dimensions: {
+        ...baseEmotion.dimensions,
+        trust: 0.519
+      }
     },
     epsilon: 0.02,
     heartbeatMs: 2000,
@@ -67,11 +66,30 @@ test("shouldPublishEmotionState: heartbeat 到达时强制同步", () => {
     previous: baseEmotion,
     next: {
       ...baseEmotion,
-      confidence: 0.519
+      dimensions: {
+        ...baseEmotion.dimensions,
+        trust: 0.519
+      }
     },
     epsilon: 0.02,
     heartbeatMs: 2000,
     nowMs: 3000,
+    lastPublishedAtMs: 1000
+  });
+
+  assert.equal(result, true);
+});
+
+test("shouldPublishEmotionState: sessionWarmth 变化会触发同步", () => {
+  const result = shouldPublishEmotionState({
+    previous: baseEmotion,
+    next: {
+      ...baseEmotion,
+      sessionWarmth: 0.3
+    },
+    epsilon: 0.02,
+    heartbeatMs: 2000,
+    nowMs: 1500,
     lastPublishedAtMs: 1000
   });
 

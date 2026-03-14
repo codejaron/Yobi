@@ -21,7 +21,7 @@ test("SentenceChunkBuffer: strips hidden tags before emitting TTS chunks", () =>
   });
 
   const emitted = buffer.push(
-    "<think>internal</think>你好。<signals user_mood=\"neutral\" engagement=\"0.5\" trust_delta=\"0\" friction=\"false\" curiosity_trigger=\"false\" />"
+    "<think>internal</think>你好。<signals emotion_label=\"neutral\" intensity=\"0.5\" engagement=\"0.5\" trust_delta=\"0\" />"
   );
 
   assert.deepEqual(emitted, ["你好。"]);

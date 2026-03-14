@@ -21,17 +21,17 @@ export const PET_EMOTION_SLOTS = [
 ] as const;
 
 export const PET_EMOTION_FEATURES = [
-  "mood",
-  "moodPositive",
-  "moodNegative",
-  "energySigned",
-  "connectionSigned",
-  "connectionPositive",
-  "curiositySigned",
-  "curiosityPositive",
-  "confidenceSigned",
-  "confidenceNegative",
-  "irritation"
+  "pleasure",
+  "pleasurePositive",
+  "pleasureNegative",
+  "arousal",
+  "dominance",
+  "trustSigned",
+  "happiness",
+  "sadness",
+  "anger",
+  "surprise",
+  "expressionScale"
 ] as const;
 
 export const PET_EMOTION_IMPULSE_NAMES = [
@@ -136,7 +136,7 @@ export const LEGACY_PET_EMOTION_TO_IMPULSE: Record<string, PetEmotionImpulseName
 };
 
 export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   defaultEmotion: {
     ...DEFAULT_EMOTIONAL_STATE
   },
@@ -185,95 +185,96 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
   mappings: {
     mouthForm: {
       baseValue: 0,
-      softMin: -1.35,
+      softMin: -1.2,
       softMax: 1,
       weights: {
-        mood: 0.58,
-        irritation: -0.42,
-        confidenceSigned: 0.16,
-        connectionSigned: 0.08
+        pleasure: 0.5,
+        happiness: 0.28,
+        sadness: -0.18,
+        anger: -0.22,
+        expressionScale: 0.08
       }
     },
     browLAngle: {
       baseValue: 0,
       softMin: -0.8,
-      softMax: 0.5,
+      softMax: 0.45,
       weights: {
-        moodNegative: 0.28,
-        irritation: -0.55,
-        curiosityPositive: 0.1
+        anger: -0.48,
+        sadness: 0.18,
+        dominance: -0.14
       }
     },
     browRAngle: {
       baseValue: 0,
       softMin: -0.8,
-      softMax: 0.5,
+      softMax: 0.45,
       weights: {
-        moodNegative: 0.28,
-        irritation: -0.55,
-        curiosityPositive: 0.1
+        anger: -0.48,
+        sadness: 0.18,
+        dominance: -0.14
       }
     },
     browLForm: {
       baseValue: 0,
-      softMin: -0.6,
+      softMin: -0.55,
       softMax: 0.35,
       weights: {
-        moodPositive: 0.18,
-        irritation: -0.4,
-        moodNegative: -0.18
+        anger: -0.34,
+        sadness: -0.16,
+        happiness: 0.1
       }
     },
     browRForm: {
       baseValue: 0,
-      softMin: -0.6,
+      softMin: -0.55,
       softMax: 0.35,
       weights: {
-        moodPositive: 0.18,
-        irritation: -0.4,
-        moodNegative: -0.18
+        anger: -0.34,
+        sadness: -0.16,
+        happiness: 0.1
       }
     },
     browLY: {
       baseValue: 0,
       softMin: -0.35,
-      softMax: 0.28,
+      softMax: 0.3,
       weights: {
-        moodPositive: 0.16,
-        curiosityPositive: 0.1,
-        irritation: -0.22,
-        moodNegative: -0.1
+        happiness: 0.14,
+        surprise: 0.2,
+        sadness: -0.12
       }
     },
     browRY: {
       baseValue: 0,
       softMin: -0.35,
-      softMax: 0.28,
+      softMax: 0.3,
       weights: {
-        moodPositive: 0.16,
-        curiosityPositive: 0.1,
-        irritation: -0.22,
-        moodNegative: -0.1
+        happiness: 0.14,
+        surprise: 0.2,
+        sadness: -0.12
       }
     },
     eyeOpenL: {
       baseValue: 0.72,
-      softMin: 0.3,
+      softMin: 0.28,
       softMax: 1,
       weights: {
-        energySigned: 0.15,
-        irritation: -0.1,
-        moodNegative: -0.08
+        arousal: 0.12,
+        surprise: 0.18,
+        sadness: -0.08,
+        anger: -0.05
       }
     },
     eyeOpenR: {
       baseValue: 0.72,
-      softMin: 0.3,
+      softMin: 0.28,
       softMax: 1,
       weights: {
-        energySigned: 0.15,
-        irritation: -0.1,
-        moodNegative: -0.08
+        arousal: 0.12,
+        surprise: 0.18,
+        sadness: -0.08,
+        anger: -0.05
       }
     },
     eyeSmileL: {
@@ -281,9 +282,9 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: 0,
       softMax: 1,
       weights: {
-        moodPositive: 0.72,
-        connectionPositive: 0.12,
-        irritation: -0.3
+        pleasurePositive: 0.38,
+        happiness: 0.42,
+        expressionScale: 0.12
       }
     },
     eyeSmileR: {
@@ -291,9 +292,9 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: 0,
       softMax: 1,
       weights: {
-        moodPositive: 0.72,
-        connectionPositive: 0.12,
-        irritation: -0.3
+        pleasurePositive: 0.38,
+        happiness: 0.42,
+        expressionScale: 0.12
       }
     },
     eyeForm: {
@@ -301,9 +302,10 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: -1,
       softMax: 1,
       weights: {
-        moodNegative: 0.48,
-        irritation: -0.6,
-        moodPositive: 0.08
+        pleasureNegative: 0.26,
+        anger: -0.46,
+        sadness: 0.22,
+        happiness: 0.08
       }
     },
     eyeBallForm: {
@@ -311,9 +313,9 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: -0.3,
       softMax: 0.3,
       weights: {
-        curiositySigned: -0.22,
-        energySigned: -0.1,
-        irritation: 0.08
+        arousal: -0.12,
+        surprise: -0.1,
+        trustSigned: -0.08
       }
     },
     tere: {
@@ -321,10 +323,9 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: 0,
       softMax: 1,
       weights: {
-        connectionPositive: 0.45,
-        moodPositive: 0.22,
-        confidenceNegative: 0.2,
-        irritation: -0.18
+        trustSigned: 0.22,
+        expressionScale: 0.08,
+        pleasurePositive: 0.1
       }
     },
     angleY: {
@@ -332,10 +333,9 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: -3,
       softMax: 3,
       weights: {
-        curiosityPositive: 1.1,
-        connectionPositive: 0.7,
-        energySigned: 0.45,
-        irritation: -0.7
+        dominance: 1.1,
+        arousal: 0.55,
+        surprise: 0.3
       }
     },
     angleZ: {
@@ -343,8 +343,9 @@ export const DEFAULT_PET_EMOTION_CONFIG: PetEmotionConfig = {
       softMin: -5,
       softMax: 5,
       weights: {
-        moodPositive: 0.25,
-        irritation: -0.4
+        dominance: 1.6,
+        pleasure: 0.35,
+        anger: -0.3
       }
     }
   },
@@ -427,7 +428,7 @@ export function mergePetEmotionConfig(
   if (!override) {
     return {
       ...base,
-      defaultEmotion: { ...base.defaultEmotion },
+      defaultEmotion: cloneRecord(base.defaultEmotion),
       stateSync: { ...base.stateSync },
       smoothing: { ...base.smoothing },
       blink: { ...base.blink },
@@ -442,10 +443,7 @@ export function mergePetEmotionConfig(
   return {
     ...base,
     schemaVersion: override.schemaVersion ?? base.schemaVersion,
-    defaultEmotion: {
-      ...base.defaultEmotion,
-      ...(override.defaultEmotion ?? {})
-    },
+    defaultEmotion: mergeEmotionalState(base.defaultEmotion, override.defaultEmotion),
     stateSync: {
       ...base.stateSync,
       ...(override.stateSync ?? {})
@@ -479,6 +477,23 @@ export function normalizePetEmotionName(input: string): PetEmotionImpulseName | 
 
 function cloneRecord<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function mergeEmotionalState(base: EmotionalState, override?: Partial<EmotionalState>): EmotionalState {
+  if (!override) {
+    return cloneRecord(base);
+  }
+
+  return {
+    ...base,
+    ...override,
+    dimensions: override.dimensions
+      ? { ...base.dimensions, ...override.dimensions }
+      : { ...base.dimensions },
+    ekman: override.ekman
+      ? { ...base.ekman, ...override.ekman }
+      : { ...base.ekman }
+  };
 }
 
 function mergeNestedRecord<T extends Record<string, any>, O extends Partial<Record<keyof T, any>> | undefined>(

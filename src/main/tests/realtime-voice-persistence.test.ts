@@ -21,7 +21,7 @@ test("buildInterruptedAssistantCommit: keeps only the played assistant prefix", 
 test("buildInterruptedAssistantCommit: falls back to visible full text when played text is empty", () => {
   const commit = buildInterruptedAssistantCommit({
     fullText:
-      "<think>internal</think>你好。<signals user_mood=\"neutral\" engagement=\"0.5\" trust_delta=\"0\" friction=\"false\" curiosity_trigger=\"false\" />",
+      "<think>internal</think>你好。<signals emotion_label=\"neutral\" intensity=\"0.5\" engagement=\"0.5\" trust_delta=\"0\" />",
     playedText: "",
     sessionId: "voice-session-1",
     mode: "free",

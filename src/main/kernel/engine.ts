@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import type {
   AppConfig,
   KernelStatus,
+  KernelStateDocument,
   PendingTaskType,
   RealtimeEmotionalSignals
 } from "@shared/types";
+import { getSessionWarmthBaseline } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { YobiMemory } from "@main/memory/setup";
 import { KernelEventQueue } from "./event-queue";
@@ -13,13 +15,16 @@ import { StateStore } from "./state-store";
 import { splitExtractionWindows } from "@main/memory-v2/extraction-runner";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
 import {
+  advanceEmotionalRumination,
   applyElapsedEmotionalDecay,
-  applyRealtimeEmotionalSignals
+  applyRealtimeEmotionalSignals,
+  clampRange
 } from "./emotion-utils";
 import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, isWithinQuietHours, toDayKey } from "./relationship-utils";
 import type { KernelQueueTaskHandler, ProactiveRewriteHandler } from "./task-handlers";
 
 export {
+  advanceEmotionalRumination,
   applyElapsedEmotionalDecay,
   applyRealtimeEmotionalSignals,
   computeSignalAgeScale,
@@ -47,6 +52,8 @@ export class KernelEngine {
   private lastTickAt: string | null = null;
   private lastUserMessageAt: string | null = null;
   private lastProactiveAt: string | null = null;
+  private lastEngagement: number | null = null;
+  private warmthIdleMinutesApplied = 0;
   private currentTickIntervalMs = 30_000;
   private readonly startedAtMs = Date.now();
 
@@ -62,6 +69,7 @@ export class KernelEngine {
   async init(): Promise<void> {
     await this.taskQueue.init();
     await this.input.backgroundWorker.init();
+    this.syncPersonalityFromConfig();
     assertUniqueQueueHandlerTypes(this.input.queueHandlers);
     for (const handler of this.input.queueHandlers) {
       this.taskQueue.register(handler.type, async (task) => {
@@ -110,6 +118,7 @@ export class KernelEngine {
   setLastUserMessageAt(value: string | null): void {
     if (!value || !Number.isFinite(new Date(value).getTime())) {
       this.lastUserMessageAt = null;
+      this.warmthIdleMinutesApplied = 0;
       return;
     }
     this.lastUserMessageAt = new Date(value).toISOString();
@@ -151,13 +160,30 @@ export class KernelEngine {
       return;
     }
 
+    this.lastEngagement = clampRange(signals.engagement, 0, 1);
     this.input.stateStore.mutate((state) => {
-      state.emotional = applyRealtimeEmotionalSignals({
+      state.personality = {
+        ...this.input.getConfig().kernel.personality
+      };
+      const next = applyRealtimeEmotionalSignals({
         emotional: state.emotional,
+        personality: state.personality,
+        ruminationQueue: state.ruminationQueue,
         signals,
         config,
         latestMessageTs: this.lastUserMessageAt
       });
+      state.emotional = next.emotional;
+      state.ruminationQueue = next.ruminationQueue;
+    });
+  }
+
+  syncPersonalityFromConfig(): void {
+    const personality = this.input.getConfig().kernel.personality;
+    this.input.stateStore.mutate((state) => {
+      state.personality = {
+        ...personality
+      };
     });
   }
 
@@ -255,9 +281,11 @@ export class KernelEngine {
     const gapMs = lastTs > 0 ? Math.max(0, currentTs - lastTs) : null;
     const gapHours = typeof gapMs === "number" ? gapMs / (3600 * 1000) : 0;
     this.lastUserMessageAt = ts;
+    this.warmthIdleMinutesApplied = 0;
 
     this.input.stateStore.mutate((state) => {
       const reentryThreshold = this.input.getConfig().kernel.sessionReentryGapHours;
+      const stageBaseline = getSessionWarmthBaseline(state.relationship.stage);
       if (typeof gapMs === "number" && gapHours >= reentryThreshold) {
         state.sessionReentry = {
           active: true,
@@ -265,8 +293,17 @@ export class KernelEngine {
           gapLabel: gapHours >= 24 ? `${Math.floor(gapHours / 24)} 天` : `${Math.floor(gapHours)} 小时`,
           activatedAt: new Date().toISOString()
         };
+        state.emotional.sessionWarmth = stageBaseline;
       } else {
         state.sessionReentry = null;
+      }
+
+      if (typeof this.lastEngagement === "number") {
+        state.emotional.sessionWarmth = clampRange(
+          state.emotional.sessionWarmth + 0.05 * this.lastEngagement,
+          stageBaseline,
+          1
+        );
       }
     });
   }
@@ -282,20 +319,64 @@ export class KernelEngine {
 
   private applyStateDecay(): void {
     const now = new Date();
+    const personality = this.input.getConfig().kernel.personality;
     this.input.stateStore.mutate((state) => {
       const lastDecayAt = state.lastDecayAt ? new Date(state.lastDecayAt).getTime() : NaN;
+      state.personality = {
+        ...personality
+      };
       state.lastDecayAt = now.toISOString();
-      if (!Number.isFinite(lastDecayAt)) {
-        return;
+      if (Number.isFinite(lastDecayAt)) {
+        const deltaSeconds = Math.max(0, (now.getTime() - lastDecayAt) / 1000);
+        if (deltaSeconds > 0) {
+          state.emotional = applyElapsedEmotionalDecay({
+            emotional: state.emotional,
+            personality: state.personality,
+            deltaSeconds
+          });
+        }
       }
 
-      const deltaSeconds = Math.max(0, (now.getTime() - lastDecayAt) / 1000);
-      if (deltaSeconds <= 0) {
-        return;
-      }
-
-      state.emotional = applyElapsedEmotionalDecay(state.emotional, deltaSeconds);
+      const rumination = advanceEmotionalRumination({
+        emotional: state.emotional,
+        ruminationQueue: state.ruminationQueue
+      });
+      state.emotional = rumination.emotional;
+      state.ruminationQueue = rumination.ruminationQueue;
+      this.applySessionWarmthIdleDecay(state, now);
     });
+  }
+
+  private applySessionWarmthIdleDecay(state: KernelStateDocument, now: Date): void {
+    if (!this.lastUserMessageAt) {
+      this.warmthIdleMinutesApplied = 0;
+      return;
+    }
+
+    const lastUserMs = new Date(this.lastUserMessageAt).getTime();
+    if (!Number.isFinite(lastUserMs)) {
+      this.warmthIdleMinutesApplied = 0;
+      return;
+    }
+
+    const idleMinutesNow = Math.max(0, (now.getTime() - lastUserMs) / 60_000 - 10);
+    if (idleMinutesNow <= 0) {
+      this.warmthIdleMinutesApplied = 0;
+      return;
+    }
+
+    const deltaIdleMinutes = Math.max(0, idleMinutesNow - this.warmthIdleMinutesApplied);
+    if (deltaIdleMinutes <= 0) {
+      return;
+    }
+
+    const stageBaseline = getSessionWarmthBaseline(state.relationship.stage);
+    state.emotional.sessionWarmth = clampRange(
+      state.emotional.sessionWarmth - 0.02 * deltaIdleMinutes,
+      stageBaseline,
+      1
+    );
+    this.warmthIdleMinutesApplied = idleMinutesNow;
   }
 
   private async maybeScheduleDailyTasks(): Promise<void> {

@@ -1,6 +1,7 @@
 import {
   DEFAULT_KERNEL_STATE,
   DEFAULT_RELATIONSHIP_GUIDE,
+  createDefaultEmotionalState,
   type AppStatus,
   type HistoryMessage,
   type KernelStateDocument,
@@ -123,7 +124,22 @@ export class RuntimeDataCoordinator {
         return;
       }
       if (patch.emotional) {
-        state.emotional = { ...state.emotional, ...patch.emotional };
+        state.emotional = {
+          ...state.emotional,
+          ...patch.emotional,
+          dimensions: patch.emotional.dimensions
+            ? { ...state.emotional.dimensions, ...patch.emotional.dimensions }
+            : state.emotional.dimensions,
+          ekman: patch.emotional.ekman
+            ? { ...state.emotional.ekman, ...patch.emotional.ekman }
+            : state.emotional.ekman
+        };
+      }
+      if (patch.personality) {
+        state.personality = { ...state.personality, ...patch.personality };
+      }
+      if (patch.ruminationQueue) {
+        state.ruminationQueue = patch.ruminationQueue.map((entry) => ({ ...entry }));
       }
       if (patch.relationship) {
         state.relationship = { ...state.relationship, ...patch.relationship };
@@ -180,11 +196,15 @@ export class RuntimeDataCoordinator {
     }
     if (section === "state") {
       this.input.stateStore.mutate((state) => {
-        state.emotional = { ...DEFAULT_KERNEL_STATE.emotional };
         state.relationship = { ...DEFAULT_KERNEL_STATE.relationship };
+        state.emotional = createDefaultEmotionalState(state.relationship.stage);
+        state.personality = { ...state.personality };
+        state.ruminationQueue = [];
         state.sessionReentry = DEFAULT_KERNEL_STATE.sessionReentry
           ? { ...DEFAULT_KERNEL_STATE.sessionReentry }
           : null;
+        state.lastDecayAt = DEFAULT_KERNEL_STATE.lastDecayAt;
+        state.lastDailyTaskDayKey = DEFAULT_KERNEL_STATE.lastDailyTaskDayKey;
       });
       await this.input.stateStore.flushIfDirty();
       return { accepted: true, message: "STATE 已恢复默认。" };

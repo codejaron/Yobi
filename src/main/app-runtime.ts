@@ -1025,6 +1025,10 @@ export class CompanionRuntime {
     previousConfig: AppConfig,
     nextConfig: AppConfig
   ): Promise<void> {
+    if (JSON.stringify(previousConfig.kernel.personality) !== JSON.stringify(nextConfig.kernel.personality)) {
+      this.kernel.syncPersonalityFromConfig();
+    }
+
     if (this.shouldRestartTelegram(previousConfig, nextConfig)) {
       await this.runConfigSideEffect("重启 Telegram", 8_000, async () => {
         await this.restartTelegram();

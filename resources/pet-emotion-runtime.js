@@ -1,5 +1,15 @@
 (function (global) {
-  const EMOTION_KEYS = ["mood", "energy", "connection", "curiosity", "confidence", "irritation"];
+  const EMOTION_KEYS = [
+    "pleasure",
+    "arousal",
+    "dominance",
+    "trust",
+    "happiness",
+    "sadness",
+    "anger",
+    "surprise",
+    "sessionWarmth"
+  ];
   const OPEN_EYE_SLOTS = new Set(["eyeOpenL", "eyeOpenR"]);
   const ANGLE_LIMIT_SLOTS = new Set(["angleY", "angleZ"]);
 
@@ -11,21 +21,38 @@
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9]/g, "");
-  const normalizeEmotion = (input, defaults) => ({
-    mood: clamp(safeNumber(input && input.mood, defaults.mood), -1, 1),
-    energy: clamp(safeNumber(input && input.energy, defaults.energy), 0, 1),
-    connection: clamp(safeNumber(input && input.connection, defaults.connection), 0, 1),
-    curiosity: clamp(safeNumber(input && input.curiosity, defaults.curiosity), 0, 1),
-    confidence: clamp(safeNumber(input && input.confidence, defaults.confidence), 0, 1),
-    irritation: clamp(safeNumber(input && input.irritation, defaults.irritation), 0, 1)
-  });
+  const normalizeEmotion = (input, defaults) => {
+    const dimensions = input && input.dimensions ? input.dimensions : input || {};
+    const defaultDimensions =
+      defaults && defaults.dimensions ? defaults.dimensions : defaults || {};
+    const ekman = input && input.ekman ? input.ekman : input || {};
+    const defaultEkman = defaults && defaults.ekman ? defaults.ekman : defaults || {};
+    return {
+      pleasure: clamp(safeNumber(dimensions.pleasure, defaultDimensions.pleasure), -1, 1),
+      arousal: clamp(safeNumber(dimensions.arousal, defaultDimensions.arousal), -1, 1),
+      dominance: clamp(safeNumber(dimensions.dominance, defaultDimensions.dominance), -1, 1),
+      trust: clamp(safeNumber(dimensions.trust, defaultDimensions.trust), 0, 1),
+      happiness: clamp(safeNumber(ekman.happiness, defaultEkman.happiness), 0, 1),
+      sadness: clamp(safeNumber(ekman.sadness, defaultEkman.sadness), 0, 1),
+      anger: clamp(safeNumber(ekman.anger, defaultEkman.anger), 0, 1),
+      surprise: clamp(safeNumber(ekman.surprise, defaultEkman.surprise), 0, 1),
+      sessionWarmth: clamp(
+        safeNumber(input && input.sessionWarmth, defaults.sessionWarmth),
+        0,
+        1
+      )
+    };
+  };
   const cloneEmotion = (emotion) => ({
-    mood: emotion.mood,
-    energy: emotion.energy,
-    connection: emotion.connection,
-    curiosity: emotion.curiosity,
-    confidence: emotion.confidence,
-    irritation: emotion.irritation
+    pleasure: emotion.pleasure,
+    arousal: emotion.arousal,
+    dominance: emotion.dominance,
+    trust: emotion.trust,
+    happiness: emotion.happiness,
+    sadness: emotion.sadness,
+    anger: emotion.anger,
+    surprise: emotion.surprise,
+    sessionWarmth: emotion.sessionWarmth
   });
   const approachExp = (current, target, perSecond, dtMs) => {
     const dtSeconds = Math.max(0, dtMs) / 1000;
@@ -122,22 +149,20 @@
   }
 
   function computeFeatures(emotion) {
-    const connectionSigned = clamp(emotion.connection * 2 - 1, -1, 1);
-    const curiositySigned = clamp(emotion.curiosity * 2 - 1, -1, 1);
-    const confidenceSigned = clamp(emotion.confidence * 2 - 1, -1, 1);
-    const energySigned = clamp(emotion.energy * 2 - 1, -1, 1);
+    const trustSigned = clamp(emotion.trust * 2 - 1, -1, 1);
+    const expressionScale = lerpRange(0.35, 1, emotion.sessionWarmth);
     return {
-      mood: emotion.mood,
-      moodPositive: Math.max(0, emotion.mood),
-      moodNegative: Math.max(0, -emotion.mood),
-      energySigned,
-      connectionSigned,
-      connectionPositive: Math.max(0, connectionSigned),
-      curiositySigned,
-      curiosityPositive: Math.max(0, curiositySigned),
-      confidenceSigned,
-      confidenceNegative: Math.max(0, -confidenceSigned),
-      irritation: emotion.irritation
+      pleasure: emotion.pleasure,
+      pleasurePositive: Math.max(0, emotion.pleasure),
+      pleasureNegative: Math.max(0, -emotion.pleasure),
+      arousal: emotion.arousal,
+      dominance: emotion.dominance,
+      trustSigned,
+      happiness: emotion.happiness,
+      sadness: emotion.sadness,
+      anger: emotion.anger,
+      surprise: emotion.surprise,
+      expressionScale
     };
   }
 

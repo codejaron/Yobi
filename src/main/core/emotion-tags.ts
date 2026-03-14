@@ -1,4 +1,4 @@
-import type { RealtimeEmotionalSignals, RealtimeUserMood } from "@shared/types";
+import { OPENFEELZ_EMOTION_LABELS, type RealtimeEmotionalSignals } from "@shared/types";
 
 export const EMOTION_TAGS = [
   "happy",
@@ -16,13 +16,12 @@ const EMOTION_PATTERN = "(happy|sad|shy|angry|surprised|excited|calm)";
 const THINK_TAG_NAME = "think";
 const SIGNALS_TAG_NAME = "signals";
 const SIGNALS_REQUIRED_KEYS = [
-  "user_mood",
+  "emotion_label",
+  "intensity",
   "engagement",
-  "trust_delta",
-  "friction",
-  "curiosity_trigger"
+  "trust_delta"
 ] as const;
-const SIGNALS_ALLOWED_MOODS: RealtimeUserMood[] = ["positive", "neutral", "negative", "mixed"];
+const SIGNALS_ALLOWED_LABELS = new Set<string>(OPENFEELZ_EMOTION_LABELS);
 
 function createEmotionTagRegex(flags: string): RegExp {
   return new RegExp(`<e:${EMOTION_PATTERN}\\s*\\/\\>`, flags);
@@ -88,26 +87,12 @@ function parseTagAttributes(tagText: string): Map<string, string> {
   return attributes;
 }
 
-function parseSignalBoolean(raw: string | undefined): boolean | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "true") {
-    return true;
-  }
-  if (normalized === "false") {
-    return false;
-  }
-  return null;
-}
-
-function parseSignalNumber(raw: string | undefined, min: number, max: number): number | null {
+function parseSignalNumber(raw: string | undefined): number | null {
   if (typeof raw !== "string" || !raw.trim()) {
     return null;
   }
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+  if (!Number.isFinite(parsed)) {
     return null;
   }
   return parsed;
@@ -129,37 +114,31 @@ function parseSignalsTag(tagText: string): RealtimeEmotionalSignals | null {
     }
   }
 
-  const userMoodValue = attributes.get("user_mood")?.toLowerCase() as RealtimeUserMood | undefined;
-  if (!userMoodValue || !SIGNALS_ALLOWED_MOODS.includes(userMoodValue)) {
+  const emotionLabel = attributes.get("emotion_label")?.trim().toLowerCase();
+  if (!emotionLabel || !SIGNALS_ALLOWED_LABELS.has(emotionLabel)) {
     return null;
   }
 
-  const engagement = parseSignalNumber(attributes.get("engagement"), 0, 1);
+  const intensity = parseSignalNumber(attributes.get("intensity"));
+  if (intensity === null) {
+    return null;
+  }
+
+  const engagement = parseSignalNumber(attributes.get("engagement"));
   if (engagement === null) {
     return null;
   }
 
-  const trustDelta = parseSignalNumber(attributes.get("trust_delta"), -0.3, 0.3);
+  const trustDelta = parseSignalNumber(attributes.get("trust_delta"));
   if (trustDelta === null) {
     return null;
   }
 
-  const friction = parseSignalBoolean(attributes.get("friction"));
-  if (friction === null) {
-    return null;
-  }
-
-  const curiosityTrigger = parseSignalBoolean(attributes.get("curiosity_trigger"));
-  if (curiosityTrigger === null) {
-    return null;
-  }
-
   return {
-    user_mood: userMoodValue,
-    engagement,
-    trust_delta: trustDelta,
-    friction,
-    curiosity_trigger: curiosityTrigger
+    emotion_label: emotionLabel,
+    intensity: Math.max(0, Math.min(1, intensity)),
+    engagement: Math.max(0, Math.min(1, engagement)),
+    trust_delta: Math.max(-0.3, Math.min(0.3, trustDelta))
   };
 }
 

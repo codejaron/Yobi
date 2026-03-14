@@ -12,6 +12,7 @@ import { assembleContext } from "../memory-v2/context-assembler.js";
 import { RuntimeDataCoordinator } from "../runtime/data-coordinator.js";
 import { ensureKernelBootstrap } from "../kernel/init.js";
 import {
+  createDefaultEmotionalState,
   DEFAULT_CONFIG,
   DEFAULT_KERNEL_STATE,
   DEFAULT_RELATIONSHIP_GUIDE,
@@ -606,13 +607,34 @@ test("assembleContext: emits structured STATE values with ranges", () => {
   const state = {
     ...DEFAULT_KERNEL_STATE,
     emotional: {
-      mood: 0.2,
-      energy: 0.83,
+      ...createDefaultEmotionalState("familiar"),
+      dimensions: {
+        pleasure: 0.2,
+        arousal: 0.18,
+        dominance: -0.2,
+        curiosity: 0.47,
+        energy: 0.83,
+        trust: 0.58
+      },
+      ekman: {
+        happiness: 0,
+        sadness: 0,
+        anger: 0.15,
+        fear: 0,
+        disgust: 0,
+        surprise: 0.12
+      },
       connection: 0.61,
-      curiosity: 0.47,
-      confidence: 0.58,
-      irritation: 0.15
+      sessionWarmth: 0.72
     },
+    ruminationQueue: [
+      {
+        label: "frustrated",
+        intensity: 0.8,
+        remainingStages: 3,
+        triggeredAt: new Date(0).toISOString()
+      }
+    ],
     sessionReentry: {
       active: true,
       gapHours: 27,
@@ -641,14 +663,20 @@ test("assembleContext: emits structured STATE values with ranges", () => {
   });
 
   assert.match(selected.system, /\[STATE\]/);
-  assert.match(selected.system, /mood=0.20 range=\[-1.00,1.00\] higher=more_positive/);
-  assert.match(selected.system, /energy=0.83 range=\[0.00,1.00\] higher=more_energetic/);
+  assert.match(selected.system, /relationship_stage=familiar/);
+  assert.match(selected.system, /pleasure=0.20 baseline=0.00 range=\[-1.00,1.00\]/);
+  assert.match(selected.system, /arousal=0.18 baseline=0.00 range=\[-1.00,1.00\]/);
+  assert.match(selected.system, /dominance=-0.20 baseline=0.00 range=\[-1.00,1.00\]/);
+  assert.match(selected.system, /trust=0.58 range=\[0.00,1.00\] higher=more_trusting/);
   assert.match(selected.system, /connection=0.61 range=\[0.00,1.00\] higher=more_connected/);
-  assert.match(selected.system, /curiosity=0.47 range=\[0.00,1.00\] higher=more_curious/);
-  assert.match(selected.system, /confidence=0.58 range=\[0.00,1.00\] higher=more_confident/);
-  assert.match(selected.system, /irritation=0.15 range=\[0.00,1.00\] higher=more_irritable/);
-  assert.match(selected.system, /session_reentry_active=true values=\[true,false\]/);
-  assert.match(selected.system, /session_reentry_gap_hours=27 range=\[0,\+inf\)/);
+  assert.match(selected.system, /sessionWarmth=0.72 range=\[0.00,1.00\] higher=warmer_session/);
+  assert.match(selected.system, /anger=0.15 range=\[0.00,1.00\]/);
+  assert.match(selected.system, /surprise=0.12 range=\[0.00,1.00\]/);
+  assert.match(selected.system, /active_ruminations=1 range=\[0,\+inf\)/);
+  assert.match(selected.system, /rumination_labels=\["frustrated"\]/);
+  assert.doesNotMatch(selected.system, /mood=/);
+  assert.doesNotMatch(selected.system, /confidence=/);
+  assert.doesNotMatch(selected.system, /irritation=/);
 });
 
 test("assembleContext: emits PROFILE block between STATE and MEMORY using selected fields", () => {
@@ -1009,7 +1037,7 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
   }
 });
 
-test("KernelEngine.onUserMessage: updates session reentry without directly changing emotional state", async () => {
+test("KernelEngine.onUserMessage: updates session reentry and resets sessionWarmth to stage baseline when no prior engagement exists", async () => {
   const paths = await createTempPaths("yobi-user-message-state-");
   try {
     const config = cloneConfig();
@@ -1021,12 +1049,25 @@ test("KernelEngine.onUserMessage: updates session reentry without directly chang
 
     stateStore.mutate((state) => {
       state.emotional = {
-        mood: 0.1,
-        energy: 0.72,
+        ...createDefaultEmotionalState("stranger"),
+        dimensions: {
+          pleasure: 0.1,
+          arousal: 0,
+          dominance: 0,
+          curiosity: 0.45,
+          energy: 0.72,
+          trust: 0.52
+        },
+        ekman: {
+          happiness: 0,
+          sadness: 0,
+          anger: 0.08,
+          fear: 0,
+          disgust: 0,
+          surprise: 0
+        },
         connection: 0.64,
-        curiosity: 0.45,
-        confidence: 0.52,
-        irritation: 0.08
+        sessionWarmth: 0.6
       };
     });
 
@@ -1058,15 +1099,74 @@ test("KernelEngine.onUserMessage: updates session reentry without directly chang
 
     const snapshot = stateStore.getSnapshot();
     assert.deepEqual(snapshot.emotional, {
-      mood: 0.1,
-      energy: 0.72,
+      dimensions: {
+        pleasure: 0.1,
+        arousal: 0,
+        dominance: 0,
+        curiosity: 0.45,
+        energy: 0.72,
+        trust: 0.52
+      },
+      ekman: {
+        happiness: 0,
+        sadness: 0,
+        anger: 0.08,
+        fear: 0,
+        disgust: 0,
+        surprise: 0
+      },
       connection: 0.64,
-      curiosity: 0.45,
-      confidence: 0.52,
-      irritation: 0.08
+      sessionWarmth: 0.2
     });
     assert.equal(snapshot.sessionReentry?.active, true);
     assert.equal(snapshot.sessionReentry?.gapHours, 84);
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("KernelEngine.onUserMessage: raises sessionWarmth using the latest engagement", async () => {
+  const paths = await createTempPaths("yobi-session-warmth-engagement-");
+  try {
+    const config = cloneConfig();
+    const memory = new YobiMemory(paths, () => config);
+    const stateStore = new StateStore(paths);
+    await memory.init();
+    await stateStore.init();
+
+    const engine = new KernelEngine({
+      paths,
+      memory,
+      stateStore,
+      getConfig: () => config,
+      resourceId: "main",
+      threadId: "main",
+      backgroundWorker: {
+        init: async () => undefined,
+        getStatus: () => ({ available: false, message: "stub" })
+      } as any,
+      queueHandlers: [],
+      proactiveRewriteHandler: {
+        rewrite: async () => null,
+        getWorkerStatus: () => ({ available: false, message: "stub" }),
+        getPauseReason: () => "stub"
+      }
+    });
+    await engine.init();
+
+    engine.onRealtimeEmotionalSignals({
+      emotion_label: "neutral",
+      intensity: 0.5,
+      engagement: 0.8,
+      trust_delta: 0
+    });
+    await engine.onUserMessage({
+      ts: "2026-03-13T12:00:00.000Z",
+      text: "嗯"
+    });
+
+    const snapshot = stateStore.getSnapshot();
+    assert.equal(snapshot.emotional.sessionWarmth, 0.24);
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }
