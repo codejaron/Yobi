@@ -33,11 +33,11 @@ export class StateStore {
       emotional: {
         ...this.state.emotional
       },
-      relationship: {
-        ...this.state.relationship
-      },
-      sessionReentry: this.state.sessionReentry ? { ...this.state.sessionReentry } : null,
-      lastDecayAt: this.state.lastDecayAt,
+    relationship: {
+      ...this.state.relationship
+    },
+    sessionReentry: this.state.sessionReentry ? { ...this.state.sessionReentry } : null,
+    lastDecayAt: this.state.lastDecayAt,
       lastDailyTaskDayKey: this.state.lastDailyTaskDayKey
     };
   }
@@ -136,7 +136,6 @@ function normalizeState(input: KernelStateDocument): KernelStateDocument {
       upgradeStreak: Math.max(0, Math.floor(toNumber(input.relationship?.upgradeStreak, 0))),
       downgradeStreak: Math.max(0, Math.floor(toNumber(input.relationship?.downgradeStreak, 0)))
     },
-    coldStart: typeof input.coldStart === "boolean" ? input.coldStart : DEFAULT_KERNEL_STATE.coldStart,
     lastDecayAt:
       typeof input.lastDecayAt === "string" && Number.isFinite(new Date(input.lastDecayAt).getTime())
         ? new Date(input.lastDecayAt).toISOString()

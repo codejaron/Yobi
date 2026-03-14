@@ -613,7 +613,6 @@ test("assembleContext: emits structured STATE values with ranges", () => {
       confidence: 0.58,
       irritation: 0.15
     },
-    coldStart: false,
     sessionReentry: {
       active: true,
       gapHours: 27,
@@ -648,9 +647,157 @@ test("assembleContext: emits structured STATE values with ranges", () => {
   assert.match(selected.system, /curiosity=0.47 range=\[0.00,1.00\] higher=more_curious/);
   assert.match(selected.system, /confidence=0.58 range=\[0.00,1.00\] higher=more_confident/);
   assert.match(selected.system, /irritation=0.15 range=\[0.00,1.00\] higher=more_irritable/);
-  assert.match(selected.system, /cold_start=false values=\[true,false\]/);
   assert.match(selected.system, /session_reentry_active=true values=\[true,false\]/);
   assert.match(selected.system, /session_reentry_gap_hours=27 range=\[0,\+inf\)/);
+});
+
+test("assembleContext: emits PROFILE block between STATE and MEMORY using selected fields", () => {
+  const selected = assembleContext({
+    soul: "只保留 soul",
+    relationship: DEFAULT_RELATIONSHIP_GUIDE,
+    stage: "stranger",
+    state: DEFAULT_KERNEL_STATE,
+    profile: {
+      ...DEFAULT_USER_PROFILE,
+      communication: {
+        ...DEFAULT_USER_PROFILE.communication,
+        avg_message_length: "long",
+        emoji_usage: "occasional",
+        humor_receptivity: 0.7,
+        advice_receptivity: 0.4,
+        emotional_openness: 0.6,
+        preferred_comfort_style: "倾听型",
+        catchphrases: ["先别急", "行吧"]
+      },
+      patterns: {
+        ...DEFAULT_USER_PROFILE.patterns,
+        active_hours: "22:00-01:00",
+        topic_preferences: ["技术", "音乐"]
+      },
+      interaction_notes: {
+        ...DEFAULT_USER_PROFILE.interaction_notes,
+        sensitive_topics: ["裁员", "家人健康"],
+        what_works: ["直接给结论", "少寒暄"],
+        what_fails: ["追问太多"]
+      },
+      pending_confirmations: [
+        {
+          id: "pending-1",
+          field: "identity.timezone",
+          value: "Asia/Shanghai",
+          needs_confirmation: true,
+          confirmed: false,
+          created_at: new Date().toISOString()
+        }
+      ]
+    },
+    buffer: [],
+    facts: [],
+    episodes: [],
+    maxTokens: 6000,
+    memoryFloorTokens: 1200
+  });
+
+  assert.match(selected.system, /\[STATE\][\s\S]*\[PROFILE\][\s\S]*\[MEMORY\]/);
+  assert.match(selected.system, /消息风格=long/);
+  assert.match(selected.system, /emoji=occasional/);
+  assert.match(selected.system, /幽默接受度=0.70/);
+  assert.match(selected.system, /建议接受度=0.40/);
+  assert.match(selected.system, /情感开放度=0.60/);
+  assert.match(selected.system, /安慰偏好=倾听型/);
+  assert.match(selected.system, /活跃时段=22:00-01:00/);
+  assert.match(selected.system, /敏感话题=\["裁员","家人健康"\]/);
+  assert.match(selected.system, /有效策略=\["直接给结论","少寒暄"\]/);
+  assert.match(selected.system, /无效策略=\["追问太多"\]/);
+  assert.match(selected.system, /口头禅=\["先别急","行吧"\]/);
+  assert.doesNotMatch(selected.system, /topic_preferences/);
+  assert.doesNotMatch(selected.system, /pending_confirmations/);
+  assert.doesNotMatch(selected.system, /trust_areas/);
+});
+
+test("assembleContext: reserves separate budgets for recent messages facts and episodes", () => {
+  const longText = "这是一段很长的内容，用来稳定吃掉预算并验证分段预算不会互相饿死。".repeat(12);
+  const selected = assembleContext({
+    soul: "只保留 soul",
+    relationship: DEFAULT_RELATIONSHIP_GUIDE,
+    stage: "stranger",
+    state: DEFAULT_KERNEL_STATE,
+    profile: DEFAULT_USER_PROFILE,
+    buffer: Array.from({ length: 12 }, (_, index) => ({
+      id: `msg-${String(index + 1).padStart(6, "0")}`,
+      ts: new Date().toISOString(),
+      role: index % 2 === 0 ? "user" : "assistant",
+      channel: "console" as const,
+      text: `第 ${index + 1} 条消息 ${longText}`
+    })),
+    facts: Array.from({ length: 8 }, (_, index) => ({
+      id: `fact-${index + 1}`,
+      entity: "用户",
+      key: `事实.${index + 1}`,
+      value: `${longText}${index + 1}`,
+      category: "event" as const,
+      confidence: 0.8,
+      source: "test",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      ttl_class: "active" as const,
+      last_accessed_at: new Date().toISOString(),
+      superseded_by: null
+    })),
+    episodes: Array.from({ length: 6 }, (_, index) => ({
+      id: `episode-${index + 1}`,
+      date: `2026-03-${String(index + 1).padStart(2, "0")}`,
+      summary: `第 ${index + 1} 天总结 ${longText}`,
+      emotional_context: {
+        user_mood: "unknown",
+        yobi_mood: "neutral"
+      },
+      unresolved: [`待解决问题 ${index + 1} ${longText}`],
+      significance: 0.8,
+      source_ranges: [`day:2026-03-${String(index + 1).padStart(2, "0")}`],
+      updated_at: new Date().toISOString()
+    })),
+    maxTokens: 3200,
+    memoryFloorTokens: 1200,
+    externalFixedTokens: 200
+  });
+
+  assert.ok(selected.maxRecentMessages > 0);
+  assert.ok(selected.selectedFacts.length > 0);
+  assert.ok(selected.selectedEpisodes.length > 0);
+});
+
+test("assembleContext: external fixed tokens reduce available recent message budget", () => {
+  const longMessage = "最近消息预算需要独立测一下。".repeat(20);
+  const baseInput = {
+    soul: "只保留 soul",
+    relationship: DEFAULT_RELATIONSHIP_GUIDE,
+    stage: "stranger" as const,
+    state: DEFAULT_KERNEL_STATE,
+    profile: DEFAULT_USER_PROFILE,
+    buffer: Array.from({ length: 16 }, (_, index) => ({
+      id: `msg-${String(index + 1).padStart(6, "0")}`,
+      ts: new Date().toISOString(),
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      channel: "console" as const,
+      text: `${index + 1}:${longMessage}`
+    })),
+    facts: [],
+    episodes: [],
+    maxTokens: 5000,
+    memoryFloorTokens: 1200
+  };
+
+  const withoutExternalFixed = assembleContext({
+    ...baseInput,
+    externalFixedTokens: 0
+  });
+  const withExternalFixed = assembleContext({
+    ...baseInput,
+    externalFixedTokens: 1200
+  });
+
+  assert.ok(withExternalFixed.maxRecentMessages < withoutExternalFixed.maxRecentMessages);
 });
 
 test("ensureKernelBootstrap: creates soul.md and relationship.json without persona.md", async () => {
@@ -857,6 +1004,115 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
     const queued = (engine as any).taskQueue.list();
     assert.equal(queued.length, 3);
     assert.ok(queued.every((task: PendingTask) => task.payload.dayKey === "2026-03-09"));
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("KernelEngine.onUserMessage: updates session reentry without directly changing emotional state", async () => {
+  const paths = await createTempPaths("yobi-user-message-state-");
+  try {
+    const config = cloneConfig();
+    config.kernel.sessionReentryGapHours = 6;
+    const memory = new YobiMemory(paths, () => config);
+    const stateStore = new StateStore(paths);
+    await memory.init();
+    await stateStore.init();
+
+    stateStore.mutate((state) => {
+      state.emotional = {
+        mood: 0.1,
+        energy: 0.72,
+        connection: 0.64,
+        curiosity: 0.45,
+        confidence: 0.52,
+        irritation: 0.08
+      };
+    });
+
+    const engine = new KernelEngine({
+      paths,
+      memory,
+      stateStore,
+      getConfig: () => config,
+      resourceId: "main",
+      threadId: "main",
+      backgroundWorker: {
+        init: async () => undefined,
+        getStatus: () => ({ available: false, message: "stub" })
+      } as any,
+      queueHandlers: [],
+      proactiveRewriteHandler: {
+        rewrite: async () => null,
+        getWorkerStatus: () => ({ available: false, message: "stub" }),
+        getPauseReason: () => "stub"
+      }
+    });
+    await engine.init();
+
+    engine.setLastUserMessageAt("2026-03-10T00:00:00.000Z");
+    await engine.onUserMessage({
+      ts: "2026-03-13T12:00:00.000Z",
+      text: "嗯"
+    });
+
+    const snapshot = stateStore.getSnapshot();
+    assert.deepEqual(snapshot.emotional, {
+      mood: 0.1,
+      energy: 0.72,
+      connection: 0.64,
+      curiosity: 0.45,
+      confidence: 0.52,
+      irritation: 0.08
+    });
+    assert.equal(snapshot.sessionReentry?.active, true);
+    assert.equal(snapshot.sessionReentry?.gapHours, 84);
+  } finally {
+    await fs.rm(paths.baseDir, { recursive: true, force: true });
+  }
+});
+
+test("KernelEngine.maybeEmitProactiveMessage: does not send cold-start greeting when user history is empty", async () => {
+  const paths = await createTempPaths("yobi-no-cold-start-greeting-");
+  try {
+    const config = cloneConfig();
+    config.proactive.enabled = true;
+    config.proactive.coldStartDelayMs = 0;
+    config.proactive.cooldownMs = 0;
+    config.proactive.silenceThresholdMs = 1;
+    config.proactive.quietHours.enabled = false;
+    const memory = new YobiMemory(paths, () => config);
+    const stateStore = new StateStore(paths);
+    await memory.init();
+    await stateStore.init();
+
+    const emitted: string[] = [];
+    const engine = new KernelEngine({
+      paths,
+      memory,
+      stateStore,
+      getConfig: () => config,
+      resourceId: "main",
+      threadId: "main",
+      backgroundWorker: {
+        init: async () => undefined,
+        getStatus: () => ({ available: false, message: "stub" })
+      } as any,
+      queueHandlers: [],
+      proactiveRewriteHandler: {
+        rewrite: async ({ message }: { message: string }) => message,
+        getWorkerStatus: () => ({ available: true, message: "stub" }),
+        getPauseReason: () => null
+      },
+      onProactiveMessage: async ({ message }) => {
+        emitted.push(message);
+      }
+    });
+    await engine.init();
+
+    await (engine as any).maybeEmitProactiveMessage();
+
+    assert.deepEqual(emitted, []);
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }

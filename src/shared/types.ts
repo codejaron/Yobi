@@ -938,7 +938,6 @@ export interface RelationshipState {
 export interface KernelStateDocument {
   emotional: EmotionalState;
   relationship: RelationshipState;
-  coldStart: boolean;
   lastDecayAt: string | null;
   lastDailyTaskDayKey?: string | null;
   sessionReentry?: {
@@ -1133,7 +1132,6 @@ export interface KernelStatus {
   queueDepth: number;
   lastTickAt: string | null;
   stage: RelationshipStage;
-  coldStart: boolean;
   workerAvailable: boolean;
   workerMessage: string;
   proactivePausedReason: string | null;
@@ -1201,7 +1199,6 @@ export const DEFAULT_KERNEL_STATE: KernelStateDocument = {
     upgradeStreak: 0,
     downgradeStreak: 0
   },
-  coldStart: true,
   lastDecayAt: null,
   lastDailyTaskDayKey: null,
   sessionReentry: null,

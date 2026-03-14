@@ -186,3 +186,15 @@ test("applyElapsedEmotionalDecay: 按时间向默认基线指数回归", () => {
   assert.ok(next.irritation < 0.4);
   assert.ok(next.irritation > 0.1);
 });
+
+test("applyElapsedEmotionalDecay: connection 在 48 小时半衰期后回到一半增量", () => {
+  const next = applyElapsedEmotionalDecay(
+    {
+      ...baseEmotional,
+      connection: 1
+    },
+    48 * 60 * 60
+  );
+
+  assertApprox(next.connection, 0.625);
+});

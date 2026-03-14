@@ -128,9 +128,6 @@ export class RuntimeDataCoordinator {
       if (patch.relationship) {
         state.relationship = { ...state.relationship, ...patch.relationship };
       }
-      if (typeof patch.coldStart === "boolean") {
-        state.coldStart = patch.coldStart;
-      }
       if (patch.sessionReentry !== undefined) {
         state.sessionReentry = patch.sessionReentry
           ? { ...state.sessionReentry, ...patch.sessionReentry }
@@ -185,7 +182,6 @@ export class RuntimeDataCoordinator {
       this.input.stateStore.mutate((state) => {
         state.emotional = { ...DEFAULT_KERNEL_STATE.emotional };
         state.relationship = { ...DEFAULT_KERNEL_STATE.relationship };
-        state.coldStart = DEFAULT_KERNEL_STATE.coldStart;
         state.sessionReentry = DEFAULT_KERNEL_STATE.sessionReentry
           ? { ...DEFAULT_KERNEL_STATE.sessionReentry }
           : null;

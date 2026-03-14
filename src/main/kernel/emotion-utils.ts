@@ -8,7 +8,7 @@ import {
 const EMOTIONAL_HALF_LIFE_SECONDS = {
   mood: 12 * 3600,
   energy: 8 * 3600,
-  connection: 72 * 3600,
+  connection: 48 * 3600,
   curiosity: 24 * 3600,
   confidence: 48 * 3600,
   irritation: 4 * 3600
@@ -24,22 +24,6 @@ export function clampRange(value: number, min: number, max: number): number {
 
 export function clampAbsDelta(value: number, maxAbs: number): number {
   return clampRange(value, -Math.abs(maxAbs), Math.abs(maxAbs));
-}
-
-export function computeMessageCadenceScale(gapMs: number | null): number {
-  if (gapMs === null) {
-    return 1;
-  }
-  const minGapMs = 2 * 60_000;
-  const maxGapMs = 10 * 60_000;
-  if (gapMs <= minGapMs) {
-    return 0.3;
-  }
-  if (gapMs >= maxGapMs) {
-    return 1;
-  }
-  const ratio = (gapMs - minGapMs) / Math.max(1, maxGapMs - minGapMs);
-  return clampRange(0.3 + ratio * 0.7, 0.3, 1);
 }
 
 export function applyElapsedEmotionalDecay(emotional: EmotionalState, deltaSeconds: number): EmotionalState {

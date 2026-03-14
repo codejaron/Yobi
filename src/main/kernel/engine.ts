@@ -14,15 +14,12 @@ import { splitExtractionWindows } from "@main/memory-v2/extraction-runner";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
 import {
   applyElapsedEmotionalDecay,
-  applyRealtimeEmotionalSignals,
-  computeMessageCadenceScale,
-  clamp01
+  applyRealtimeEmotionalSignals
 } from "./emotion-utils";
 import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, isWithinQuietHours, toDayKey } from "./relationship-utils";
 import type { KernelQueueTaskHandler, ProactiveRewriteHandler } from "./task-handlers";
 
 export {
-  computeMessageCadenceScale,
   applyElapsedEmotionalDecay,
   applyRealtimeEmotionalSignals,
   computeSignalAgeScale,
@@ -100,7 +97,6 @@ export class KernelEngine {
       queueDepth: this.events.size() + this.taskQueue.depth(),
       lastTickAt: this.lastTickAt,
       stage: snapshot.relationship.stage,
-      coldStart: snapshot.coldStart,
       workerAvailable: worker.available,
       workerMessage: worker.message,
       proactivePausedReason: this.input.proactiveRewriteHandler.getPauseReason()
@@ -258,13 +254,9 @@ export class KernelEngine {
     const lastTs = this.lastUserMessageAt ? new Date(this.lastUserMessageAt).getTime() : 0;
     const gapMs = lastTs > 0 ? Math.max(0, currentTs - lastTs) : null;
     const gapHours = typeof gapMs === "number" ? gapMs / (3600 * 1000) : 0;
-    const cadenceScale = computeMessageCadenceScale(gapMs);
     this.lastUserMessageAt = ts;
 
     this.input.stateStore.mutate((state) => {
-      state.emotional.connection = clamp01(state.emotional.connection + 0.08 * cadenceScale);
-      state.emotional.energy = clamp01(state.emotional.energy + 0.03 * cadenceScale);
-      state.coldStart = false;
       const reentryThreshold = this.input.getConfig().kernel.sessionReentryGapHours;
       if (typeof gapMs === "number" && gapHours >= reentryThreshold) {
         state.sessionReentry = {
@@ -466,6 +458,10 @@ export class KernelEngine {
       return;
     }
 
+    if (!this.lastUserMessageAt) {
+      return;
+    }
+
     const snapshot = this.input.stateStore.getSnapshot();
 
     const recentHistory = await this.input.memory.listHistory({
@@ -498,14 +494,6 @@ export class KernelEngine {
       this.lastProactiveAt = new Date().toISOString();
       return true;
     };
-
-    if (!this.lastUserMessageAt) {
-      if (!snapshot.coldStart) {
-        return;
-      }
-      await tryEmit("我是 Yobi，想和你打个招呼");
-      return;
-    }
 
     const silenceMs = now - new Date(this.lastUserMessageAt).getTime();
     if (silenceMs < config.proactive.silenceThresholdMs) {

@@ -27,6 +27,7 @@ import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
 import { assembleContext } from "@main/memory-v2/context-assembler";
 import { extractQueryTerms, matchEpisodes } from "@main/memory-v2/retrieval";
+import { estimateTokenCount } from "@main/memory-v2/token-utils";
 import { loadRelationshipGuide } from "@main/relationship/guide-store";
 import type { StateStore } from "@main/kernel/state-store";
 import { CompanionPaths } from "@main/storage/paths";
@@ -209,6 +210,10 @@ export class ConversationEngine {
       this.memory.listFacts(),
       this.memory.listRecentEpisodes(30)
     ]);
+    const skillCatalog = this.skillManager.getCatalogPrompt(10_000);
+    if (skillCatalog.summary.enabledCount > 0) {
+      input.stream?.onSkillsCatalog?.(skillCatalog.summary);
+    }
     const stateSnapshot = this.stateStore.getSnapshot();
     const buffer = await this.memory.listRecentBufferMessages(config.memory.recentMessages);
     const queryTexts = [
@@ -226,6 +231,13 @@ export class ConversationEngine {
       }),
       Promise.resolve(matchEpisodes(episodes, extractQueryTerms(queryTexts), 8))
     ]);
+    const externalPromptBlocks = [
+      skillCatalog.summary.enabledCount > 0 ? skillCatalog.prompt : "",
+      buildLocalNowPrompt(),
+      buildRealtimeSignalContractPrompt(),
+      input.voiceContext ? buildVoiceInputContextPrompt(input.voiceContext) : "",
+      input.photoUrl ? `用户这轮附带图片 URL: ${input.photoUrl}` : ""
+    ].filter(Boolean);
     const assembled = assembleContext({
       soul: soul.trim(),
       relationship,
@@ -236,25 +248,17 @@ export class ConversationEngine {
       facts: factCandidates.map((row) => row.fact),
       episodes: episodeCandidates.map((row) => row.episode),
       maxTokens: Math.min(24_000, Math.max(4_000, config.memory.context.maxPromptTokens || 8_000)),
-      memoryFloorTokens: config.memory.context.memoryFloorTokens
+      memoryFloorTokens: config.memory.context.memoryFloorTokens,
+      externalFixedTokens: estimateTokenCount(externalPromptBlocks.join("\n\n"))
     });
 
     if (assembled.selectedFacts.length > 0) {
       await this.memory.touchFacts(assembled.selectedFacts.map((fact) => fact.id));
     }
 
-    const skillCatalog = this.skillManager.getCatalogPrompt(10_000);
-    if (skillCatalog.summary.enabledCount > 0) {
-      input.stream?.onSkillsCatalog?.(skillCatalog.summary);
-    }
-
     const system = [
       assembled.system,
-      skillCatalog.summary.enabledCount > 0 ? skillCatalog.prompt : "",
-      buildLocalNowPrompt(),
-      buildRealtimeSignalContractPrompt(),
-      input.voiceContext ? buildVoiceInputContextPrompt(input.voiceContext) : "",
-      input.photoUrl ? `\n用户这轮附带图片 URL: ${input.photoUrl}` : ""
+      ...externalPromptBlocks
     ]
       .filter(Boolean)
       .join("\n\n");
