@@ -124,6 +124,7 @@ export class RealtimeVoiceService {
   private ttsSequence = Promise.resolve();
   private pendingSynthesisCount = 0;
   private pendingPlaybackTexts = new Map<string, string>();
+  private playbackGeneration = 0;
   private playedChunkIds = new Set<string>();
   private llmFinished = false;
   private llmVisibleText = "";
@@ -768,6 +769,7 @@ export class RealtimeVoiceService {
     this.ttsSequence = Promise.resolve();
     this.pendingPlaybackTexts.clear();
     this.playedChunkIds.clear();
+    const playbackGeneration = this.beginPlaybackGeneration();
 
     const chunker = new SentenceChunkBuffer({
       firstChunkMinChars: config.realtimeVoice.firstChunkStrategy === "aggressive" ? 6 : 12,
@@ -819,7 +821,7 @@ export class RealtimeVoiceService {
               });
               this.emitState();
               for (const chunk of chunker.push(delta)) {
-                void this.enqueueTtsChunk(chunk, ttsSession);
+                void this.enqueueTtsChunk(chunk, ttsSession, playbackGeneration);
               }
             },
             onVisibleTextFinal: (visibleText) => {
@@ -832,7 +834,7 @@ export class RealtimeVoiceService {
         });
 
         for (const chunk of chunker.flush()) {
-          await this.enqueueTtsChunk(chunk, ttsSession);
+          await this.enqueueTtsChunk(chunk, ttsSession, playbackGeneration);
         }
 
         this.llmVisibleText = finalText;
@@ -868,16 +870,28 @@ export class RealtimeVoiceService {
     await this.responseSequence;
   }
 
-  private async enqueueTtsChunk(text: string, session: StreamingTtsSession): Promise<void> {
+  private async enqueueTtsChunk(
+    text: string,
+    session: StreamingTtsSession,
+    playbackGeneration = this.playbackGeneration
+  ): Promise<void> {
     const normalized = text.trim();
     if (!normalized) {
       return;
     }
 
     this.ttsSequence = this.ttsSequence.then(async () => {
+      if (!this.isPlaybackGenerationActive(session, playbackGeneration)) {
+        return;
+      }
+
       this.pendingSynthesisCount += 1;
       try {
         const audio = await session.synthesizeChunk(normalized);
+        if (!this.isPlaybackGenerationActive(session, playbackGeneration)) {
+          return;
+        }
+
         const id = `voice-playback-${randomUUID()}`;
         this.pendingPlaybackTexts.set(id, normalized);
         await this.host.send({
@@ -983,16 +997,36 @@ export class RealtimeVoiceService {
       this.replyAbortController.abort();
     }
     this.replyAbortController = null;
+    const activeTtsSession = this.activeTtsSession;
+    this.activeTtsSession = null;
+    this.playbackGeneration += 1;
     await this.persistInterruptedAssistantTurn();
     this.llmFinished = true;
     this.ttsSequence = Promise.resolve();
     this.pendingSynthesisCount = 0;
     this.pendingPlaybackTexts.clear();
+    await activeTtsSession?.close().catch(() => undefined);
     this.state = {
       ...this.state,
       lastInterruptReason: reason,
       updatedAt: nowIso()
     };
+  }
+
+  private beginPlaybackGeneration(): number {
+    this.playbackGeneration += 1;
+    return this.playbackGeneration;
+  }
+
+  private isPlaybackGenerationActive(
+    session: StreamingTtsSession,
+    playbackGeneration: number
+  ): boolean {
+    return (
+      this.playbackGeneration === playbackGeneration &&
+      this.activeTtsSession === session &&
+      this.state.sessionId !== null
+    );
   }
 
   private applyState(event: Parameters<typeof reduceVoiceSessionState>[1]): void {

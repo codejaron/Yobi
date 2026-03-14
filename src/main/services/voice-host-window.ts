@@ -69,7 +69,9 @@ export class VoiceHostWindowController {
   }
 
   async send(command: VoiceHostCommand): Promise<void> {
-    await this.ensureReady();
+    if (!this.window || this.window.isDestroyed()) {
+      await this.ensureReady();
+    }
     this.window?.webContents.send(this.commandChannel, command);
   }
 

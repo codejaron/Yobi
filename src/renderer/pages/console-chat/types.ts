@@ -15,6 +15,7 @@ export interface ConsoleMessage {
   role: MessageRole;
   text: string;
   state: MessageState;
+  transientOrigin?: "voice";
   process?: AssistantTurnProcess;
   source?: "yobi";
   historyMode?: boolean;

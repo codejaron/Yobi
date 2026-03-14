@@ -9,6 +9,11 @@ import type {
   VoiceSessionState
 } from "@shared/types";
 import {
+  applyVoiceSessionEventToConsoleChatLiveVoiceState,
+  createConsoleChatLiveVoiceState,
+  type ConsoleChatLiveVoiceMessage
+} from "@shared/console-chat-live-voice";
+import {
   applyConsoleEventToAssistantProcess,
   createAssistantTurnProcess,
   hasAssistantVisibleContent
@@ -108,6 +113,100 @@ function readScrollMetrics(node: HTMLDivElement) {
   };
 }
 
+function createTransientVoiceMessage(message: ConsoleChatLiveVoiceMessage): ConsoleMessage {
+  return {
+    ...message,
+    transientOrigin: "voice"
+  };
+}
+
+function reconcileTransientVoiceMessages(
+  current: ConsoleMessage[],
+  nextVoiceMessages: ConsoleChatLiveVoiceMessage[]
+): ConsoleMessage[] {
+  const nextById = new Map(
+    nextVoiceMessages.map((message) => [message.id, createTransientVoiceMessage(message)])
+  );
+  const emitted = new Set<string>();
+  const next: ConsoleMessage[] = [];
+
+  for (const message of current) {
+    if (message.transientOrigin !== "voice") {
+      next.push(message);
+      continue;
+    }
+
+    const replacement = nextById.get(message.id);
+    if (!replacement) {
+      continue;
+    }
+
+    next.push(replacement);
+    emitted.add(message.id);
+  }
+
+  for (const message of nextVoiceMessages) {
+    if (emitted.has(message.id)) {
+      continue;
+    }
+
+    next.push(createTransientVoiceMessage(message));
+  }
+
+  return next;
+}
+
+function dropVoiceMessagesDuplicatedInHistory(
+  historyMessages: ConsoleMessage[],
+  liveMessages: ConsoleMessage[]
+): ConsoleMessage[] {
+  const doneVoiceMessages = liveMessages.filter(
+    (message) => message.transientOrigin === "voice" && message.state === "done"
+  );
+  if (doneVoiceMessages.length === 0 || historyMessages.length === 0) {
+    return liveMessages;
+  }
+
+  let duplicateCount = 0;
+  const maxMatchLength = Math.min(doneVoiceMessages.length, historyMessages.length);
+  for (let length = 1; length <= maxMatchLength; length += 1) {
+    let matches = true;
+    for (let index = 0; index < length; index += 1) {
+      const liveMessage = doneVoiceMessages[index];
+      const historyMessage = historyMessages[historyMessages.length - length + index];
+      if (
+        liveMessage?.role !== historyMessage?.role ||
+        liveMessage?.text !== historyMessage?.text
+      ) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      duplicateCount = length;
+    }
+  }
+
+  if (duplicateCount === 0) {
+    return liveMessages;
+  }
+
+  let remainingDuplicates = duplicateCount;
+  return liveMessages.filter((message) => {
+    if (
+      remainingDuplicates > 0 &&
+      message.transientOrigin === "voice" &&
+      message.state === "done"
+    ) {
+      remainingDuplicates -= 1;
+      return false;
+    }
+
+    return true;
+  });
+}
+
 export function useConsoleChatController(): ConsoleChatController {
   const [liveMessages, setLiveMessages] = useState<ConsoleMessage[]>([]);
   const [persistedMessages, setPersistedMessages] = useState<HistoryMessage[]>([]);
@@ -134,6 +233,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const autoFollowRef = useRef(true);
   const loadingMoreHistoryRef = useRef(false);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
+  const liveVoiceStateRef = useRef(createConsoleChatLiveVoiceState());
 
   const upsertAssistantMessage = useCallback(
     (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
@@ -424,10 +524,23 @@ export function useConsoleChatController(): ConsoleChatController {
     }
   }, [micState, startMicRecording, stopMicRecording]);
 
-  const handleVoiceSessionEvent = useCallback((event: VoiceSessionEvent) => {
+  const applyVoiceSessionEvent = useCallback((event: VoiceSessionEvent) => {
     if (event.type === "state") {
       setVoiceSession(event.state);
     }
+
+    const nextVoiceState = applyVoiceSessionEventToConsoleChatLiveVoiceState(
+      liveVoiceStateRef.current,
+      event
+    );
+    if (nextVoiceState === liveVoiceStateRef.current) {
+      return;
+    }
+
+    liveVoiceStateRef.current = nextVoiceState;
+    setLiveMessages((current) =>
+      reconcileTransientVoiceMessages(current, nextVoiceState.messages)
+    );
   }, []);
 
   const clearHistory = useCallback(async () => {
@@ -443,6 +556,7 @@ export function useConsoleChatController(): ConsoleChatController {
     setClearingHistory(true);
     try {
       await window.companion.clearHistory();
+      liveVoiceStateRef.current = createConsoleChatLiveVoiceState();
       setPersistedMessages([]);
       setLiveMessages([]);
       setHistoryHasMore(false);
@@ -543,13 +657,17 @@ export function useConsoleChatController(): ConsoleChatController {
 
   useEffect(() => {
     void window.companion.getVoiceSessionState().then((state) => {
-      setVoiceSession(state);
+      applyVoiceSessionEvent({
+        type: "state",
+        state,
+        timestamp: new Date().toISOString()
+      });
     }).catch(() => undefined);
 
     return window.companion.onVoiceSessionEvent((event) => {
-      handleVoiceSessionEvent(event);
+      applyVoiceSessionEvent(event);
     });
-  }, [handleVoiceSessionEvent]);
+  }, [applyVoiceSessionEvent]);
 
   const toggleVoiceSession = useCallback(async () => {
     if (voiceSession?.sessionId) {
@@ -560,8 +678,12 @@ export function useConsoleChatController(): ConsoleChatController {
     const started = await window.companion.startVoiceSession({
       mode: "free"
     });
-    setVoiceSession(started);
-  }, [voiceSession?.sessionId]);
+    applyVoiceSessionEvent({
+      type: "state",
+      state: started,
+      timestamp: new Date().toISOString()
+    });
+  }, [applyVoiceSessionEvent, voiceSession?.sessionId]);
 
   const interruptVoiceSession = useCallback(async () => {
     await window.companion.interruptVoiceSession({
@@ -764,8 +886,9 @@ export function useConsoleChatController(): ConsoleChatController {
     const historyMessages = persistedMessages
       .filter((item) => item.role === "user" || item.role === "assistant")
       .map((item) => createHistoryMessage(item));
+    const visibleLiveMessages = dropVoiceMessagesDuplicatedInHistory(historyMessages, liveMessages);
 
-    return [...historyMessages, ...liveMessages];
+    return [...historyMessages, ...visibleLiveMessages];
   }, [persistedMessages, liveMessages]);
 
   return {
