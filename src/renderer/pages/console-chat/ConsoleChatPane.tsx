@@ -236,7 +236,7 @@ export function ConsoleChatPane({
           <div ref={chatBottomRef} />
         </div>
 
-        <div className="relative border-t border-border/70 pt-4">
+        <div className="relative border-t border-border/70 px-1 pb-1 pt-4">
           {pendingApproval ? (
             <div className="status-surface status-surface--warn absolute bottom-full left-0 right-0 mb-2 rounded-xl p-3 shadow-lg">
               <p className="text-sm font-medium">需要确认命令：{pendingApproval.toolName}</p>
