@@ -1,6 +1,6 @@
 {
   "name": "yobi",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Desktop AI companion powered by Telegram",
   "license": "AGPL-3.0-only",
   "main": "out/main/index.js",
