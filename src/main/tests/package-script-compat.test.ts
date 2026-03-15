@@ -11,5 +11,7 @@ test("test script uses cross-platform cleanup", () => {
 
   const testScript = pkg.scripts?.test ?? "";
   assert.match(testScript, /\bnode\s+\.\/scripts\/clean-test-output\.mjs\b/);
+  assert.match(testScript, /\bnode\s+\.\/scripts\/run-node-tests\.mjs\b/);
   assert.doesNotMatch(testScript, /\brm\s+-rf\b/);
+  assert.doesNotMatch(testScript, /out\/src\/main\/tests\/\*\.test\.js/);
 });

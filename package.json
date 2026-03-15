@@ -15,7 +15,7 @@
     "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
     "dist:win": "npm run build && electron-builder --win nsis --publish never",
     "preview": "electron-vite preview",
-    "test": "node ./scripts/clean-test-output.mjs && tsc -p tsconfig.node.json && node --experimental-specifier-resolution=node --loader ./scripts/alias-loader.mjs --test out/src/main/tests/*.test.js",
+    "test": "node ./scripts/clean-test-output.mjs && tsc -p tsconfig.node.json && node ./scripts/run-node-tests.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
