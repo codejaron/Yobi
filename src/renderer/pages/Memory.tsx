@@ -317,48 +317,48 @@ function StateOverview({
     {
       title: "关系",
       items: [
-        stateField("关系阶段", state.relationship.stage, "当前关系阶段。"),
-        stateField("升级计数", state.relationship.upgradeStreak, "关系升级连续命中次数。"),
-        stateField("降级计数", state.relationship.downgradeStreak, "关系降级连续命中次数。"),
-        stateField("连接感", formatNumber(state.emotional.connection), "关系亲近感，范围 0 到 1。"),
-        stateField("信任", formatNumber(state.emotional.dimensions.trust), "当前互动中的信任程度，范围 0 到 1。"),
-        stateField("会话热度", formatNumber(state.emotional.sessionWarmth), "这次会话内的临时熟络度，不持久化。")
+        stateField("关系阶段", state.relationship.stage, "Yobi 现在把你们的关系看在哪个阶段。"),
+        stateField("升级计数", state.relationship.upgradeStreak, "关系最近连续朝更亲近方向走了多少次。"),
+        stateField("降级计数", state.relationship.downgradeStreak, "关系最近连续朝更疏远方向走了多少次。"),
+        stateField("连接感", formatNumber(state.emotional.connection), "Yobi 现在觉得和你有多亲近、多有连结。"),
+        stateField("信任", formatNumber(state.emotional.dimensions.trust), "Yobi 现在对这轮互动有多放心、多愿意把话接住。"),
+        stateField("会话热度", formatNumber(state.emotional.sessionWarmth), "这次会话里临时熟络了多少，越高说明聊得越自然、越热。")
       ]
     },
     {
       title: "PAD",
       items: [
-        stateField("愉悦度", formatSignedNumber(state.emotional.dimensions.pleasure), "整体正负向感受，范围 -1 到 1。"),
-        stateField("唤醒度", formatSignedNumber(state.emotional.dimensions.arousal), "激活程度，范围 -1 到 1。"),
-        stateField("掌控感", formatSignedNumber(state.emotional.dimensions.dominance), "主导和掌控的感觉，范围 -1 到 1。"),
-        stateField("好奇心", formatNumber(state.emotional.dimensions.curiosity), "探索和求知倾向，范围 0 到 1。"),
-        stateField("能量", formatNumber(state.emotional.dimensions.energy), "精神和活力水平，范围 0 到 1。")
+        stateField("愉悦度", formatSignedNumber(state.emotional.dimensions.pleasure), "Yobi 现在整体偏开心、舒展，还是偏难受、压抑。"),
+        stateField("兴奋度", formatSignedNumber(state.emotional.dimensions.arousal), "Yobi 现在有多兴奋、紧绷，还是偏平静、偏安静。"),
+        stateField("掌控感", formatSignedNumber(state.emotional.dimensions.dominance), "Yobi 现在更像在主动掌握节奏，还是更被动、更退一点。"),
+        stateField("好奇心", formatNumber(state.emotional.dimensions.curiosity), "Yobi 现在对话题有多想追问、想继续探索。"),
+        stateField("能量", formatNumber(state.emotional.dimensions.energy), "Yobi 现在整体有多有劲、多想继续接着聊。")
       ]
     },
     {
       title: "基础情绪",
       items: [
-        stateField("快乐", formatNumber(state.emotional.ekman.happiness), "Ekman 六基础情绪之一，范围 0 到 1。"),
-        stateField("悲伤", formatNumber(state.emotional.ekman.sadness), "Ekman 六基础情绪之一，范围 0 到 1。"),
-        stateField("愤怒", formatNumber(state.emotional.ekman.anger), "Ekman 六基础情绪之一，范围 0 到 1。"),
-        stateField("恐惧", formatNumber(state.emotional.ekman.fear), "Ekman 六基础情绪之一，范围 0 到 1。"),
-        stateField("厌恶", formatNumber(state.emotional.ekman.disgust), "Ekman 六基础情绪之一，范围 0 到 1。"),
-        stateField("惊讶", formatNumber(state.emotional.ekman.surprise), "Ekman 六基础情绪之一，范围 0 到 1。")
+        stateField("快乐", formatNumber(state.emotional.ekman.happiness), "Yobi 当前有多偏开心、轻松、舒展。"),
+        stateField("悲伤", formatNumber(state.emotional.ekman.sadness), "Yobi 当前有多偏失落、低沉、不太提得起劲。"),
+        stateField("愤怒", formatNumber(state.emotional.ekman.anger), "Yobi 当前有多偏烦、冒火、想顶一下。"),
+        stateField("恐惧", formatNumber(state.emotional.ekman.fear), "Yobi 当前有多偏担心、警觉、紧张。"),
+        stateField("厌恶", formatNumber(state.emotional.ekman.disgust), "Yobi 当前有多偏排斥、反感、不想接近。"),
+        stateField("惊讶", formatNumber(state.emotional.ekman.surprise), "Yobi 当前有多意外、多出乎预料。")
       ]
     },
     {
       title: "运行时",
       items: [
-        stateField("人格", formatPersonality(state.personality), "OCEAN 五维人格参数。"),
-        stateField("反刍数量", state.ruminationQueue.length, "仍在持续影响状态的反刍条目数。"),
+        stateField("人格", formatPersonality(state.personality), "Yobi 的固定性格参数，会影响情绪基线和情绪消退速度。"),
+        stateField("反刍数量", state.ruminationQueue.length, "还有多少旧情绪残留在持续影响当前状态。"),
         stateField(
           "反刍标签",
           state.ruminationQueue.length > 0 ? state.ruminationQueue.map((entry) => entry.label).join(", ") : "无",
-          "当前反刍队列里的主要标签。"
+          "哪些旧情绪还没散掉，还在继续影响现在的状态。"
         ),
-        stateField("上次衰减", formatLocalDateTime(state.lastDecayAt), "上次应用情绪衰减的时间。"),
-        stateField("会话重入", state.sessionReentry ? `${state.sessionReentry.gapHours} 小时` : "否", "距离上次用户消息较久时会进入会话重入状态。"),
-        stateField("更新时间", formatLocalDateTime(state.updatedAt), "STATE 最近一次写入时间。")
+        stateField("上次衰减", formatLocalDateTime(state.lastDecayAt), "上一次自动把情绪往平常状态拉回去的时间。"),
+        stateField("会话重入", state.sessionReentry ? `${state.sessionReentry.gapHours} 小时` : "否", "你们隔了比较久才重新开聊时，这里会显示出来。"),
+        stateField("更新时间", formatLocalDateTime(state.updatedAt), "这份状态最近一次被写入的时间。")
       ]
     }
   ];
