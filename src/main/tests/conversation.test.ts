@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_CONFIG, DEFAULT_KERNEL_STATE, DEFAULT_USER_PROFILE, type AppConfig } from "@shared/types";
+import {
+  DEFAULT_CONFIG,
+  DEFAULT_KERNEL_STATE,
+  DEFAULT_USER_PROFILE,
+  type AppConfig,
+  type RealtimeEmotionalSignals
+} from "@shared/types";
 import { ConversationEngine } from "../core/conversation.js";
 
 function cloneConfig(): AppConfig {
@@ -298,7 +304,7 @@ test("ConversationEngine: persists voice recognition metadata and injects hidden
 
 test("ConversationEngine: parses hidden signals from raw final text before visible stripping", async () => {
   const config = cloneConfig();
-  let seenSignals: Record<string, unknown> | null = null;
+  let seenSignals: RealtimeEmotionalSignals | null = null;
 
   const conversation = new ConversationEngine(
     {
@@ -336,7 +342,7 @@ test("ConversationEngine: parses hidden signals from raw final text before visib
     } as any,
     () => config,
     async (signals) => {
-      seenSignals = signals as Record<string, unknown>;
+      seenSignals = signals;
     },
     (() => ({
       fullStream: (async function* () {
