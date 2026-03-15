@@ -320,9 +320,20 @@ export class YobiMemory {
   }
 
   async stop(): Promise<void> {
-    await this.init();
-    await this.bufferStore.dumpUnprocessed();
-    await this.factEmbeddingStore.forceFlush();
+    if (!this.initialized) {
+      return;
+    }
+
+    try {
+      await this.bufferStore.dumpUnprocessed();
+      await this.factEmbeddingStore.forceFlush();
+    } finally {
+      try {
+        await this.factsStore.close();
+      } finally {
+        this.initialized = false;
+      }
+    }
   }
 
 

@@ -115,6 +115,24 @@ export class FactsStore {
     this.loaded = true;
   }
 
+  async close(): Promise<void> {
+    if (!this.db) {
+      this.loaded = false;
+      this.lexicalAvailable = false;
+      this.lexicalMessage = "fts-uninitialized";
+      return;
+    }
+
+    try {
+      this.db.close();
+    } finally {
+      this.db = null;
+      this.loaded = false;
+      this.lexicalAvailable = false;
+      this.lexicalMessage = "fts-uninitialized";
+    }
+  }
+
   listActive(): Fact[] {
     const db = this.requireDb();
     return db

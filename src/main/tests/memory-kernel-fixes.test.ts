@@ -32,6 +32,11 @@ async function createTempPaths(prefix: string): Promise<CompanionPaths> {
   return paths;
 }
 
+async function cleanupMemoryPaths(paths: CompanionPaths, memory: YobiMemory | null): Promise<void> {
+  await memory?.stop();
+  await fs.rm(paths.baseDir, { recursive: true, force: true });
+}
+
 function withFixedNow<T>(fixedDate: Date, run: () => Promise<T> | T): Promise<T> | T {
   const RealDate = Date;
   const fixedTime = fixedDate.getTime();
@@ -77,9 +82,10 @@ function withFixedNow<T>(fixedDate: Date, run: () => Promise<T> | T): Promise<T>
 
 test("listHistory: returns newest window in chronological order", async () => {
   const paths = await createTempPaths("yobi-history-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     for (const text of ["第一条", "第二条", "第三条", "第四条"]) {
@@ -108,15 +114,32 @@ test("listHistory: returns newest window in chronological order", async () => {
     assert.deepEqual(recent.map((item) => item.text), ["第三条", "第四条"]);
     assert.deepEqual(offsetRecent.map((item) => item.text), ["第二条", "第三条"]);
   } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("YobiMemory.stop: closes facts store handles", async () => {
+  const paths = await createTempPaths("yobi-memory-stop-");
+  const config = cloneConfig();
+  const memory = new YobiMemory(paths, () => config);
+
+  try {
+    await memory.init();
+
+    assert.ok((memory.getFactsStore() as any).db);
+    await memory.stop();
+    assert.equal((memory.getFactsStore() as any).db, null);
+  } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }
 });
 
 test("listHistory: preserves toolTrace metadata for assistant messages", async () => {
   const paths = await createTempPaths("yobi-history-tool-trace-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     await memory.rememberMessage({
@@ -190,15 +213,16 @@ test("listHistory: preserves toolTrace metadata for assistant messages", async (
       ]
     });
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("memory: allows empty assistant message when toolTrace is present and excludes it from prompt context", async () => {
   const paths = await createTempPaths("yobi-history-empty-tool-trace-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     await memory.rememberMessage({
@@ -242,17 +266,18 @@ test("memory: allows empty assistant message when toolTrace is present and exclu
     });
     assert.equal(promptMessages.length, 0);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("buffer compaction: removed messages persist into unprocessed queue", async () => {
   const paths = await createTempPaths("yobi-compaction-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.kernel.buffer.maxMessages = 20;
     config.kernel.buffer.lowWatermark = 10;
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     for (let index = 1; index <= 21; index += 1) {
@@ -270,15 +295,16 @@ test("buffer compaction: removed messages persist into unprocessed queue", async
     assert.equal(pending[0]?.text, "消息-1");
     assert.equal(pending[10]?.text, "消息-11");
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("queuePendingBufferExtractions: marks buffered rows once and avoids duplicate claims", async () => {
   const paths = await createTempPaths("yobi-claim-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     for (const text of ["甲", "乙", "丙"]) {
@@ -299,15 +325,16 @@ test("queuePendingBufferExtractions: marks buffered rows once and avoids duplica
     assert.equal(claimedAgain.length, 0);
     assert.ok(buffer.every((row) => row.extractionQueued === true));
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("DailyEpisodeTaskHandler: uses payload dayKey and stores emotional context", async () => {
   const paths = await createTempPaths("yobi-episode-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     await memory.getBufferStore().append({
@@ -376,17 +403,18 @@ test("DailyEpisodeTaskHandler: uses payload dayKey and stores emotional context"
     assert.deepEqual(episodes[0]?.source_ranges, ["day:2026-03-09"]);
     assert.deepEqual(await memory.getEpisodesStore().getByDate("2026-03-10"), []);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("searchRelevantFacts: bm25-only fallback keeps lexical hit when vector is unavailable", async () => {
   const paths = await createTempPaths("yobi-bm25-rank-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.memory.embedding.enabled = true;
     config.memory.embedding.modelId = "missing-model.gguf";
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     const changed = await memory.getFactsStore().applyOperations(
@@ -428,16 +456,17 @@ test("searchRelevantFacts: bm25-only fallback keeps lexical hit when vector is u
     assert.equal(results[0]?.lexicalHit, true);
     assert.equal(memory.getEmbedderStatus().mode, "bm25-only");
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("searchRelevantFacts: BM25 can match Chinese two-character tokens and symbol-heavy english tokens", async () => {
   const paths = await createTempPaths("yobi-bm25-tokens-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.memory.embedding.enabled = false;
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     await memory.getFactsStore().applyOperations(
@@ -476,16 +505,17 @@ test("searchRelevantFacts: BM25 can match Chinese two-character tokens and symbo
     assert.equal(english[0]?.fact.key, "技术");
     assert.equal(version[0]?.fact.key, "技术");
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("searchRelevantFacts: stop-word-only query returns empty results", async () => {
   const paths = await createTempPaths("yobi-empty-query-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.memory.embedding.enabled = false;
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     await memory.getFactsStore().applyOperations(
@@ -508,12 +538,13 @@ test("searchRelevantFacts: stop-word-only query returns empty results", async ()
     const results = await memory.searchRelevantFacts({ queryTexts: ["的 了 和"], limit: 5 });
     assert.deepEqual(results, []);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("legacy facts json files are ignored by SQLite facts store", async () => {
   const paths = await createTempPaths("yobi-legacy-ignore-");
+  let memory: YobiMemory | null = null;
   try {
     await fs.writeFile(
       paths.factsPath,
@@ -537,12 +568,12 @@ test("legacy facts json files are ignored by SQLite facts store", async () => {
     );
 
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     assert.deepEqual(await memory.listFacts(), []);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
@@ -881,9 +912,10 @@ test("ensureKernelBootstrap: creates soul.md and relationship.json without perso
 
 test("RuntimeDataCoordinator.getMindSnapshot: returns soul and relationship snapshot", async () => {
   const paths = await createTempPaths("yobi-soul-snapshot-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     const stateStore = new StateStore(paths);
@@ -939,15 +971,16 @@ test("RuntimeDataCoordinator.getMindSnapshot: returns soul and relationship snap
     });
     assert.equal("persona" in snapshot, false);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("touchFacts: updates access time without mutating updated_at", async () => {
   const paths = await createTempPaths("yobi-touch-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     const [fact] = await memory.getFactsStore().applyOperations(
@@ -976,15 +1009,16 @@ test("touchFacts: updates access time without mutating updated_at", async () => 
     assert.equal(after?.updated_at, before?.updated_at);
     assert.notEqual(after?.last_accessed_at, before?.last_accessed_at);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("FactsStore.cleanupExpired: applies soft cap after expiry cleanup", async () => {
   const paths = await createTempPaths("yobi-soft-cap-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     await memory.getFactsStore().applyOperations(
@@ -1028,16 +1062,17 @@ test("FactsStore.cleanupExpired: applies soft cap after expiry cleanup", async (
     assert.equal(archived.length, 1);
     assert.equal(archived[0]?.key, "事实.一");
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("scheduleDailyTasks: catches up yesterday after target hour and does not duplicate", async () => {
   const paths = await createTempPaths("yobi-daily-catchup-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.kernel.dailyTaskHour = 3;
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     const stateStore = new StateStore(paths);
     await memory.init();
     await stateStore.init();
@@ -1071,16 +1106,17 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
     assert.equal(queued.length, 3);
     assert.ok(queued.every((task: PendingTask) => task.payload.dayKey === "2026-03-09"));
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("KernelEngine.onUserMessage: updates session reentry and resets sessionWarmth to stage baseline when no prior engagement exists", async () => {
   const paths = await createTempPaths("yobi-user-message-state-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.kernel.sessionReentryGapHours = 6;
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     const stateStore = new StateStore(paths);
     await memory.init();
     await stateStore.init();
@@ -1159,15 +1195,16 @@ test("KernelEngine.onUserMessage: updates session reentry and resets sessionWarm
     assert.equal(snapshot.sessionReentry?.active, true);
     assert.equal(snapshot.sessionReentry?.gapHours, 84);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("KernelEngine.onUserMessage: raises sessionWarmth using the latest engagement", async () => {
   const paths = await createTempPaths("yobi-session-warmth-engagement-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     const stateStore = new StateStore(paths);
     await memory.init();
     await stateStore.init();
@@ -1206,12 +1243,13 @@ test("KernelEngine.onUserMessage: raises sessionWarmth using the latest engageme
     const snapshot = stateStore.getSnapshot();
     assert.ok(Math.abs(snapshot.emotional.sessionWarmth - 0.24) < 1e-9);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });
 
 test("KernelEngine.maybeEmitProactiveMessage: does not send cold-start greeting when user history is empty", async () => {
   const paths = await createTempPaths("yobi-no-cold-start-greeting-");
+  let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
     config.proactive.enabled = true;
@@ -1219,7 +1257,7 @@ test("KernelEngine.maybeEmitProactiveMessage: does not send cold-start greeting 
     config.proactive.cooldownMs = 0;
     config.proactive.silenceThresholdMs = 1;
     config.proactive.quietHours.enabled = false;
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     const stateStore = new StateStore(paths);
     await memory.init();
     await stateStore.init();
@@ -1252,6 +1290,6 @@ test("KernelEngine.maybeEmitProactiveMessage: does not send cold-start greeting 
 
     assert.deepEqual(emitted, []);
   } finally {
-    await fs.rm(paths.baseDir, { recursive: true, force: true });
+    await cleanupMemoryPaths(paths, memory);
   }
 });

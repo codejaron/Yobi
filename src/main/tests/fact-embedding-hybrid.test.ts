@@ -11,8 +11,14 @@ function cloneConfig(): AppConfig {
   return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 }
 
+async function cleanupMemory(baseDir: string, memory: YobiMemory | null): Promise<void> {
+  await memory?.stop();
+  await fs.rm(baseDir, { recursive: true, force: true });
+}
+
 test("searchRelevantFacts: hybrid vector recall can bridge 疲劳语义到加班 fact", async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-embed-"));
+  let memory: YobiMemory | null = null;
   try {
     const paths = new CompanionPaths(baseDir);
     paths.ensureLayout();
@@ -21,7 +27,7 @@ test("searchRelevantFacts: hybrid vector recall can bridge 疲劳语义到加班
     config.memory.embedding.enabled = true;
     config.memory.embedding.modelId = "test-model-v1";
 
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     const changed = await memory.getFactsStore().applyOperations(
@@ -69,12 +75,13 @@ test("searchRelevantFacts: hybrid vector recall can bridge 疲劳语义到加班
     assert.ok((results[0]?.vectorScore ?? 0) > 0);
     assert.ok((results[0]?.finalScore ?? 0) > 0);
   } finally {
-    await fs.rm(baseDir, { recursive: true, force: true });
+    await cleanupMemory(baseDir, memory);
   }
 });
 
 test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-embed-stale-"));
+  let memory: YobiMemory | null = null;
   try {
     const paths = new CompanionPaths(baseDir);
     paths.ensureLayout();
@@ -83,7 +90,7 @@ test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => 
     config.memory.embedding.enabled = true;
     config.memory.embedding.modelId = "test-model-v1";
 
-    const memory = new YobiMemory(paths, () => config);
+    memory = new YobiMemory(paths, () => config);
     await memory.init();
 
     const changed = await memory.getFactsStore().applyOperations(
@@ -129,6 +136,6 @@ test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => 
 
     assert.equal(results.length, 0);
   } finally {
-    await fs.rm(baseDir, { recursive: true, force: true });
+    await cleanupMemory(baseDir, memory);
   }
 });

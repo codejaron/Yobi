@@ -8,11 +8,12 @@ import { FactsStore } from "../memory-v2/facts-store.js";
 
 test("FactsStore.replaceBySource: should replace only managed source facts", async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-browse-facts-"));
+  let store: FactsStore | null = null;
   try {
     const paths = new CompanionPaths(baseDir);
     paths.ensureLayout();
 
-    const store = new FactsStore(paths);
+    store = new FactsStore(paths);
     await store.applyOperations(
       [
         {
@@ -64,6 +65,7 @@ test("FactsStore.replaceBySource: should replace only managed source facts", asy
     assert.equal(facts.some((fact) => fact.key === "other.fact"), true);
     assert.equal(facts.some((fact) => fact.key === "bilibili.preference.ups"), true);
   } finally {
+    await store?.close();
     await fs.rm(baseDir, { recursive: true, force: true });
   }
 });
