@@ -34,6 +34,11 @@ function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSu
 export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("config:get", () => runtime.getConfig());
   ipcMain.handle("config:save", (_, config: AppConfig) => runtime.saveConfig(config));
+  ipcMain.handle("provider:models:list", (_, payload: { provider?: AppConfig["providers"][number] }) =>
+    runtime.listProviderModels({
+      provider: payload?.provider as AppConfig["providers"][number]
+    })
+  );
   ipcMain.handle("voice:stt:status", () => runtime.getSpeechRecognitionStatus());
   ipcMain.handle(
     "sensevoice:model:ensure",

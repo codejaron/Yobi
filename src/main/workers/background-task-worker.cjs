@@ -63,7 +63,7 @@ function downgradeDeveloperRoleEntries(value) {
   });
   return changed ? mapped : value;
 }
-function rewriteCustomOpenAIRequestBody(body) {
+function rewriteOpenAICompatibleRequestBody(body) {
   if (typeof body !== 'string') return body;
   let parsed;
   try { parsed = JSON.parse(body); } catch { return body; }
@@ -73,15 +73,15 @@ function rewriteCustomOpenAIRequestBody(body) {
   if (nextMessages === parsed.messages && nextInput === parsed.input) return body;
   return JSON.stringify({ ...parsed, messages: nextMessages, input: nextInput });
 }
-function createCustomOpenAICompatFetch(baseFetch = fetch) {
+function createOpenAICompatibleFetch(baseFetch = fetch) {
   return async (input, init) => {
     if (!init) return baseFetch(input);
-    const rewrittenBody = rewriteCustomOpenAIRequestBody(init.body);
+    const rewrittenBody = rewriteOpenAICompatibleRequestBody(init.body);
     if (rewrittenBody === init.body) return baseFetch(input, init);
     return baseFetch(input, { ...init, body: rewrittenBody });
   };
 }
-function normalizeCustomOpenAIBaseUrl(raw) {
+function normalizeOpenAICompatibleBaseUrl(raw) {
   const input = String(raw || '').trim();
   if (!input) return input;
   let parsed;
@@ -93,12 +93,30 @@ function normalizeCustomOpenAIBaseUrl(raw) {
   }
   return input.replace(/\/$/, '');
 }
+function resolveProviderBaseUrl(provider) {
+  if (provider.kind === 'custom-openai') {
+    return provider.baseUrl ? normalizeOpenAICompatibleBaseUrl(provider.baseUrl) : 'https://api.openai.com/v1';
+  }
+  if (provider.kind === 'openai') return 'https://api.openai.com/v1';
+  if (provider.kind === 'deepseek') return 'https://api.deepseek.com';
+  if (provider.kind === 'qwen') {
+    return provider.qwenRegion === 'intl'
+      ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+      : 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+  }
+  if (provider.kind === 'moonshot') return 'https://api.moonshot.ai/v1';
+  if (provider.kind === 'zhipu') return 'https://open.bigmodel.cn/api/paas/v4';
+  if (provider.kind === 'minimax') return 'https://api.minimax.io/v1';
+  return undefined;
+}
+function providerUsesResponsesApi(provider) {
+  return (provider.kind === 'openai' || provider.kind === 'custom-openai') && provider.apiMode === 'responses';
+}
 function resolveProviderOptions(config, routeKey) {
   const route = config.modelRouting[routeKey];
   const provider = config.providers.find((candidate) => candidate.id === route.providerId);
   if (!provider) return undefined;
-  const usesResponsesApi = (provider.kind === 'openai' || provider.kind === 'custom-openai') && provider.apiMode === 'responses';
-  if (!usesResponsesApi) return undefined;
+  if (!providerUsesResponsesApi(provider)) return undefined;
   return { openai: { store: false } };
 }
 async function createModelForRoute(config, routeKey) {
@@ -113,13 +131,33 @@ async function createModelForRoute(config, routeKey) {
     const { createOpenRouter } = await import('@openrouter/ai-sdk-provider');
     return createOpenRouter({ apiKey: provider.apiKey }).chat(route.model);
   }
+  if (provider.kind === 'deepseek') {
+    const { createDeepSeek } = await import('@ai-sdk/deepseek');
+    return createDeepSeek({ apiKey: provider.apiKey, baseURL: resolveProviderBaseUrl(provider) }).chat(route.model);
+  }
+  if (provider.kind === 'qwen') {
+    const { createAlibaba } = await import('@ai-sdk/alibaba');
+    return createAlibaba({ apiKey: provider.apiKey, baseURL: resolveProviderBaseUrl(provider) }).chatModel(route.model);
+  }
+  if (provider.kind === 'moonshot') {
+    const { createMoonshotAI } = await import('@ai-sdk/moonshotai');
+    return createMoonshotAI({ apiKey: provider.apiKey, baseURL: resolveProviderBaseUrl(provider) }).chatModel(route.model);
+  }
+  if (provider.kind === 'zhipu') {
+    const { createZhipu } = await import('zhipu-ai-provider');
+    return createZhipu({ apiKey: provider.apiKey, baseURL: resolveProviderBaseUrl(provider) }).chat(route.model);
+  }
+  if (provider.kind === 'minimax') {
+    const { createMinimaxOpenAI } = await import('vercel-minimax-ai-provider');
+    return createMinimaxOpenAI({ apiKey: provider.apiKey, baseURL: resolveProviderBaseUrl(provider) }).chat(route.model);
+  }
   const { createOpenAI } = await import('@ai-sdk/openai');
   if (provider.kind === 'custom-openai') {
-    const client = createOpenAI({ apiKey: provider.apiKey, baseURL: normalizeCustomOpenAIBaseUrl(provider.baseUrl), fetch: createCustomOpenAICompatFetch() });
-    return provider.apiMode === 'responses' ? client.responses(route.model) : client.chat(route.model);
+    const client = createOpenAI({ apiKey: provider.apiKey, baseURL: resolveProviderBaseUrl(provider), fetch: createOpenAICompatibleFetch() });
+    return providerUsesResponsesApi(provider) ? client.responses(route.model) : client.chat(route.model);
   }
   const client = createOpenAI({ apiKey: provider.apiKey });
-  return provider.apiMode === 'responses' ? client.responses(route.model) : client.chat(route.model);
+  return providerUsesResponsesApi(provider) ? client.responses(route.model) : client.chat(route.model);
 }
 
 async function runFactExtraction(message) {

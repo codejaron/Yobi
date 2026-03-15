@@ -37,6 +37,7 @@ import { LifecycleCoordinator } from "@main/runtime/lifecycle-coordinator";
 import { RuntimeDataCoordinator } from "@main/runtime/data-coordinator";
 import { RuntimeStatusCoordinator } from "@main/runtime/status-coordinator";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import { ProviderModelDiscoveryService } from "@main/services/provider-model-discovery";
 import { SkillManager } from "@main/skills/manager";
 import { appLogger, companionPaths } from "@main/runtime/singletons";
 import {
@@ -78,6 +79,7 @@ export interface RuntimeRegistry {
   skillManager: SkillManager;
   mcpManager: McpManager;
   backgroundWorker: BackgroundTaskWorkerService;
+  providerModelDiscovery: ProviderModelDiscoveryService;
   conversation: ConversationEngine;
   bilibiliBrowse: BilibiliBrowseService;
   bilibiliSyncCoordinator: BilibiliSyncCoordinator;
@@ -117,6 +119,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   );
 
   const modelFactory = new ModelFactory(() => configStore.getConfig());
+  const providerModelDiscovery = new ProviderModelDiscoveryService();
   const stateStore = new StateStore(paths);
   const approvalGuard = new ApprovalGuard();
   const toolRegistry = new DefaultToolRegistry(
@@ -348,6 +351,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     runtimeContextStore,
     memory,
     modelFactory,
+    providerModelDiscovery,
     stateStore,
     approvalGuard,
     toolRegistry,

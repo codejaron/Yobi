@@ -19,6 +19,7 @@ import {
   type VoiceSessionTarget,
   type VoiceTranscriptionResult
 } from "@shared/types";
+import type { ProviderModelListResult } from "@shared/provider-catalog";
 import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
@@ -63,6 +64,7 @@ export class CompanionRuntime {
   private readonly runtimeContextStore: RuntimeRegistry["runtimeContextStore"];
   private readonly memory: RuntimeRegistry["memory"];
   private readonly stateStore: RuntimeRegistry["stateStore"];
+  private readonly providerModelDiscovery: RuntimeRegistry["providerModelDiscovery"];
   private readonly approvalGuard: RuntimeRegistry["approvalGuard"];
   private readonly toolRegistry: RuntimeRegistry["toolRegistry"];
   private readonly skillManager: RuntimeRegistry["skillManager"];
@@ -92,6 +94,7 @@ export class CompanionRuntime {
     this.runtimeContextStore = registry.runtimeContextStore;
     this.memory = registry.memory;
     this.stateStore = registry.stateStore;
+    this.providerModelDiscovery = registry.providerModelDiscovery;
     this.approvalGuard = registry.approvalGuard;
     this.toolRegistry = registry.toolRegistry;
     this.skillManager = registry.skillManager;
@@ -337,6 +340,14 @@ export class CompanionRuntime {
 
     void this.refreshRuntimeAfterConfigSave(previousConfig, saved);
     return saved;
+  }
+
+  async listProviderModels(input: {
+    provider: AppConfig["providers"][number];
+  }): Promise<ProviderModelListResult> {
+    return this.providerModelDiscovery.listModels({
+      provider: input.provider
+    });
   }
 
   async getHistory(options: HistoryQuery): Promise<HistoryMessage[]> {

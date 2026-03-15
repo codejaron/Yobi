@@ -7,6 +7,9 @@ const api = {
   saveConfig(config) {
     return ipcRenderer.invoke('config:save', config);
   },
+  listProviderModels(input) {
+    return ipcRenderer.invoke('provider:models:list', input ?? {});
+  },
   getSpeechRecognitionStatus() {
     return ipcRenderer.invoke('voice:stt:status');
   },

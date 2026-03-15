@@ -1,13 +1,19 @@
 import { z } from "zod";
+import {
+  PROVIDER_API_MODES,
+  PROVIDER_KINDS,
+  QWEN_REGIONS
+} from "./provider-catalog";
 
 export const providerSchema = z
   .object({
     id: z.string().min(1),
     label: z.string().min(1),
-    kind: z.enum(["openai", "anthropic", "custom-openai", "openrouter"]),
-    apiMode: z.enum(["chat", "responses"]).default("chat"),
+    kind: z.enum(PROVIDER_KINDS),
+    apiMode: z.enum(PROVIDER_API_MODES).default("chat"),
     apiKey: z.string().default(""),
     baseUrl: z.string().url().optional(),
+    qwenRegion: z.enum(QWEN_REGIONS).optional(),
     enabled: z.boolean().default(true)
   })
   .strict();

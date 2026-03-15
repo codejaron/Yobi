@@ -77,7 +77,7 @@ test("realtime voice: stopSession blocks in-flight tts chunks from re-enqueueing
   const service = createService();
 
   service.host = {
-    send: async (command) => {
+    send: async (command: VoiceHostCommand) => {
       commands.push(command);
     }
   };

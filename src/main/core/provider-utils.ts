@@ -1,5 +1,6 @@
 import type { AppConfig } from "@shared/types";
 import type { streamText } from "ai";
+import { providerUsesResponsesApi } from "./model-factory";
 
 type StreamProviderOptions = NonNullable<Parameters<typeof streamText>[0]["providerOptions"]>;
 
@@ -10,11 +11,7 @@ export function resolveOpenAIStoreOption(config: AppConfig): StreamProviderOptio
     return undefined;
   }
 
-  const usesResponsesApi =
-    (provider.kind === "openai" || provider.kind === "custom-openai") &&
-    provider.apiMode === "responses";
-
-  if (!usesResponsesApi) {
+  if (!providerUsesResponsesApi(provider)) {
     return undefined;
   }
 

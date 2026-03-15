@@ -20,6 +20,7 @@ import type {
   RealtimeVoiceMode,
   VoiceSessionTarget
 } from "./types";
+import type { ProviderModelListResult } from "./provider-catalog";
 
 export interface CursorHistoryPage {
   items: HistoryMessage[];
@@ -49,6 +50,7 @@ export interface SenseVoiceModelProgressEvent {
 export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
+  listProviderModels(input: { provider: AppConfig["providers"][number] }): Promise<ProviderModelListResult>;
   getSpeechRecognitionStatus(): Promise<SpeechRecognitionStatus>;
   ensureSenseVoiceModel(input?: {
     modelName?: AppConfig["senseVoiceLocal"]["modelName"];

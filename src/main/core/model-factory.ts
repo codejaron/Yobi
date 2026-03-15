@@ -1,6 +1,15 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createAlibaba } from "@ai-sdk/alibaba";
+import { createDeepSeek } from "@ai-sdk/deepseek";
+import { createMoonshotAI } from "@ai-sdk/moonshotai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { createMinimaxOpenAI } from "vercel-minimax-ai-provider";
+import { createZhipu } from "zhipu-ai-provider";
+import {
+  resolveProviderBaseUrl,
+  supportsResponsesApi
+} from "@shared/provider-catalog";
 import type { AppConfig, ProviderConfig } from "@shared/types";
 
 type JsonRecord = Record<string, unknown>;
@@ -30,7 +39,7 @@ function downgradeDeveloperRoleEntries(value: unknown): unknown {
   return changed ? mapped : value;
 }
 
-function rewriteCustomOpenAIRequestBody(body: RequestInit["body"]): RequestInit["body"] {
+function rewriteOpenAICompatibleRequestBody(body: RequestInit["body"]): RequestInit["body"] {
   if (typeof body !== "string") {
     return body;
   }
@@ -59,13 +68,13 @@ function rewriteCustomOpenAIRequestBody(body: RequestInit["body"]): RequestInit[
   });
 }
 
-function createCustomOpenAICompatFetch(baseFetch: typeof fetch = fetch): typeof fetch {
+export function createOpenAICompatibleFetch(baseFetch: typeof fetch = fetch): typeof fetch {
   return async (input, init) => {
     if (!init) {
       return baseFetch(input);
     }
 
-    const rewrittenBody = rewriteCustomOpenAIRequestBody(init.body);
+    const rewrittenBody = rewriteOpenAICompatibleRequestBody(init.body);
     if (rewrittenBody === init.body) {
       return baseFetch(input, init);
     }
@@ -77,7 +86,7 @@ function createCustomOpenAICompatFetch(baseFetch: typeof fetch = fetch): typeof 
   };
 }
 
-function normalizeCustomOpenAIBaseUrl(raw: string): string {
+export function normalizeOpenAICompatibleBaseUrl(raw: string): string {
   const input = raw.trim();
   if (!input) {
     return input;
@@ -99,6 +108,31 @@ function normalizeCustomOpenAIBaseUrl(raw: string): string {
   return input.replace(/\/$/, "");
 }
 
+export function providerUsesResponsesApi(provider: Pick<ProviderConfig, "kind" | "apiMode">): boolean {
+  return supportsResponsesApi(provider.kind) && provider.apiMode === "responses";
+}
+
+function createOpenAIModel(provider: ProviderConfig, model: string): any {
+  const client = createOpenAI({
+    apiKey: provider.apiKey
+  });
+
+  return providerUsesResponsesApi(provider) ? client.responses(model as any) : client.chat(model as any);
+}
+
+function createCustomOpenAIModel(provider: ProviderConfig, model: string): any {
+  if (!provider.baseUrl) {
+    throw new Error(`Provider ${provider.id} missing baseUrl`);
+  }
+
+  const client = createOpenAI({
+    apiKey: provider.apiKey,
+    baseURL: normalizeOpenAICompatibleBaseUrl(provider.baseUrl),
+    fetch: createOpenAICompatibleFetch()
+  });
+  return providerUsesResponsesApi(provider) ? client.responses(model as any) : client.chat(model as any);
+}
+
 export function createModelForProvider(provider: ProviderConfig, model: string): any {
   if (!provider.enabled) {
     throw new Error(`Provider ${provider.id} is disabled`);
@@ -116,25 +150,46 @@ export function createModelForProvider(provider: ProviderConfig, model: string):
     }).chat(model);
   }
 
-  if (provider.kind === "custom-openai") {
-    if (!provider.baseUrl) {
-      throw new Error(`Provider ${provider.id} missing baseUrl`);
-    }
-
-    const normalizedBaseUrl = normalizeCustomOpenAIBaseUrl(provider.baseUrl);
-    const client = createOpenAI({
+  if (provider.kind === "deepseek") {
+    return createDeepSeek({
       apiKey: provider.apiKey,
-      baseURL: normalizedBaseUrl,
-      fetch: createCustomOpenAICompatFetch()
-    });
-    return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
+      baseURL: resolveProviderBaseUrl(provider)
+    }).chat(model as any);
   }
 
-  const client = createOpenAI({
-    apiKey: provider.apiKey
-  });
+  if (provider.kind === "qwen") {
+    return createAlibaba({
+      apiKey: provider.apiKey,
+      baseURL: resolveProviderBaseUrl(provider)
+    }).chatModel(model as any);
+  }
 
-  return provider.apiMode === "responses" ? client.responses(model as any) : client.chat(model as any);
+  if (provider.kind === "moonshot") {
+    return createMoonshotAI({
+      apiKey: provider.apiKey,
+      baseURL: resolveProviderBaseUrl(provider)
+    }).chatModel(model as any);
+  }
+
+  if (provider.kind === "zhipu") {
+    return createZhipu({
+      apiKey: provider.apiKey,
+      baseURL: resolveProviderBaseUrl(provider)
+    }).chat(model as any);
+  }
+
+  if (provider.kind === "minimax") {
+    return createMinimaxOpenAI({
+      apiKey: provider.apiKey,
+      baseURL: resolveProviderBaseUrl(provider)
+    }).chat(model as any);
+  }
+
+  if (provider.kind === "custom-openai") {
+    return createCustomOpenAIModel(provider, model);
+  }
+
+  return createOpenAIModel(provider, model);
 }
 
 export class ModelFactory {
