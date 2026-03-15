@@ -406,27 +406,37 @@ async function executeWithWindowsAdapter(
   }
 
   if (params.action === "type_text") {
-    await adapter.typeText();
+    if (typeof params.text !== "string") {
+      throw new Error("type_text 需要 text");
+    }
+
+    await adapter.typeText(params.text);
     return {
       success: true,
       data: {
-        typed: true
+        typed: true,
+        length: params.text.length
       }
     };
   }
 
   if (params.action === "press_keys") {
-    await adapter.pressKeys();
+    const keys = params.keys ?? [];
+    if (keys.length === 0) {
+      throw new Error("press_keys 需要 keys");
+    }
+
+    await adapter.pressKeys(keys);
     return {
       success: true,
       data: {
-        pressed: params.keys ?? []
+        pressed: keys
       }
     };
   }
 
   if (params.action === "get_windows") {
-    const windows = await adapter.getAppWindows();
+    const windows = await adapter.getAppWindows(params.appName ?? "");
     return {
       success: true,
       data: windows
