@@ -1,6 +1,6 @@
 {
   "name": "yobi",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Desktop AI companion powered by Telegram",
   "license": "AGPL-3.0-only",
   "main": "out/main/index.js",
@@ -12,8 +12,8 @@
     "prebuild:sensevoice-assets": "node build/prebuild-sensevoice-assets.mjs",
     "build:sensevoice-backend": "node build/build-sensevoice-backend.mjs",
     "build": "electron-vite build",
-    "dist:mac": "npm run build && npx electron-builder --mac dmg --publish never",
-    "dist:win": "npm run build && npx electron-builder --win nsis --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --publish never",
     "preview": "electron-vite preview",
     "test": "rm -rf out/src/main out/tsconfig.node.tsbuildinfo && tsc -p tsconfig.node.json && node --experimental-specifier-resolution=node --loader ./scripts/alias-loader.mjs --test out/src/main/tests/*.test.js",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
@@ -63,6 +63,7 @@
     "@vitejs/plugin-react": "^5.0.2",
     "autoprefixer": "^10.4.21",
     "electron": "^37.4.0",
+    "electron-builder": "26.8.1",
     "electron-vite": "^4.0.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
@@ -74,6 +75,7 @@
     "productName": "Yobi",
     "artifactName": "Yobi-${version}.${ext}",
     "icon": "build/icon.png",
+    "electronDist": "node_modules/electron/dist",
     "asarUnpack": [
       "node_modules/@node-llama-cpp/**"
     ],
