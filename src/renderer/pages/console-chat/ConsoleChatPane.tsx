@@ -208,12 +208,14 @@ export function ConsoleChatPane({
                     : "mr-auto flex max-w-[88%] flex-col items-start"
                 }
               >
-                {item.role === "assistant" ? <AssistantProcessView message={item} /> : null}
+                {item.role === "assistant" && item.source !== "yobi" ? (
+                  <AssistantProcessView message={item} />
+                ) : null}
                 {item.role === "user" ? (
                   <div className="w-fit rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
                     <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
                   </div>
-                ) : item.text.trim() || item.source === "yobi" ? (
+                ) : item.role === "assistant" && item.source === "yobi" ? (
                   <div
                     className={`w-fit rounded-2xl border px-4 py-3 text-sm ${
                       item.state === "error"

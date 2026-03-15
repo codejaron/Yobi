@@ -634,6 +634,20 @@ export interface ToolTraceItem {
   durationMs?: number;
 }
 
+export interface AssistantTimelineTextBlock {
+  type: "text";
+  text: string;
+}
+
+export interface AssistantTimelineToolBlock {
+  type: "tool";
+  tool: ToolTraceItem;
+}
+
+export type AssistantTimelineBlock =
+  | AssistantTimelineTextBlock
+  | AssistantTimelineToolBlock;
+
 export type VoiceSessionPhase =
   | "idle"
   | "listening"
@@ -689,6 +703,9 @@ export interface HistoryMessageMeta {
   source?: "yobi";
   toolTrace?: {
     items: ToolTraceItem[];
+  };
+  assistantTimeline?: {
+    blocks: AssistantTimelineBlock[];
   };
   voice?: VoiceHistoryMeta;
   speechRecognition?: VoiceInputContext;

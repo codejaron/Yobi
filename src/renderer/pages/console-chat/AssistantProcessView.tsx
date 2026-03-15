@@ -7,7 +7,8 @@ import {
   Loader2,
   Square
 } from "lucide-react";
-import type { LiveToolTraceItem } from "@shared/tool-trace";
+import type { AssistantTurnBlock, LiveToolTraceItem } from "@shared/tool-trace";
+import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { cn } from "@renderer/lib/utils";
 import type { ConsoleMessage } from "./types";
 
@@ -17,25 +18,48 @@ interface AssistantProcessViewProps {
 
 export function AssistantProcessView({ message }: AssistantProcessViewProps) {
   const process = message.process;
-  if (!process) {
+  const blocks = process?.blocks ?? [];
+  const showFallbackText = blocks.length === 0 && message.text.trim().length > 0;
+
+  if (!process && !showFallbackText) {
     return null;
   }
 
-  if (!process.thinkingVisible && process.tools.length === 0) {
+  if (!process?.thinkingVisible && blocks.length === 0 && !showFallbackText) {
     return null;
   }
 
   return (
-    <div className="mb-2.5 flex max-w-full flex-col gap-1.5">
-      {process.thinkingVisible ? <ThinkingIndicator /> : null}
-      {process.tools.map((item) => (
-        <ToolTraceCard
-          key={`${message.requestId}-${item.id}`}
-          item={item}
-          allowExpand={!message.historyMode && item.detailsAvailable}
+    <div className="mb-2.5 flex max-w-full flex-col gap-2">
+      {process?.thinkingVisible ? <ThinkingIndicator /> : null}
+      {blocks.map((block) => (
+        <AssistantBlockView
+          key={`${message.requestId}-${block.id}`}
+          block={block}
+          message={message}
         />
       ))}
+      {showFallbackText ? <AssistantTextBubble message={message} text={message.text} /> : null}
     </div>
+  );
+}
+
+function AssistantBlockView({
+  block,
+  message
+}: {
+  block: AssistantTurnBlock;
+  message: ConsoleMessage;
+}) {
+  if (block.type === "text") {
+    return <AssistantTextBubble message={message} text={block.text} />;
+  }
+
+  return (
+    <ToolTraceCard
+      item={block.item}
+      allowExpand={!message.historyMode && block.item.detailsAvailable}
+    />
   );
 }
 
@@ -44,6 +68,30 @@ function ThinkingIndicator() {
     <div className="inline-flex w-fit max-w-full items-center gap-2 rounded-full border border-border/70 bg-card/75 px-3 py-1.5 text-[12px] text-muted-foreground shadow-sm backdrop-blur-[2px]">
       <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[hsl(var(--status-info-foreground))]" />
       <span className="truncate">正在整理思路…</span>
+    </div>
+  );
+}
+
+function AssistantTextBubble({
+  message,
+  text
+}: {
+  message: ConsoleMessage;
+  text: string;
+}) {
+  if (!text.trim()) {
+    return null;
+  }
+
+  return (
+    <div
+      className={`w-fit max-w-full rounded-2xl border px-4 py-3 text-sm ${
+        message.state === "error"
+          ? "status-surface status-surface--danger"
+          : "status-surface status-surface--neutral"
+      }`}
+    >
+      <MarkdownContent variant="chat" markdown={text} />
     </div>
   );
 }

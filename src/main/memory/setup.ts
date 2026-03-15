@@ -55,6 +55,7 @@ function toHistoryMessage(message: BufferMessage): HistoryMessage {
   const source = message.meta?.source;
   const proactive = message.meta?.proactive;
   const toolTrace = message.meta?.toolTrace;
+  const assistantTimeline = message.meta?.assistantTimeline;
   const meta: HistoryMessageMeta = {};
 
   if (typeof proactive === "boolean") {
@@ -72,6 +73,21 @@ function toHistoryMessage(message: BufferMessage): HistoryMessage {
   ) {
     meta.toolTrace = {
       items: (toolTrace as { items: NonNullable<HistoryMessageMeta["toolTrace"]>["items"] }).items
+    };
+  }
+
+  if (
+    assistantTimeline &&
+    typeof assistantTimeline === "object" &&
+    Array.isArray((assistantTimeline as { blocks?: unknown }).blocks)
+  ) {
+    meta.assistantTimeline = {
+      blocks:
+        (
+          assistantTimeline as {
+            blocks: NonNullable<HistoryMessageMeta["assistantTimeline"]>["blocks"];
+          }
+        ).blocks
     };
   }
 

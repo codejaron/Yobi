@@ -135,6 +135,23 @@ test("listHistory: preserves toolTrace metadata for assistant messages", async (
               durationMs: 820
             }
           ]
+        },
+        assistantTimeline: {
+          blocks: [
+            {
+              type: "tool",
+              tool: {
+                toolName: "search_web",
+                status: "success",
+                inputPreview: "搜索：Yobi",
+                durationMs: 820
+              }
+            },
+            {
+              type: "text",
+              text: "已完成搜索。"
+            }
+          ]
         }
       }
     });
@@ -152,6 +169,23 @@ test("listHistory: preserves toolTrace metadata for assistant messages", async (
           status: "success",
           inputPreview: "搜索：Yobi",
           durationMs: 820
+        }
+      ]
+    });
+    assert.deepEqual(recent.items[0]?.meta?.assistantTimeline, {
+      blocks: [
+        {
+          type: "tool",
+          tool: {
+            toolName: "search_web",
+            status: "success",
+            inputPreview: "搜索：Yobi",
+            durationMs: 820
+          }
+        },
+        {
+          type: "text",
+          text: "已完成搜索。"
         }
       ]
     });
@@ -606,6 +640,10 @@ test("assembleContext: emits a single SOUL block without PERSONA", () => {
 test("assembleContext: emits structured STATE values with ranges", () => {
   const state = {
     ...DEFAULT_KERNEL_STATE,
+    relationship: {
+      ...DEFAULT_KERNEL_STATE.relationship,
+      stage: "familiar" as const
+    },
     emotional: {
       ...createDefaultEmotionalState("familiar"),
       dimensions: {
@@ -1166,7 +1204,7 @@ test("KernelEngine.onUserMessage: raises sessionWarmth using the latest engageme
     });
 
     const snapshot = stateStore.getSnapshot();
-    assert.equal(snapshot.emotional.sessionWarmth, 0.24);
+    assert.ok(Math.abs(snapshot.emotional.sessionWarmth - 0.24) < 1e-9);
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }

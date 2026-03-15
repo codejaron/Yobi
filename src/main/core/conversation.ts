@@ -2,15 +2,19 @@ import { readFile } from "node:fs/promises";
 import { streamText, stepCountIs, type ToolSet } from "ai";
 import type {
   AppConfig,
+  AssistantTimelineBlock,
   RealtimeEmotionalSignals,
   SkillsCatalogSummary,
   TokenUsageSource,
   VoiceInputContext
 } from "@shared/types";
 import {
+  applyConsoleEventToAssistantProcess,
+  createAssistantTurnProcess,
   finalizeToolTraceItems,
   recordToolCallSettled,
   recordToolCallStarted,
+  toPersistedAssistantTimelineBlocks,
   toPersistedToolTraceItems
 } from "@shared/tool-trace";
 import type { ModelFactory } from "./model-factory";
@@ -20,7 +24,7 @@ import {
   isConversationAbortError
 } from "./conversation-abort";
 import { resolveOpenAIStoreOption } from "./provider-utils";
-import { createEmotionTagStripper, extractEmotionTag, stripEmotionTags } from "./emotion-tags";
+import { createEmotionTagStripper, extractEmotionTag, extractRawSignalsTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
 import type { SkillManager } from "@main/skills/manager";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
@@ -71,6 +75,36 @@ function tokenSourceFromChannel(channel: "telegram" | "console" | "qq" | "feishu
   return "chat:console";
 }
 
+function createAssistantTimelineMetadata(blocks: AssistantTimelineBlock[] | undefined) {
+  return blocks && blocks.length > 0
+    ? {
+        assistantTimeline: {
+          blocks
+        }
+      }
+    : undefined;
+}
+
+function ensureTimelineHasTrailingText(
+  blocks: AssistantTimelineBlock[],
+  text: string
+): AssistantTimelineBlock[] {
+  if (!text.trim()) {
+    return blocks;
+  }
+
+  const hasTextBlock = blocks.some((block) => block.type === "text");
+  if (hasTextBlock) {
+    return blocks;
+  }
+
+  return [...blocks, { type: "text", text }];
+}
+
+function getToolOnlyTimelineBlocks(blocks: AssistantTimelineBlock[]): AssistantTimelineBlock[] {
+  return blocks.filter((block) => block.type === "tool");
+}
+
 function normalizeErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) {
     const message = error.message.trim();
@@ -106,6 +140,7 @@ function buildRealtimeSignalContractPrompt(): string {
     "[OUTPUT CONTRACT]",
     "每次最终回复末尾都必须追加一个隐藏标签：",
     '<signals emotion_label="OpenFeelz upstream label" intensity="0..1" trust_delta="-0.3..0.3" engagement="0..1" />',
+    "emotion_label 表示 Yobi 被这轮用户输入唤起的内部情绪，不是直接复述用户原话里的情绪词。",
     'emotion_label 必须使用 OpenFeelz 上游标签，例如 calm、happy、anxious、frustrated、curious、connected、fatigued、neutral。',
     '若无法判断，使用中性默认值：<signals emotion_label="neutral" intensity="0.5" trust_delta="0" engagement="0.5" />。',
     "该标签必须放在回复最后，不要在可见文本中解释。"
@@ -293,6 +328,8 @@ export class ConversationEngine {
     let streamAborted = false;
     let lastStreamError = "";
     let toolTrace = [] as ReturnType<typeof finalizeToolTraceItems>;
+    let assistantProcess = createAssistantTurnProcess();
+    const processRequestId = "conversation-persist";
     const visibleStripper = createEmotionTagStripper();
     const result = this.streamTextImpl({
       model,
@@ -325,17 +362,32 @@ export class ConversationEngine {
             input.stream?.onTextDelta?.(chunk.text);
             const visibleDelta = visibleStripper.push(chunk.text);
             if (visibleDelta) {
+              assistantProcess = applyConsoleEventToAssistantProcess(assistantProcess, {
+                requestId: processRequestId,
+                type: "text-delta",
+                delta: visibleDelta,
+                timestamp: new Date().toISOString()
+              });
               input.stream?.onVisibleTextDelta?.(visibleDelta);
             }
             continue;
           }
 
           if (chunk.type === "tool-call") {
+            const timestamp = new Date().toISOString();
             toolTrace = recordToolCallStarted(toolTrace, {
               toolCallId: chunk.toolCallId,
               toolName: chunk.toolName,
               input: chunk.input,
-              timestamp: new Date().toISOString()
+              timestamp
+            });
+            assistantProcess = applyConsoleEventToAssistantProcess(assistantProcess, {
+              requestId: processRequestId,
+              type: "tool-call",
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              timestamp
             });
             input.stream?.onToolCall?.({
               toolCallId: chunk.toolCallId,
@@ -357,6 +409,7 @@ export class ConversationEngine {
               lastToolError = output?.error?.trim() || lastToolError;
             }
 
+            const timestamp = new Date().toISOString();
             toolTrace = recordToolCallSettled(toolTrace, {
               toolCallId: chunk.toolCallId,
               toolName: chunk.toolName,
@@ -364,7 +417,18 @@ export class ConversationEngine {
               output: output?.data,
               error: output?.error,
               success,
-              timestamp: new Date().toISOString()
+              timestamp
+            });
+            assistantProcess = applyConsoleEventToAssistantProcess(assistantProcess, {
+              requestId: processRequestId,
+              type: "tool-result",
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              output: output?.data,
+              error: output?.error,
+              success,
+              timestamp
             });
             input.stream?.onToolResult?.({
               toolCallId: chunk.toolCallId,
@@ -388,13 +452,24 @@ export class ConversationEngine {
             toolFailed = true;
             const errorMessage = normalizeErrorMessage(chunk.error, "工具调用失败");
             lastToolError = errorMessage.trim() || lastToolError;
+            const timestamp = new Date().toISOString();
             toolTrace = recordToolCallSettled(toolTrace, {
               toolCallId: chunk.toolCallId,
               toolName: chunk.toolName,
               input: chunk.input,
               success: false,
               error: errorMessage,
-              timestamp: new Date().toISOString()
+              timestamp
+            });
+            assistantProcess = applyConsoleEventToAssistantProcess(assistantProcess, {
+              requestId: processRequestId,
+              type: "tool-result",
+              toolCallId: chunk.toolCallId,
+              toolName: chunk.toolName,
+              input: chunk.input,
+              success: false,
+              error: errorMessage,
+              timestamp
             });
             input.stream?.onToolResult?.({
               toolCallId: chunk.toolCallId,
@@ -443,18 +518,51 @@ export class ConversationEngine {
     } finally {
       const trailingVisibleDelta = visibleStripper.flush();
       if (trailingVisibleDelta) {
+        assistantProcess = applyConsoleEventToAssistantProcess(assistantProcess, {
+          requestId: processRequestId,
+          type: "text-delta",
+          delta: trailingVisibleDelta,
+          timestamp: new Date().toISOString()
+        });
         input.stream?.onVisibleTextDelta?.(trailingVisibleDelta);
       }
       input.stream?.onThinkingChange?.("stop");
     }
 
     const visibleText = stripEmotionTags(fullText).trim();
+    const finalizedAt = new Date().toISOString();
     const finalizedToolTrace = finalizeToolTraceItems(
       toolTrace,
       streamFailed ? (streamAborted ? "aborted" : "failed") : "completed",
-      new Date().toISOString()
+      finalizedAt
+    );
+    assistantProcess = applyConsoleEventToAssistantProcess(
+      assistantProcess,
+      streamFailed && !streamAborted
+        ? {
+            requestId: processRequestId,
+            type: "error",
+            message: lastStreamError || "LLM 调用失败，请稍后重试。",
+            timestamp: finalizedAt
+          }
+        : streamAborted
+          ? {
+              requestId: processRequestId,
+              type: "final",
+              finishReason: "aborted",
+              timestamp: finalizedAt
+            }
+          : {
+              requestId: processRequestId,
+              type: "final",
+              finishReason: "completed",
+              rawText: fullText,
+              displayText: stripEmotionTags(fullText).trim(),
+              timestamp: finalizedAt
+            }
     );
     const persistedToolTrace = toPersistedToolTraceItems(finalizedToolTrace);
+    const persistedAssistantTimeline = toPersistedAssistantTimelineBlocks(assistantProcess.blocks);
     const toolTraceMetadata =
       persistedToolTrace.length > 0
         ? {
@@ -465,6 +573,9 @@ export class ConversationEngine {
         : undefined;
     if (streamAborted) {
       input.stream?.onAbortVisibleText?.(visibleText);
+      const assistantTimelineMetadata = createAssistantTimelineMetadata(
+        ensureTimelineHasTrailingText(persistedAssistantTimeline, visibleText)
+      );
       if (input.assistantPersistence !== "caller" && (visibleText || toolTraceMetadata)) {
         await this.memory.rememberMessage({
           threadId: input.threadId,
@@ -473,7 +584,8 @@ export class ConversationEngine {
           text: visibleText,
           metadata: {
             channel: input.channel,
-            ...(toolTraceMetadata ?? {})
+            ...(toolTraceMetadata ?? {}),
+            ...(assistantTimelineMetadata ?? {})
           }
         });
       }
@@ -484,6 +596,10 @@ export class ConversationEngine {
     const trimmedText = visibleText;
     if (streamFailed) {
       const failureText = lastStreamError || "LLM 调用失败，请稍后重试。";
+      const assistantTimelineMetadata = createAssistantTimelineMetadata([
+        ...getToolOnlyTimelineBlocks(persistedAssistantTimeline),
+        { type: "text", text: failureText }
+      ]);
       if (input.assistantPersistence !== "caller" && toolTraceMetadata) {
         await this.memory.rememberMessage({
           threadId: input.threadId,
@@ -492,7 +608,8 @@ export class ConversationEngine {
           text: failureText,
           metadata: {
             channel: input.channel,
-            ...toolTraceMetadata
+            ...toolTraceMetadata,
+            ...(assistantTimelineMetadata ?? {})
           }
         });
       }
@@ -501,6 +618,10 @@ export class ConversationEngine {
 
     if (!trimmedText && toolFailed) {
       const failureText = lastToolError ? `工具调用失败：${lastToolError}` : "工具调用失败，请稍后重试。";
+      const assistantTimelineMetadata = createAssistantTimelineMetadata([
+        ...getToolOnlyTimelineBlocks(persistedAssistantTimeline),
+        { type: "text", text: failureText }
+      ]);
       if (input.assistantPersistence !== "caller" && toolTraceMetadata) {
         await this.memory.rememberMessage({
           threadId: input.threadId,
@@ -509,7 +630,8 @@ export class ConversationEngine {
           text: failureText,
           metadata: {
             channel: input.channel,
-            ...toolTraceMetadata
+            ...toolTraceMetadata,
+            ...(assistantTimelineMetadata ?? {})
           }
         });
       }
@@ -517,15 +639,35 @@ export class ConversationEngine {
     }
 
     const fallbackReply = "我这次没有生成有效回复，请重试一次。";
-    const rawFinalText = trimmedText || fallbackReply;
+    const rawFinalText = fullText.trim() || fallbackReply;
     const parsedReply = extractEmotionTag(rawFinalText);
+    const rawSignalsTag = extractRawSignalsTag(rawFinalText);
     const finalText = parsedReply.cleanedText.trim() || fallbackReply;
+
+    if (parsedReply.signals) {
+      logger.info("conversation", "signals-valid", {
+        rawSignalsTag,
+        parsedSignals: parsedReply.signals
+      });
+    } else if (rawSignalsTag) {
+      logger.warn("conversation", "signals-invalid", {
+        rawSignalsTag
+      });
+    } else {
+      logger.warn("conversation", "signals-missing", {
+        replyTail: rawFinalText.slice(-220)
+      });
+    }
 
     if (parsedReply.signals) {
       await this.onRealtimeEmotionalSignals?.(parsedReply.signals);
     }
 
     input.stream?.onVisibleTextFinal?.(finalText);
+
+    const assistantTimelineMetadata = createAssistantTimelineMetadata(
+      ensureTimelineHasTrailingText(persistedAssistantTimeline, finalText)
+    );
 
     if (input.assistantPersistence !== "caller") {
       await this.memory.rememberMessage({
@@ -535,7 +677,8 @@ export class ConversationEngine {
         text: finalText,
         metadata: {
           channel: input.channel,
-          ...(toolTraceMetadata ?? {})
+          ...(toolTraceMetadata ?? {}),
+          ...(assistantTimelineMetadata ?? {})
         }
       });
     }

@@ -134,3 +134,82 @@ test("assistant process: requestId isolation keeps tool cards on their own turns
   assert.equal(state.r2?.tools.length, 0);
   assert.equal(state.r2?.hasVisibleContent, true);
 });
+
+test("assistant process: keeps text and tool blocks interleaved in event order", () => {
+  let state = createAssistantTurnProcess();
+
+  state = applyConsoleEventToAssistantProcess(state, {
+    requestId: "r1",
+    type: "text-delta",
+    delta: "我先查一下。",
+    timestamp: "2026-03-12T10:00:00.000Z"
+  });
+  state = applyConsoleEventToAssistantProcess(state, {
+    requestId: "r1",
+    type: "tool-call",
+    toolCallId: "tool-1",
+    toolName: "browser",
+    input: { action: "snapshot" },
+    timestamp: "2026-03-12T10:00:01.000Z"
+  });
+  state = applyConsoleEventToAssistantProcess(state, {
+    requestId: "r1",
+    type: "tool-result",
+    toolCallId: "tool-1",
+    toolName: "browser",
+    input: { action: "snapshot" },
+    output: { ok: true },
+    success: true,
+    timestamp: "2026-03-12T10:00:01.120Z"
+  });
+  state = applyConsoleEventToAssistantProcess(state, {
+    requestId: "r1",
+    type: "text-delta",
+    delta: "现在我有结果了。",
+    timestamp: "2026-03-12T10:00:02.000Z"
+  });
+
+  assert.deepEqual(
+    state.blocks.map((block) =>
+      block.type === "text"
+        ? { type: "text", text: block.text }
+        : { type: "tool", toolName: block.item.toolName, status: block.item.status }
+    ),
+    [
+      { type: "text", text: "我先查一下。" },
+      { type: "tool", toolName: "browser", status: "success" },
+      { type: "text", text: "现在我有结果了。" }
+    ]
+  );
+});
+
+test("assistant process: hydrates persisted timeline blocks for history replay", () => {
+  const state = createAssistantTurnProcess({
+    timeline: [
+      { type: "text", text: "先说明背景。" },
+      {
+        type: "tool",
+        tool: {
+          toolName: "browser",
+          status: "success",
+          inputPreview: "URL：https://example.com",
+          durationMs: 188
+        }
+      },
+      { type: "text", text: "再给出结论。" }
+    ]
+  });
+
+  assert.deepEqual(
+    state.blocks.map((block) =>
+      block.type === "text"
+        ? { type: "text", text: block.text }
+        : { type: "tool", toolName: block.item.toolName, status: block.item.status }
+    ),
+    [
+      { type: "text", text: "先说明背景。" },
+      { type: "tool", toolName: "browser", status: "success" },
+      { type: "text", text: "再给出结论。" }
+    ]
+  );
+});

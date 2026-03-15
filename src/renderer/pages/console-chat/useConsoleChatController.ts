@@ -100,7 +100,9 @@ function createHistoryMessage(item: HistoryMessage): ConsoleMessage {
     historyMode: item.role === "assistant",
     process:
       item.role === "assistant"
-        ? createAssistantTurnProcess(item.meta?.toolTrace?.items)
+        ? createAssistantTurnProcess({
+            timeline: item.meta?.assistantTimeline?.blocks
+          })
         : undefined
   };
 }

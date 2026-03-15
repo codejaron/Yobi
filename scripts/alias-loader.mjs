@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -8,8 +9,22 @@ const aliasMap = new Map([
   ["@renderer/", path.join(root, "out", "src", "renderer")]
 ]);
 
-function withJsExtension(targetPath) {
-  return path.extname(targetPath) ? targetPath : `${targetPath}.js`;
+function resolveCompiledPath(targetPath) {
+  if (path.extname(targetPath)) {
+    return targetPath;
+  }
+
+  const fileCandidate = `${targetPath}.js`;
+  if (existsSync(fileCandidate)) {
+    return fileCandidate;
+  }
+
+  const indexCandidate = path.join(targetPath, "index.js");
+  if (existsSync(indexCandidate)) {
+    return indexCandidate;
+  }
+
+  return fileCandidate;
 }
 
 export async function resolve(specifier, context, defaultResolve) {
@@ -19,7 +34,7 @@ export async function resolve(specifier, context, defaultResolve) {
     }
 
     const remainder = specifier.slice(prefix.length);
-    const resolvedPath = withJsExtension(path.join(targetDir, remainder));
+    const resolvedPath = resolveCompiledPath(path.join(targetDir, remainder));
     return {
       url: pathToFileURL(resolvedPath).href,
       shortCircuit: true
@@ -28,7 +43,7 @@ export async function resolve(specifier, context, defaultResolve) {
 
   if ((specifier.startsWith("./") || specifier.startsWith("../")) && !path.extname(specifier)) {
     const parentPath = context.parentURL ? path.dirname(fileURLToPath(context.parentURL)) : root;
-    const resolvedPath = withJsExtension(path.resolve(parentPath, specifier));
+    const resolvedPath = resolveCompiledPath(path.resolve(parentPath, specifier));
     return {
       url: pathToFileURL(resolvedPath).href,
       shortCircuit: true

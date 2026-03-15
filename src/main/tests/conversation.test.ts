@@ -193,6 +193,21 @@ test("ConversationEngine: persists toolTrace metadata for successful tool calls"
     status: "success",
     inputPreview: "搜索：GitHub Trending"
   });
+  const assistantTimeline = remembered[0]?.metadata?.assistantTimeline as
+    | { blocks?: Array<Record<string, unknown>> }
+    | undefined;
+  const firstTool = assistantTimeline?.blocks?.[0]?.tool as Record<string, unknown> | undefined;
+  assert.equal(assistantTimeline?.blocks?.[0]?.type, "tool");
+  assert.equal(firstTool?.toolName, "search_web");
+  assert.equal(firstTool?.status, "success");
+  assert.equal(firstTool?.inputPreview, "搜索：GitHub Trending");
+  if (typeof firstTool?.durationMs !== "undefined") {
+    assert.equal(typeof firstTool.durationMs, "number");
+  }
+  assert.deepEqual(assistantTimeline?.blocks?.[1], {
+    type: "text",
+    text: "整理好了"
+  });
 });
 
 test("ConversationEngine: persists voice recognition metadata and injects hidden voice context", async () => {
@@ -279,6 +294,76 @@ test("ConversationEngine: persists voice recognition metadata and injects hidden
   assert.match(seenSystem, /\[VOICE INPUT CONTEXT\]/);
   assert.match(seenSystem, /language: zh/i);
   assert.match(seenSystem, /emotion: happy/i);
+});
+
+test("ConversationEngine: parses hidden signals from raw final text before visible stripping", async () => {
+  const config = cloneConfig();
+  let seenSignals: Record<string, unknown> | null = null;
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async () => undefined,
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    async (signals) => {
+      seenSignals = signals as Record<string, unknown>;
+    },
+    (() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "text-delta",
+          text: '收到<signals emotion_label="happy" intensity="0.8" engagement="0.8" trust_delta="0.1" />'
+        };
+      })(),
+      totalUsage: Promise.resolve(undefined)
+    })) as any
+  );
+
+  const reply = await conversation.reply({
+    text: "试试看",
+    channel: "console",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    persistUserMessage: false
+  });
+
+  assert.equal(reply, "收到");
+  assert.deepEqual(seenSignals, {
+    emotion_label: "happy",
+    intensity: 0.8,
+    engagement: 0.8,
+    trust_delta: 0.1
+  });
 });
 
 test("ConversationEngine: surfaces stream error chunks instead of falling back to empty-reply copy", async () => {

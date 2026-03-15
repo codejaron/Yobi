@@ -182,6 +182,17 @@ export function extractEmotionTag(text: string): {
   };
 }
 
+export function extractRawSignalsTag(text: string): string {
+  const withoutThink = text
+    .replace(createThinkBlockRegex("gi"), "")
+    .replace(createThinkOpenToEndRegex("gi"), "")
+    .replace(createThinkCloseRegex("gi"), "")
+    .replace(createThinkCloseToEndRegex("gi"), "");
+
+  const signalMatches = Array.from(withoutThink.matchAll(createSignalsTagRegex("gi")));
+  return signalMatches.length > 0 ? signalMatches[signalMatches.length - 1][0] ?? "" : "";
+}
+
 export function stripEmotionTags(text: string): string {
   return stripHiddenTags(text);
 }

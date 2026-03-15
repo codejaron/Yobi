@@ -14,6 +14,7 @@ import { KernelTaskQueue } from "./task-queue";
 import { StateStore } from "./state-store";
 import { splitExtractionWindows } from "@main/memory-v2/extraction-runner";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
+import { appLogger as logger } from "@main/runtime/singletons";
 import {
   advanceEmotionalRumination,
   applyElapsedEmotionalDecay,
@@ -161,7 +162,8 @@ export class KernelEngine {
     }
 
     this.lastEngagement = clampRange(signals.engagement, 0, 1);
-    this.input.stateStore.mutate((state) => {
+    const before = this.input.stateStore.getSnapshot();
+    const after = this.input.stateStore.mutate((state) => {
       state.personality = {
         ...this.input.getConfig().kernel.personality
       };
@@ -175,6 +177,11 @@ export class KernelEngine {
       });
       state.emotional = next.emotional;
       state.ruminationQueue = next.ruminationQueue;
+    });
+    logger.info("kernel", "emotion-signals-applied", {
+      signals,
+      before: summarizeEmotionalState(before),
+      after: summarizeEmotionalState(after)
     });
   }
 
@@ -636,6 +643,20 @@ export class KernelEngine {
   private async bootstrapUnprocessedTasks(): Promise<void> {
     await this.enqueueUnprocessedBufferTasks();
   }
+}
+
+function summarizeEmotionalState(state: KernelStateDocument): Record<string, unknown> {
+  return {
+    dimensions: {
+      ...state.emotional.dimensions
+    },
+    ekman: {
+      ...state.emotional.ekman
+    },
+    connection: state.emotional.connection,
+    sessionWarmth: state.emotional.sessionWarmth,
+    ruminationCount: state.ruminationQueue.length
+  };
 }
 
 export function assertUniqueQueueHandlerTypes(handlers: KernelQueueTaskHandler[]): void {

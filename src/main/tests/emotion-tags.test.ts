@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createEmotionTagStripper, extractEmotionTag, stripEmotionTags } from "../core/emotion-tags.js";
+import { createEmotionTagStripper, extractEmotionTag, extractRawSignalsTag, stripEmotionTags } from "../core/emotion-tags.js";
 
 test("extractEmotionTag: 可解析合法 signals 并清理隐藏标签", () => {
   const parsed = extractEmotionTag(
@@ -37,6 +37,17 @@ test("extractEmotionTag: 数值越界时会被 clamp", () => {
     engagement: 1,
     trust_delta: 0.3
   });
+});
+
+test("extractRawSignalsTag: 返回最后一个原始 signals 标签", () => {
+  const raw = extractRawSignalsTag(
+    'a<signals emotion_label="neutral" intensity="0.5" engagement="0.5" trust_delta="0" />b<signals emotion_label="happy" intensity="0.8" engagement="0.8" trust_delta="0.1" />'
+  );
+
+  assert.equal(
+    raw,
+    '<signals emotion_label="happy" intensity="0.8" engagement="0.8" trust_delta="0.1" />'
+  );
 });
 
 test("extractEmotionTag: 字段缺失时 signals 解析失败", () => {

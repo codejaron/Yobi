@@ -1,4 +1,4 @@
-import type { ConsoleRunEventV2, ToolTraceItem, ToolTraceStatus } from "./types";
+import type { AssistantTimelineBlock, ConsoleRunEventV2, ToolTraceItem, ToolTraceStatus } from "./types";
 
 export type LiveToolTraceStatus = ToolTraceStatus | "running";
 export type ToolTraceFinalizeReason = "completed" | "failed" | "aborted";
@@ -18,10 +18,30 @@ export interface LiveToolTraceItem {
   detailsAvailable: boolean;
 }
 
+export interface AssistantTextBlock {
+  id: string;
+  type: "text";
+  text: string;
+}
+
+export interface AssistantToolBlock {
+  id: string;
+  type: "tool";
+  toolCallId?: string;
+  item: LiveToolTraceItem;
+}
+
+export type AssistantTurnBlock = AssistantTextBlock | AssistantToolBlock;
+
 export interface AssistantTurnProcess {
   thinkingVisible: boolean;
   hasVisibleContent: boolean;
+  blocks: AssistantTurnBlock[];
   tools: LiveToolTraceItem[];
+}
+
+interface AssistantTurnHistoryInput {
+  timeline?: AssistantTimelineBlock[];
 }
 
 const PREVIEW_KEY_GROUPS: Array<{ label: string; keys: string[] }> = [
@@ -33,35 +53,23 @@ const PREVIEW_KEY_GROUPS: Array<{ label: string; keys: string[] }> = [
 
 const MAX_PREVIEW_DEPTH = 3;
 
-export function createAssistantTurnProcess(toolTrace?: ToolTraceItem[]): AssistantTurnProcess {
-  const tools = createHistoryToolTraceItems(toolTrace);
+export function createAssistantTurnProcess(
+  input?: AssistantTurnHistoryInput
+): AssistantTurnProcess {
+  const blocks = createHistoryBlocks(input);
   return {
     thinkingVisible: false,
-    hasVisibleContent: tools.length > 0,
-    tools
+    hasVisibleContent: blocks.length > 0,
+    blocks,
+    tools: extractToolsFromBlocks(blocks)
   };
-}
-
-export function createHistoryToolTraceItems(items?: ToolTraceItem[]): LiveToolTraceItem[] {
-  if (!Array.isArray(items) || items.length === 0) {
-    return [];
-  }
-
-  return items.map((item, index) => ({
-    id: `history-tool-${index}`,
-    toolName: item.toolName,
-    status: item.status,
-    inputPreview: item.inputPreview,
-    durationMs: item.durationMs,
-    detailsAvailable: false
-  }));
 }
 
 export function hasAssistantVisibleContent(
   text: string,
   process?: AssistantTurnProcess
 ): boolean {
-  return text.trim().length > 0 || (process?.tools.length ?? 0) > 0;
+  return text.trim().length > 0 || (process?.blocks.length ?? 0) > 0;
 }
 
 export function buildToolInputPreview(input: unknown, maxLength = 96): string {
@@ -119,6 +127,36 @@ export function toPersistedToolTraceItems(tools: LiveToolTraceItem[]): ToolTrace
     });
 }
 
+export function toPersistedAssistantTimelineBlocks(
+  blocks: AssistantTurnBlock[]
+): AssistantTimelineBlock[] {
+  return blocks.flatMap<AssistantTimelineBlock>((block) => {
+    if (block.type === "text") {
+      if (!block.text.trim()) {
+        return [];
+      }
+
+      return [{ type: "text", text: block.text }];
+    }
+
+    if (block.item.status === "running") {
+      return [];
+    }
+
+    const tool: ToolTraceItem = {
+      toolName: block.item.toolName,
+      status: block.item.status,
+      inputPreview: block.item.inputPreview
+    };
+
+    if (typeof block.item.durationMs === "number") {
+      tool.durationMs = block.item.durationMs;
+    }
+
+    return [{ type: "tool", tool }];
+  });
+}
+
 export function applyConsoleEventToAssistantProcess(
   current: AssistantTurnProcess | undefined,
   event: ConsoleRunEventV2
@@ -127,6 +165,7 @@ export function applyConsoleEventToAssistantProcess(
     ? {
         thinkingVisible: current.thinkingVisible,
         hasVisibleContent: current.hasVisibleContent,
+        blocks: current.blocks.map(cloneAssistantBlock),
         tools: current.tools.map((item) => ({ ...item }))
       }
     : createAssistantTurnProcess();
@@ -145,6 +184,8 @@ export function applyConsoleEventToAssistantProcess(
 
   if (event.type === "text-delta") {
     if (event.delta) {
+      next.blocks = appendTextBlock(next.blocks, event.delta);
+      next.tools = extractToolsFromBlocks(next.blocks);
       next.hasVisibleContent = true;
       next.thinkingVisible = false;
     }
@@ -152,19 +193,20 @@ export function applyConsoleEventToAssistantProcess(
   }
 
   if (event.type === "tool-call") {
-    next.tools = recordToolCallStarted(next.tools, {
+    next.blocks = recordToolCallStartedInBlocks(next.blocks, {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       input: event.input,
       timestamp: event.timestamp
     });
+    next.tools = extractToolsFromBlocks(next.blocks);
     next.hasVisibleContent = true;
     next.thinkingVisible = false;
     return next;
   }
 
   if (event.type === "tool-result") {
-    next.tools = recordToolCallSettled(next.tools, {
+    next.blocks = recordToolCallSettledInBlocks(next.blocks, {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       input: event.input,
@@ -173,26 +215,66 @@ export function applyConsoleEventToAssistantProcess(
       success: event.success,
       timestamp: event.timestamp
     });
+    next.tools = extractToolsFromBlocks(next.blocks);
     return next;
   }
 
   if (event.type === "final") {
     next.thinkingVisible = false;
-    next.tools = finalizeToolTraceItems(
-      next.tools,
+    next.blocks = finalizeAssistantBlocks(
+      next.blocks,
       event.finishReason === "aborted" ? "aborted" : "completed",
       event.timestamp
     );
+    next.tools = extractToolsFromBlocks(next.blocks);
     return next;
   }
 
   if (event.type === "error") {
     next.thinkingVisible = false;
-    next.tools = finalizeToolTraceItems(next.tools, "failed", event.timestamp);
+    next.blocks = finalizeAssistantBlocks(next.blocks, "failed", event.timestamp);
+    next.tools = extractToolsFromBlocks(next.blocks);
     return next;
   }
 
   return next;
+}
+
+function createHistoryBlocks(input?: AssistantTurnHistoryInput): AssistantTurnBlock[] {
+  if (!input?.timeline?.length) {
+    return [];
+  }
+
+  return input.timeline.flatMap<AssistantTurnBlock>((block, index) => {
+    if (block.type === "text") {
+      if (!block.text.trim()) {
+        return [];
+      }
+
+      return [
+        {
+          id: `history-text-${index}`,
+          type: "text",
+          text: block.text
+        }
+      ];
+    }
+
+    return [
+      {
+        id: `history-tool-${index}`,
+        type: "tool",
+        item: {
+          id: `history-tool-${index}`,
+          toolName: block.tool.toolName,
+          status: block.tool.status,
+          inputPreview: block.tool.inputPreview,
+          durationMs: block.tool.durationMs,
+          detailsAvailable: false
+        }
+      }
+    ];
+  });
 }
 
 interface ToolCallStartInput {
@@ -268,6 +350,139 @@ export function recordToolCallSettled(
 
   next.push(item);
   return next;
+}
+
+function appendTextBlock(blocks: AssistantTurnBlock[], delta: string): AssistantTurnBlock[] {
+  const next = blocks.map(cloneAssistantBlock);
+  const last = next.at(-1);
+  if (last?.type === "text") {
+    last.text += delta;
+    return next;
+  }
+
+  next.push({
+    id: `text-${next.length}`,
+    type: "text",
+    text: delta
+  });
+  return next;
+}
+
+function recordToolCallStartedInBlocks(
+  blocks: AssistantTurnBlock[],
+  input: ToolCallStartInput
+): AssistantTurnBlock[] {
+  const next = blocks.map(cloneAssistantBlock);
+  const index = next.findIndex(
+    (block) => block.type === "tool" && block.toolCallId === input.toolCallId
+  );
+  const item: LiveToolTraceItem = {
+    id: input.toolCallId,
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    status: "running",
+    inputPreview: buildToolInputPreview(input.input),
+    input: input.input,
+    startedAt: input.timestamp,
+    detailsAvailable: true
+  };
+
+  const block: AssistantToolBlock = {
+    id: input.toolCallId,
+    type: "tool",
+    toolCallId: input.toolCallId,
+    item
+  };
+
+  if (index >= 0) {
+    next[index] = block;
+    return next;
+  }
+
+  next.push(block);
+  return next;
+}
+
+function recordToolCallSettledInBlocks(
+  blocks: AssistantTurnBlock[],
+  input: ToolCallResultInput
+): AssistantTurnBlock[] {
+  const next = blocks.map(cloneAssistantBlock);
+  const index = next.findIndex(
+    (block) => block.type === "tool" && block.toolCallId === input.toolCallId
+  );
+  const existing =
+    index >= 0 && next[index]?.type === "tool" ? (next[index] as AssistantToolBlock).item : undefined;
+  const startedAt = existing?.startedAt ?? input.timestamp;
+  const finishedAt = input.timestamp;
+  const item: LiveToolTraceItem = {
+    id: input.toolCallId,
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    status: input.success ? "success" : "error",
+    inputPreview: existing?.inputPreview ?? buildToolInputPreview(input.input),
+    input: existing?.input ?? input.input,
+    output: input.output,
+    error: input.error,
+    startedAt,
+    finishedAt,
+    durationMs: computeDurationMs(startedAt, finishedAt),
+    detailsAvailable: true
+  };
+
+  const block: AssistantToolBlock = {
+    id: input.toolCallId,
+    type: "tool",
+    toolCallId: input.toolCallId,
+    item
+  };
+
+  if (index >= 0) {
+    next[index] = block;
+    return next;
+  }
+
+  next.push(block);
+  return next;
+}
+
+function finalizeAssistantBlocks(
+  blocks: AssistantTurnBlock[],
+  reason: ToolTraceFinalizeReason,
+  finishedAt?: string
+): AssistantTurnBlock[] {
+  const finalizedTools = finalizeToolTraceItems(extractToolsFromBlocks(blocks), reason, finishedAt);
+  const finalizedById = new Map(
+    finalizedTools.map((item) => [item.toolCallId ?? item.id, item] as const)
+  );
+
+  return blocks.map((block) => {
+    if (block.type === "text") {
+      return { ...block };
+    }
+
+    const key = block.toolCallId ?? block.item.toolCallId ?? block.item.id;
+    const finalized = finalizedById.get(key);
+    return {
+      ...block,
+      item: finalized ? { ...finalized } : { ...block.item }
+    };
+  });
+}
+
+function extractToolsFromBlocks(blocks: AssistantTurnBlock[]): LiveToolTraceItem[] {
+  return blocks.flatMap((block) => (block.type === "tool" ? [{ ...block.item }] : []));
+}
+
+function cloneAssistantBlock(block: AssistantTurnBlock): AssistantTurnBlock {
+  if (block.type === "text") {
+    return { ...block };
+  }
+
+  return {
+    ...block,
+    item: { ...block.item }
+  };
 }
 
 function computeDurationMs(startedAt?: string, finishedAt?: string): number | undefined {
