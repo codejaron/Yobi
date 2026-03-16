@@ -1,13 +1,14 @@
 import type { ChatReplyStreamListener } from "@main/core/conversation";
 import type { ConversationEngine } from "@main/core/conversation";
 import type { ToolApprovalHandler } from "@main/tools/types";
-import type { VoiceInputContext } from "@shared/types";
+import type { ChatAttachment, VoiceInputContext } from "@shared/types";
 
 export class ChannelRouter {
   constructor(private readonly conversation: ConversationEngine) {}
 
   async handleConsole(input: {
     text: string;
+    attachments?: ChatAttachment[];
     resourceId: string;
     threadId: string;
     voiceContext?: VoiceInputContext;
@@ -17,6 +18,7 @@ export class ChannelRouter {
   }): Promise<string> {
     return this.conversation.reply({
       text: input.text,
+      attachments: input.attachments,
       channel: "console",
       resourceId: input.resourceId,
       threadId: input.threadId,

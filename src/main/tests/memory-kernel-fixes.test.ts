@@ -270,6 +270,198 @@ test("memory: allows empty assistant message when toolTrace is present and exclu
   }
 });
 
+test("memory: only replays the latest attachment-bearing user message as media", async () => {
+  const paths = await createTempPaths("yobi-history-attachments-active-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    const olderAttachmentPath = path.join(paths.chatMediaDir, "older.txt");
+    const newerAttachmentPath = path.join(paths.chatMediaDir, "newer.txt");
+    await fs.writeFile(olderAttachmentPath, "older attachment", "utf8");
+    await fs.writeFile(newerAttachmentPath, "newer attachment", "utf8");
+
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "user",
+      text: "第一张附件",
+      metadata: {
+        channel: "console",
+        attachments: [
+          {
+            id: "attachment-older",
+            kind: "file",
+            filename: "older.txt",
+            mimeType: "text/plain",
+            size: 16,
+            path: olderAttachmentPath,
+            source: "user-upload",
+            createdAt: new Date().toISOString()
+          }
+        ]
+      }
+    });
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "assistant",
+      text: "收到了第一张",
+      metadata: { channel: "console" }
+    });
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "user",
+      text: "第二张附件",
+      metadata: {
+        channel: "console",
+        attachments: [
+          {
+            id: "attachment-newer",
+            kind: "file",
+            filename: "newer.txt",
+            mimeType: "text/plain",
+            size: 16,
+            path: newerAttachmentPath,
+            source: "user-upload",
+            createdAt: new Date().toISOString()
+          }
+        ]
+      }
+    });
+
+    const promptMessages = await memory.mapRecentToModelMessages({
+      threadId: "main",
+      resourceId: "main"
+    });
+
+    assert.equal(promptMessages.length, 3);
+    assert.equal(promptMessages[0]?.role, "user");
+    assert.equal(typeof promptMessages[0]?.content, "string");
+    assert.match(String(promptMessages[0]?.content), /\[附件引用：已超出自动复用窗口\]/);
+    assert.equal(promptMessages[2]?.role, "user");
+    assert.ok(Array.isArray(promptMessages[2]?.content));
+    assert.equal((promptMessages[2]?.content as Array<{ type: string }>)[1]?.type, "file");
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("memory: missing attachment cache falls back to reference text instead of failing", async () => {
+  const paths = await createTempPaths("yobi-history-attachments-missing-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    const attachmentPath = path.join(paths.chatMediaDir, "missing.txt");
+    await fs.writeFile(attachmentPath, "temporary attachment", "utf8");
+
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "user",
+      text: "",
+      metadata: {
+        channel: "console",
+        attachments: [
+          {
+            id: "attachment-missing",
+            kind: "file",
+            filename: "missing.txt",
+            mimeType: "text/plain",
+            size: 18,
+            path: attachmentPath,
+            source: "user-upload",
+            createdAt: new Date().toISOString()
+          }
+        ]
+      }
+    });
+    await fs.rm(attachmentPath, { force: true });
+
+    const promptMessages = await memory.mapRecentToModelMessages({
+      threadId: "main",
+      resourceId: "main"
+    });
+
+    assert.equal(promptMessages.length, 1);
+    assert.equal(promptMessages[0]?.role, "user");
+    assert.equal(typeof promptMessages[0]?.content, "string");
+    assert.match(String(promptMessages[0]?.content), /\[附件引用：缓存缺失\]/);
+    assert.match(String(promptMessages[0]?.content), /missing\.txt/);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("memory: attachment auto-reuse expires after four later user messages", async () => {
+  const paths = await createTempPaths("yobi-history-attachments-expire-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    const attachmentPath = path.join(paths.chatMediaDir, "expire.txt");
+    await fs.writeFile(attachmentPath, "expire attachment", "utf8");
+
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "user",
+      text: "初始附件",
+      metadata: {
+        channel: "console",
+        attachments: [
+          {
+            id: "attachment-expire",
+            kind: "file",
+            filename: "expire.txt",
+            mimeType: "text/plain",
+            size: 17,
+            path: attachmentPath,
+            source: "user-upload",
+            createdAt: new Date().toISOString()
+          }
+        ]
+      }
+    });
+
+    for (let index = 1; index <= 5; index += 1) {
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "assistant",
+        text: `回复-${index}`,
+        metadata: { channel: "console" }
+      });
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "user",
+        text: `后续用户-${index}`,
+        metadata: { channel: "console" }
+      });
+    }
+
+    const promptMessages = await memory.mapRecentToModelMessages({
+      threadId: "main",
+      resourceId: "main"
+    });
+
+    assert.equal(promptMessages[0]?.role, "user");
+    assert.equal(typeof promptMessages[0]?.content, "string");
+    assert.match(String(promptMessages[0]?.content), /\[附件引用：已超出自动复用窗口\]/);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
 test("buffer compaction: removed messages persist into unprocessed queue", async () => {
   const paths = await createTempPaths("yobi-compaction-");
   let memory: YobiMemory | null = null;

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import { promises as fs } from "node:fs";
 import {
   DEFAULT_CONFIG,
   DEFAULT_KERNEL_STATE,
@@ -114,6 +117,94 @@ test("ConversationEngine: hidden scheduled prompt is not persisted but is sent t
   assert.equal(seenMessages.at(-1)?.role, "user");
   assert.equal(seenMessages.at(-1)?.content, "搜索 GitHub Trending 前十，并总结给我。");
   assert.deepEqual(seenAllowedToolNames, ["web_search", "web_fetch"]);
+});
+
+test("ConversationEngine: sends current user attachments as multimodal message parts", async () => {
+  const config = cloneConfig();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-conversation-attachments-"));
+  const attachmentPath = path.join(tempDir, "snippet.txt");
+  await fs.writeFile(attachmentPath, "const ok = true;", "utf8");
+
+  let seenMessages: Array<{ role: string; content: unknown }> = [];
+  try {
+    const conversation = new ConversationEngine(
+      {
+        rememberMessage: async () => undefined,
+        getProfile: async () => DEFAULT_USER_PROFILE,
+        listFacts: async () => [],
+        listRecentEpisodes: async () => [],
+        searchRelevantFacts: async () => [],
+        touchFacts: async () => undefined,
+        listRecentBufferMessages: async () => [],
+        mapRecentToModelMessages: async () => []
+      } as any,
+      {
+        getChatModel: () => ({})
+      } as any,
+      {
+        getToolSet: () => ({})
+      } as any,
+      {
+        getCatalogPrompt: () => ({
+          prompt: "",
+          summary: {
+            enabledCount: 0,
+            truncated: false,
+            truncatedDescriptions: 0,
+            omittedSkills: 0
+          }
+        })
+      } as any,
+      {
+        getSnapshot: () => DEFAULT_KERNEL_STATE
+      } as any,
+      {
+        soulPath: "/tmp/does-not-exist"
+      } as any,
+      () => config,
+      undefined,
+      ((input: { messages: Array<{ role: string; content: unknown }> }) => {
+        seenMessages = input.messages;
+        return {
+          fullStream: (async function* () {
+            yield {
+              type: "text-delta",
+              text: "收到附件"
+            };
+          })(),
+          totalUsage: Promise.resolve(undefined)
+        };
+      }) as any
+    );
+
+    await conversation.reply({
+      text: "看看这个文件",
+      attachments: [
+        {
+          id: "attachment-1",
+          kind: "file",
+          filename: "snippet.txt",
+          mimeType: "text/plain",
+          size: 16,
+          path: attachmentPath,
+          source: "user-upload",
+          createdAt: new Date().toISOString()
+        }
+      ],
+      channel: "console",
+      resourceId: "resource-1",
+      threadId: "thread-1",
+      persistUserMessage: false
+    });
+
+    const lastMessage = seenMessages.at(-1);
+    assert.equal(lastMessage?.role, "user");
+    assert.ok(Array.isArray(lastMessage?.content));
+    assert.equal((lastMessage?.content as Array<{ type: string }>)[0]?.type, "text");
+    assert.equal((lastMessage?.content as Array<{ type: string }>)[1]?.type, "file");
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("ConversationEngine: persists toolTrace metadata for successful tool calls", async () => {

@@ -2,6 +2,7 @@ import type {
   AppConfig,
   AppStatus,
   BrowseAuthState,
+  ConsoleChatAttachmentInput,
   CommandApprovalDecision,
   ConsoleRunEventV2,
   HistoryMessage,
@@ -106,8 +107,15 @@ export interface CompanionApi {
   onStatus(listener: (status: AppStatus) => void): () => void;
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 
-  sendConsoleChat(text: string): Promise<{ requestId: string }>;
-  sendConsoleChatWithVoice(input: { text: string; voiceContext?: VoiceInputContext }): Promise<{ requestId: string }>;
+  sendConsoleChat(input: {
+    text: string;
+    attachments?: ConsoleChatAttachmentInput[];
+  }): Promise<{ requestId: string }>;
+  sendConsoleChatWithVoice(input: {
+    text: string;
+    voiceContext?: VoiceInputContext;
+    attachments?: ConsoleChatAttachmentInput[];
+  }): Promise<{ requestId: string }>;
   stopConsoleChat(requestId: string): Promise<{ accepted: boolean }>;
   transcribeVoice(input: {
     pcm16Base64: string;

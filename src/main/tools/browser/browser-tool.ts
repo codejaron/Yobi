@@ -1,8 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
+import { supportsChatToolResultMedia } from "@main/core/provider-utils";
+import { ChatMediaStore } from "@main/services/chat-media";
 import { SandboxGuard } from "@main/tools/guard/sandbox";
 import type { ToolDefinition, ToolResult } from "@main/tools/types";
 import { BrowserController, type BrowserAction } from "./controller";
@@ -37,6 +36,7 @@ interface BrowserToolDeps {
   controller: BrowserController;
   sandboxGuard: SandboxGuard;
   getConfig: () => AppConfig;
+  chatMediaStore: ChatMediaStore;
 }
 
 function controllerConfig(config: AppConfig) {
@@ -46,13 +46,53 @@ function controllerConfig(config: AppConfig) {
   };
 }
 
-async function saveScreenshot(buffer: Buffer): Promise<string> {
-  const outputDir = path.join(os.homedir(), ".yobi", "tool-media");
-  await mkdir(outputDir, { recursive: true });
+function toBrowserModelOutput(getConfig: () => AppConfig, result: ToolResult) {
+  if (!result.success) {
+    return {
+      type: "error-text" as const,
+      value: result.error?.trim() || "浏览器截图失败"
+    };
+  }
 
-  const file = path.join(outputDir, `browser-${Date.now()}.png`);
-  await writeFile(file, buffer);
-  return file;
+  const media = result.media?.find((item) => item.type === "image");
+  if (!media) {
+    return typeof result.data === "string"
+      ? {
+          type: "text" as const,
+          value: result.data
+        }
+      : {
+          type: "json" as const,
+          value: (result.data ?? null) as any
+        };
+  }
+
+  const pathText =
+    typeof (result.data as { path?: unknown } | undefined)?.path === "string"
+      ? String((result.data as { path?: string }).path)
+      : media?.path;
+  const fallbackText = pathText ? `已截取浏览器截图，路径：${pathText}` : "已截取浏览器截图。";
+  if (!media?.dataBase64 || !supportsChatToolResultMedia(getConfig())) {
+    return {
+      type: "text" as const,
+      value: fallbackText
+    };
+  }
+
+  return {
+    type: "content" as const,
+    value: [
+      {
+        type: "text" as const,
+        text: fallbackText
+      },
+      {
+        type: "media" as const,
+        data: media.dataBase64,
+        mediaType: media.mimeType
+      }
+    ]
+  };
 }
 
 function buildAction(params: BrowserParams): BrowserAction {
@@ -129,6 +169,7 @@ export function createBrowserTool(deps: BrowserToolDeps): ToolDefinition<Browser
       "操控 Yobi 隔离浏览器。支持打开网页、页面快照、基于 ref 的点击/输入/选择、截图和标签页管理。",
     parameters: browserParamsSchema,
     isEnabled: (config) => config.tools.browser.enabled,
+    toModelOutput: (result) => toBrowserModelOutput(deps.getConfig, result),
     async execute(params): Promise<ToolResult> {
       const config = deps.getConfig();
       deps.sandboxGuard.ensureBrowserEnabled();
@@ -206,18 +247,25 @@ export function createBrowserTool(deps: BrowserToolDeps): ToolDefinition<Browser
         const image = await deps.controller.screenshot({
           fullPage: params.fullPage
         });
-        const filePath = await saveScreenshot(image);
+        const attachment = await deps.chatMediaStore.storeToolMedia({
+          mediaType: "image/png",
+          data: image,
+          prefix: "browser",
+          filename: "browser-screenshot.png"
+        });
 
         return {
           success: true,
           data: {
-            path: filePath
+            path: attachment.path
           },
           media: [
             {
               type: "image",
-              path: filePath,
-              mimeType: "image/png"
+              path: attachment.path,
+              mimeType: attachment.mimeType,
+              filename: attachment.filename,
+              dataBase64: image.toString("base64")
             }
           ]
         };

@@ -153,6 +153,10 @@ export class CompanionPaths {
     return path.join(this.baseDir, "token-stats");
   }
 
+  get chatMediaDir(): string {
+    return path.join(this.baseDir, "chat-media");
+  }
+
   get tokenStatsStatePath(): string {
     return path.join(this.tokenStatsDir, "state.json");
   }
@@ -185,6 +189,7 @@ export class CompanionPaths {
     mkdirSync(this.browseDir, { recursive: true });
     mkdirSync(this.bilibiliBrowseDir, { recursive: true });
     mkdirSync(this.tokenStatsDir, { recursive: true });
+    mkdirSync(this.chatMediaDir, { recursive: true });
     mkdirSync(this.petBrowserProfileDir, { recursive: true });
     mkdirSync(this.skillsDir, { recursive: true });
   }

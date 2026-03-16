@@ -113,8 +113,8 @@ const api = {
     ipcRenderer.on(channel, wrapped);
     return () => ipcRenderer.removeListener(channel, wrapped);
   },
-  sendConsoleChat(text) {
-    return ipcRenderer.invoke('console:chat:send', { text });
+  sendConsoleChat(input) {
+    return ipcRenderer.invoke('console:chat:send', input ?? {});
   },
   sendConsoleChatWithVoice(input) {
     return ipcRenderer.invoke('console:chat:send', input ?? {});

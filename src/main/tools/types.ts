@@ -1,4 +1,4 @@
-import type { ToolSet } from "ai";
+import type { ToolResultPart, ToolSet } from "ai";
 import type { z } from "zod";
 import type { AppConfig, CommandApprovalDecision } from "@shared/types";
 
@@ -6,6 +6,8 @@ interface ToolMediaAttachment {
   type: "image" | "file";
   path: string;
   mimeType: string;
+  filename?: string;
+  dataBase64?: string;
 }
 
 export interface ToolApprovalRequest {
@@ -52,6 +54,7 @@ export interface ToolDefinition<TInput extends Record<string, unknown> = Record<
   approvalText?: (params: TInput) => string;
   signatureKey?: (params: TInput) => string;
   execute(params: TInput, context: ToolExecutionContext): Promise<ToolResult>;
+  toModelOutput?: (result: ToolResult) => ToolResultPart["output"];
   dispose?: () => Promise<void>;
 }
 

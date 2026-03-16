@@ -76,9 +76,10 @@ export class DefaultToolRegistry implements ToolRegistry {
 
       toolSet[definition.name] = tool({
         description: definition.description,
-        inputSchema: definition.parameters,
-        execute: async (input) => this.execute(definition.name, input as Record<string, unknown>, context)
-      });
+        inputSchema: definition.parameters as any,
+        execute: async (input: any) => this.execute(definition.name, input as Record<string, unknown>, context),
+        toModelOutput: definition.toModelOutput
+      } as any);
     }
 
     return toolSet as ToolSet;

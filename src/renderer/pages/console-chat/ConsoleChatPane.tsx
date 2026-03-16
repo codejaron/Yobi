@@ -1,7 +1,7 @@
-import { useLayoutEffect } from "react";
-import type { FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
+import { useLayoutEffect, useRef } from "react";
+import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type { CommandApprovalDecision, VoiceInputContext, VoiceSessionState } from "@shared/types";
-import { Loader2, Mic, Square } from "lucide-react";
+import { FileText, Loader2, Mic, Paperclip, Square, X } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Textarea } from "@renderer/components/ui/textarea";
@@ -10,6 +10,7 @@ import { AssistantProcessView } from "./AssistantProcessView";
 import { APPROVAL_OPTIONS } from "./types";
 import type {
   ConsoleActivatedSkill,
+  ConsoleAttachmentView,
   ConsoleMessage,
   ConsoleSkillsCatalogState,
   PendingApproval
@@ -33,9 +34,15 @@ interface ConsoleChatPaneProps {
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
   draft: string;
   setDraft: (value: string) => void;
+  composerAttachments: ConsoleAttachmentView[];
   inputRef: RefObject<HTMLTextAreaElement | null>;
   inputDisabled: boolean;
   onInputKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onInputPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onAttachmentSelection: (files: FileList | File[]) => Promise<void>;
+  onRemoveAttachment: (attachmentId: string) => void;
+  onComposerDrop: (event: DragEvent<HTMLFormElement>) => void;
+  onComposerDragOver: (event: DragEvent<HTMLFormElement>) => void;
   toggleMicRecording: () => void;
   micButtonDisabled: boolean;
   recording: boolean;
@@ -63,6 +70,64 @@ function formatRecognitionMeta(meta: VoiceInputContext["metadata"] | null): Arra
   ].filter(Boolean);
 }
 
+function formatAttachmentSize(size: number): string {
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  if (size >= 1024) {
+    return `${Math.round(size / 1024)} KB`;
+  }
+
+  return `${size} B`;
+}
+
+function toFilePreviewUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const prefix = normalized.startsWith("/") ? "" : "/";
+  return `file://${prefix}${encodeURI(normalized)}`;
+}
+
+function renderAttachmentPreview(attachment: ConsoleAttachmentView, removable = false, onRemove?: () => void) {
+  const previewUrl =
+    attachment.kind === "image"
+      ? (attachment.previewUrl ?? (attachment.path ? toFilePreviewUrl(attachment.path) : undefined))
+      : undefined;
+
+  return (
+    <div key={attachment.id} className="surface-panel flex items-start gap-3 rounded-xl border px-3 py-3">
+      {previewUrl ? (
+        <img
+          src={previewUrl}
+          alt={attachment.filename}
+          className="h-16 w-16 rounded-lg object-cover"
+        />
+      ) : (
+        <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <FileText className="h-5 w-5" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1 text-sm">
+        <p className="truncate font-medium">{attachment.filename}</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {attachment.mimeType} · {formatAttachmentSize(attachment.size)}
+        </p>
+      </div>
+      {removable && onRemove ? (
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-8 w-8 shrink-0"
+          onClick={onRemove}
+          aria-label={`移除 ${attachment.filename}`}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 export function ConsoleChatPane({
   busy,
   clearingHistory,
@@ -81,9 +146,15 @@ export function ConsoleChatPane({
   submitApproval,
   draft,
   setDraft,
+  composerAttachments,
   inputRef,
   inputDisabled,
   onInputKeyDown,
+  onInputPaste,
+  onAttachmentSelection,
+  onRemoveAttachment,
+  onComposerDrop,
+  onComposerDragOver,
   toggleMicRecording,
   micButtonDisabled,
   recording,
@@ -98,6 +169,7 @@ export function ConsoleChatPane({
   stopCurrentRequest,
   clearHistory
 }: ConsoleChatPaneProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionLabels = formatRecognitionMeta(
     voiceSession?.userTranscriptMetadata ?? pendingVoiceContext?.metadata ?? null
   );
@@ -213,7 +285,14 @@ export function ConsoleChatPane({
                 ) : null}
                 {item.role === "user" ? (
                   <div className="w-fit rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
-                    <p className="whitespace-pre-wrap leading-relaxed">{item.text || "..."}</p>
+                    {item.attachments && item.attachments.length > 0 ? (
+                      <div className="mb-3 grid gap-2">
+                        {item.attachments.map((attachment) => renderAttachmentPreview(attachment))}
+                      </div>
+                    ) : null}
+                    {item.text ? (
+                      <p className="whitespace-pre-wrap leading-relaxed">{item.text}</p>
+                    ) : null}
                   </div>
                 ) : item.role === "assistant" && item.source === "yobi" ? (
                   <div
@@ -264,68 +343,109 @@ export function ConsoleChatPane({
             </div>
           ) : null}
 
-          <form onSubmit={onSubmit} className="flex items-end gap-2">
-            <Textarea
-              ref={inputRef}
-              rows={1}
-              value={draft}
-              placeholder="和 Yobi 说点什么"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onInputKeyDown}
-              disabled={inputDisabled}
-              className="max-h-44 min-h-[44px] flex-1 resize-none rounded-xl border-border/80 bg-card/95 px-4 py-3 text-[15px] leading-6 shadow-sm"
+          <form
+            onSubmit={onSubmit}
+            onDrop={onComposerDrop}
+            onDragOver={onComposerDragOver}
+            className="space-y-3"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              accept="image/*,.pdf,.txt,.md,.markdown,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.scss,.html,.htm,.xml,.yaml,.yml,.py,.java,.c,.cc,.cpp,.cxx,.h,.hpp,.cs,.go,.rs,.rb,.php,.sh,.bash,.zsh,.sql,.toml,.ini,.cfg,.conf,.csv,.log"
+              onChange={(event) => {
+                if (!event.target.files || event.target.files.length === 0) {
+                  return;
+                }
+
+                void onAttachmentSelection(event.target.files);
+                event.target.value = "";
+              }}
             />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={toggleMicRecording}
-              disabled={micButtonDisabled}
-              className={`h-11 min-w-[88px] shrink-0 whitespace-nowrap ${
-                recording ? "theme-recording-button" : ""
-              }`}
-              title={micHint || "单击开始录音，再次单击结束识别"}
-            >
-              {transcribing ? (
-                <>
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  {micButtonLabel}
-                </>
-              ) : recording ? (
-                <>
-                  <Square className="mr-1.5 h-4 w-4" />
-                  {micButtonLabel}
-                </>
-              ) : (
-                <>
-                  <Mic className="mr-1.5 h-4 w-4" />
-                  {micButtonLabel}
-                </>
-              )}
-            </Button>
-            {busy ? (
+            {composerAttachments.length > 0 ? (
+              <div className="grid gap-2">
+                {composerAttachments.map((attachment) =>
+                  renderAttachmentPreview(attachment, true, () => onRemoveAttachment(attachment.id))
+                )}
+              </div>
+            ) : null}
+            <div className="flex items-end gap-2">
               <Button
                 type="button"
-                onClick={() => void stopCurrentRequest()}
-                disabled={stoppingRequest}
-                className="h-11 w-11 min-w-0 shrink-0 rounded-full bg-foreground p-0 text-background hover:bg-foreground/90"
-                title="停止生成"
-                aria-label="停止生成"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={inputDisabled}
+                className="h-11 w-11 min-w-0 shrink-0 rounded-full p-0"
+                title="添加附件"
+                aria-label="添加附件"
               >
-                {stoppingRequest ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <Textarea
+                ref={inputRef}
+                rows={1}
+                value={draft}
+                placeholder="和 Yobi 说点什么，也可以拖拽/粘贴图片或文件"
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onInputKeyDown}
+                onPaste={onInputPaste}
+                disabled={inputDisabled}
+                className="max-h-44 min-h-[44px] flex-1 resize-none rounded-xl border-border/80 bg-card/95 px-4 py-3 text-[15px] leading-6 shadow-sm"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={toggleMicRecording}
+                disabled={micButtonDisabled}
+                className={`h-11 min-w-[88px] shrink-0 whitespace-nowrap ${
+                  recording ? "theme-recording-button" : ""
+                }`}
+                title={micHint || "单击开始录音，再次单击结束识别"}
+              >
+                {transcribing ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    {micButtonLabel}
+                  </>
+                ) : recording ? (
+                  <>
+                    <Square className="mr-1.5 h-4 w-4" />
+                    {micButtonLabel}
+                  </>
                 ) : (
-                  <Square className="h-4 w-4 fill-current" />
+                  <>
+                    <Mic className="mr-1.5 h-4 w-4" />
+                    {micButtonLabel}
+                  </>
                 )}
               </Button>
-            ) : (
-              <Button
-                type="submit"
-                disabled={recording || transcribing || draft.trim().length === 0}
-                className="h-11 min-w-[92px] shrink-0 whitespace-nowrap"
-              >
-                发送
-              </Button>
-            )}
+              {busy ? (
+                <Button
+                  type="button"
+                  onClick={() => void stopCurrentRequest()}
+                  disabled={stoppingRequest}
+                  className="h-11 w-11 min-w-0 shrink-0 rounded-full bg-foreground p-0 text-background hover:bg-foreground/90"
+                  title="停止生成"
+                  aria-label="停止生成"
+                >
+                  {stoppingRequest ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Square className="h-4 w-4 fill-current" />
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  disabled={recording || transcribing || (draft.trim().length === 0 && composerAttachments.length === 0)}
+                  className="h-11 min-w-[92px] shrink-0 whitespace-nowrap"
+                >
+                  发送
+                </Button>
+              )}
+            </div>
           </form>
           {micHint ? (
             <p className="mt-2 text-xs text-muted-foreground">{micHint}</p>

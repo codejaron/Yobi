@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent, UIEvent } from "react";
+import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type {
   CommandApprovalDecision,
+  ConsoleChatAttachmentInput,
   ConsoleRunEventV2,
   HistoryMessage,
   VoiceInputContext,
@@ -27,10 +28,12 @@ import {
   APPROVAL_OPTIONS,
   CONSOLE_HISTORY_PAGE_SIZE,
   appendRecognizedText,
-  historyRoleToMessageRole
+  historyRoleToMessageRole,
+  toConsoleAttachmentView
 } from "./types";
 import type {
   ConsoleActivatedSkill,
+  ConsoleAttachmentView,
   ConsoleMessage,
   ConsoleSkillsCatalogState,
   PendingApproval
@@ -40,6 +43,7 @@ export interface ConsoleChatController {
   messages: ConsoleMessage[];
   draft: string;
   setDraft: (value: string) => void;
+  composerAttachments: ConsoleAttachmentView[];
   micState: "idle" | "recording" | "transcribing";
   micHint: string;
   activeRequestId: string | null;
@@ -63,14 +67,19 @@ export interface ConsoleChatController {
   pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
   interruptVoiceSession: () => Promise<void>;
-  chatBottomRef: React.RefObject<HTMLDivElement | null>;
-  chatListRef: React.RefObject<HTMLDivElement | null>;
-  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  chatBottomRef: RefObject<HTMLDivElement | null>;
+  chatListRef: RefObject<HTMLDivElement | null>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
   clearHistory: () => Promise<void>;
   handleChatScroll: (event: UIEvent<HTMLDivElement>) => void;
   handleSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  handleAttachmentSelection: (files: FileList | File[]) => Promise<void>;
+  removeComposerAttachment: (attachmentId: string) => void;
   stopCurrentRequest: () => Promise<void>;
   handleInputKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  handleInputPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  handleComposerDrop: (event: DragEvent<HTMLFormElement>) => void;
+  handleComposerDragOver: (event: DragEvent<HTMLFormElement>) => void;
   toggleMicRecording: () => void;
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
 }
@@ -96,6 +105,7 @@ function createHistoryMessage(item: HistoryMessage): ConsoleMessage {
     role: historyRoleToMessageRole(item.role),
     text: item.text,
     state: "done",
+    attachments: item.meta?.attachments?.map((attachment) => toConsoleAttachmentView(attachment)),
     source: item.meta?.source,
     historyMode: item.role === "assistant",
     process:
@@ -104,6 +114,50 @@ function createHistoryMessage(item: HistoryMessage): ConsoleMessage {
             timeline: item.meta?.assistantTimeline?.blocks
           })
         : undefined
+  };
+}
+
+function createAssistantErrorMessage(message: string): ConsoleMessage {
+  return {
+    id: makeClientId("assistant"),
+    requestId: makeClientId("request-error"),
+    role: "assistant",
+    text: message,
+    state: "error",
+    process: createAssistantTurnProcess()
+  };
+}
+
+function toDataUrl(mimeType: string | undefined, dataBase64: string): string {
+  return `data:${mimeType || "application/octet-stream"};base64,${dataBase64}`;
+}
+
+async function fileToConsoleAttachment(file: File): Promise<ConsoleAttachmentView> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  const dataBase64 = window.btoa(binary);
+  const mimeType = file.type || "application/octet-stream";
+  const input: ConsoleChatAttachmentInput = {
+    name: file.name,
+    mimeType,
+    size: file.size,
+    dataBase64
+  };
+
+  return {
+    id: makeClientId("attachment"),
+    kind: mimeType.startsWith("image/") ? "image" : "file",
+    filename: file.name || "attachment",
+    mimeType,
+    size: file.size,
+    previewUrl: toDataUrl(mimeType, dataBase64),
+    source: "draft",
+    input
   };
 }
 
@@ -218,6 +272,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [draft, setDraft] = useState("");
+  const [composerAttachments, setComposerAttachments] = useState<ConsoleAttachmentView[]>([]);
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [micHint, setMicHint] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
@@ -236,6 +291,10 @@ export function useConsoleChatController(): ConsoleChatController {
   const loadingMoreHistoryRef = useRef(false);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
   const liveVoiceStateRef = useRef(createConsoleChatLiveVoiceState());
+
+  const pushAssistantError = useCallback((message: string) => {
+    setLiveMessages((prev) => [...prev, createAssistantErrorMessage(message)]);
+  }, []);
 
   const upsertAssistantMessage = useCallback(
     (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
@@ -561,6 +620,7 @@ export function useConsoleChatController(): ConsoleChatController {
       liveVoiceStateRef.current = createConsoleChatLiveVoiceState();
       setPersistedMessages([]);
       setLiveMessages([]);
+      setComposerAttachments([]);
       setHistoryHasMore(false);
       setHistoryCursor(null);
       setPendingApproval(null);
@@ -752,29 +812,99 @@ export function useConsoleChatController(): ConsoleChatController {
     [pendingApproval]
   );
 
+  const handleAttachmentSelection = useCallback(
+    async (files: FileList | File[]) => {
+      const selected = Array.from(files);
+      if (selected.length === 0) {
+        return;
+      }
+
+      const availableSlots = Math.max(0, 3 - composerAttachments.length);
+      if (availableSlots <= 0) {
+        pushAssistantError("单条消息最多只能附加 3 个文件。");
+        return;
+      }
+
+      try {
+        const nextAttachments = await Promise.all(selected.slice(0, availableSlots).map((file) => fileToConsoleAttachment(file)));
+        setComposerAttachments((current) => [...current, ...nextAttachments]);
+        if (selected.length > availableSlots) {
+          pushAssistantError("超出 3 个附件上限，已忽略多余文件。");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "读取附件失败，请重试。";
+        pushAssistantError(message);
+      }
+    },
+    [composerAttachments.length, pushAssistantError]
+  );
+
+  const removeComposerAttachment = useCallback((attachmentId: string) => {
+    setComposerAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+  }, []);
+
+  const handleInputPaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (event.clipboardData.files.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      void handleAttachmentSelection(event.clipboardData.files);
+    },
+    [handleAttachmentSelection]
+  );
+
+  const handleComposerDragOver = useCallback((event: DragEvent<HTMLFormElement>) => {
+    if (event.dataTransfer.files.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+  }, []);
+
+  const handleComposerDrop = useCallback(
+    (event: DragEvent<HTMLFormElement>) => {
+      if (event.dataTransfer.files.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      void handleAttachmentSelection(event.dataTransfer.files);
+    },
+    [handleAttachmentSelection]
+  );
+
   const handleSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
 
       const text = draft.trim();
-      if (!text || activeRequestId) {
+      if ((!text && composerAttachments.length === 0) || activeRequestId) {
         return;
       }
 
+      const attachments = composerAttachments;
+      const attachmentInputs = attachments
+        .map((attachment) => attachment.input)
+        .filter((attachment): attachment is ConsoleChatAttachmentInput => Boolean(attachment));
       setDraft("");
+      setComposerAttachments([]);
       setSkillsCatalog(null);
       setActivatedSkills([]);
       autoFollowRef.current = getNextConsoleChatAutoFollowState({
         type: "submit-message"
       });
+      const localRequestId = makeClientId("request-local");
       setLiveMessages((prev) => [
         ...prev,
         {
           id: makeClientId("user"),
-          requestId: makeClientId("request-local"),
+          requestId: localRequestId,
           role: "user",
           text,
-          state: "done"
+          state: "done",
+          attachments: attachments.map(({ input, ...attachment }) => attachment)
         }
       ]);
 
@@ -782,9 +912,13 @@ export function useConsoleChatController(): ConsoleChatController {
         const started = pendingVoiceContext
           ? await window.companion.sendConsoleChatWithVoice({
               text,
-              voiceContext: pendingVoiceContext
+              voiceContext: pendingVoiceContext,
+              attachments: attachmentInputs
             })
-          : await window.companion.sendConsoleChat(text);
+          : await window.companion.sendConsoleChat({
+              text,
+              attachments: attachmentInputs
+            });
         setActiveRequestId(started.requestId);
         setPendingVoiceContext(null);
         setLiveMessages((prev) => {
@@ -797,20 +931,13 @@ export function useConsoleChatController(): ConsoleChatController {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "提交请求失败，请稍后重试";
-        setLiveMessages((prev) => [
-          ...prev,
-          {
-            id: makeClientId("assistant"),
-            requestId: makeClientId("request-error"),
-            role: "assistant",
-            text: message,
-            state: "error",
-            process: createAssistantTurnProcess()
-          }
-        ]);
+        setLiveMessages((prev) => prev.filter((item) => item.requestId !== localRequestId));
+        setDraft(text);
+        setComposerAttachments(attachments);
+        pushAssistantError(message);
       }
     },
-    [activeRequestId, draft, pendingVoiceContext]
+    [activeRequestId, composerAttachments, draft, pendingVoiceContext, pushAssistantError]
   );
 
   const stopCurrentRequest = useCallback(async () => {
@@ -897,6 +1024,7 @@ export function useConsoleChatController(): ConsoleChatController {
     messages,
     draft,
     setDraft,
+    composerAttachments,
     micState,
     micHint,
     activeRequestId,
@@ -926,8 +1054,13 @@ export function useConsoleChatController(): ConsoleChatController {
     clearHistory,
     handleChatScroll,
     handleSubmit,
+    handleAttachmentSelection,
+    removeComposerAttachment,
     stopCurrentRequest,
     handleInputKeyDown,
+    handleInputPaste,
+    handleComposerDrop,
+    handleComposerDragOver,
     toggleMicRecording,
     submitApproval
   };

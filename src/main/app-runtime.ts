@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
   type AppConfig,
   type AppStatus,
+  type ChatAttachment,
   type CommandApprovalDecision,
+  type ConsoleChatAttachmentInput,
   type ConsoleRunEventV2,
   type MindSnapshot,
   type RelationshipGuide,
@@ -24,7 +26,9 @@ import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
 import { isConversationAbortError } from "@main/core/conversation-abort";
+import { supportsChatAttachment } from "@main/core/provider-utils";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
+import { ChatMediaStore } from "@main/services/chat-media";
 import { ExaSearchService } from "@main/services/exa-search";
 import { ScheduledTaskService } from "@main/services/scheduled-tasks";
 import { ScheduledTaskStore } from "@main/storage/scheduled-task-store";
@@ -85,6 +89,8 @@ export class CompanionRuntime {
   private readonly statusCoordinator: RuntimeRegistry["statusCoordinator"];
   private readonly scheduledTaskStore: ScheduledTaskStore;
   private readonly scheduledTaskService: ScheduledTaskService;
+  private readonly chatMediaStore: ChatMediaStore;
+  private chatMediaCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(registry: RuntimeRegistry) {
     this.paths = registry.paths;
@@ -113,6 +119,7 @@ export class CompanionRuntime {
     this.lifecycleCoordinator = registry.lifecycleCoordinator;
     this.dataCoordinator = registry.dataCoordinator;
     this.statusCoordinator = registry.statusCoordinator;
+    this.chatMediaStore = new ChatMediaStore(this.paths);
     this.scheduledTaskStore = new ScheduledTaskStore(this.paths);
     this.scheduledTaskService = new ScheduledTaskService({
       store: this.scheduledTaskStore,
@@ -141,6 +148,9 @@ export class CompanionRuntime {
     this.logger.info("runtime", "init:start");
     setTokenRecorder((event) => this.tokenStatsService.record(event));
     await this.configStore.init();
+    await this.chatMediaStore.cleanupExpired().catch((error) => {
+      this.logger.warn("runtime", "chat-media-cleanup-init-failed", undefined, error);
+    });
     this.voiceRouter.syncLocalAsrState(this.paths.senseVoiceModelsDir);
     await ensureKernelBootstrap(this.paths);
     await this.skillManager.init();
@@ -164,6 +174,14 @@ export class CompanionRuntime {
     await this.startQQ();
     this.kernel.start();
     await this.scheduledTaskService.start();
+    if (!this.chatMediaCleanupTimer) {
+      this.chatMediaCleanupTimer = setInterval(() => {
+        void this.chatMediaStore.cleanupExpired().catch((error) => {
+          this.logger.warn("runtime", "chat-media-cleanup-interval-failed", undefined, error);
+        });
+      }, 24 * 60 * 60 * 1000);
+      this.chatMediaCleanupTimer.unref?.();
+    }
 
     await this.emitStatus();
     this.logger.info("runtime", "start:ready");
@@ -174,6 +192,10 @@ export class CompanionRuntime {
     await this.memory.dumpUnprocessedBuffer();
 
     this.lifecycleCoordinator.stop();
+    if (this.chatMediaCleanupTimer) {
+      clearInterval(this.chatMediaCleanupTimer);
+      this.chatMediaCleanupTimer = null;
+    }
     await this.scheduledTaskService.stop();
     await this.kernel.stop();
     await this.memory.stop();
@@ -470,11 +492,29 @@ export class CompanionRuntime {
     return this.dataCoordinator.getConsoleChatHistory(input);
   }
 
-  async startConsoleChat(input: string | { text?: string; voiceContext?: VoiceInputContext }): Promise<{ requestId: string }> {
+  async startConsoleChat(input: string | {
+    text?: string;
+    voiceContext?: VoiceInputContext;
+    attachments?: ConsoleChatAttachmentInput[];
+  }): Promise<{ requestId: string }> {
     const text = typeof input === "string" ? input : input?.text ?? "";
+    const attachmentInputs = typeof input === "string" ? [] : input?.attachments ?? [];
     const normalized = text.trim();
-    if (!normalized) {
+    const attachments =
+      attachmentInputs.length > 0
+        ? await this.chatMediaStore.storeConsoleAttachments({
+            attachments: attachmentInputs,
+            threadId: PRIMARY_THREAD_ID
+          })
+        : [];
+
+    if (!normalized && attachments.length === 0) {
       throw new Error("消息不能为空");
+    }
+
+    const unsupportedAttachment = attachments.find((attachment) => !supportsChatAttachment(this.getConfig(), attachment));
+    if (unsupportedAttachment) {
+      throw new Error(`当前聊天 provider 不支持附件类型：${unsupportedAttachment.filename} (${unsupportedAttachment.mimeType})`);
     }
 
     const requestId = randomUUID();
@@ -485,7 +525,7 @@ export class CompanionRuntime {
       voiceContext: typeof input === "string" ? undefined : input?.voiceContext
     });
     queueMicrotask(() => {
-      void this.runConsoleChatRequest(requestId, normalized);
+      void this.runConsoleChatRequest(requestId, normalized, attachments);
     });
 
     return {
@@ -583,7 +623,8 @@ export class CompanionRuntime {
     for (const builtin of createBuiltinTools({
       getConfig: () => this.getConfig(),
       exaSearchService,
-      scheduledTaskService: this.scheduledTaskService
+      scheduledTaskService: this.scheduledTaskService,
+      paths: this.paths
     })) {
       this.toolRegistry.register(builtin);
     }
@@ -593,7 +634,11 @@ export class CompanionRuntime {
     }
   }
 
-  private async runConsoleChatRequest(requestId: string, text: string): Promise<void> {
+  private async runConsoleChatRequest(
+    requestId: string,
+    text: string,
+    attachments: ChatAttachment[]
+  ): Promise<void> {
     const deltaStripper = createEmotionTagStripper();
     const handle = this.activeConsoleRequests.get(requestId);
 
@@ -613,12 +658,13 @@ export class CompanionRuntime {
 
       await this.recordUserActivity({
         channel: "console",
-        text
+        text: text || undefined
       });
 
       const reply = await this.withTimeout(
         this.channelRouter.handleConsole({
           text,
+          attachments,
           resourceId: PRIMARY_RESOURCE_ID,
           threadId: PRIMARY_THREAD_ID,
           voiceContext: handle.voiceContext,

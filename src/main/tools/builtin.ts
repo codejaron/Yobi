@@ -1,5 +1,7 @@
 import { ExaSearchService } from "@main/services/exa-search";
+import { ChatMediaStore } from "@main/services/chat-media";
 import type { ScheduledTaskService } from "@main/services/scheduled-tasks";
+import type { CompanionPaths } from "@main/storage/paths";
 import { createBrowserTool } from "@main/tools/browser/browser-tool";
 import { BrowserController } from "@main/tools/browser/controller";
 import { createExaTools } from "@main/tools/exa";
@@ -14,19 +16,23 @@ export function createBuiltinTools(input: {
   getConfig: () => AppConfig;
   exaSearchService: ExaSearchService;
   scheduledTaskService: ScheduledTaskService;
+  paths: CompanionPaths;
 }): Array<ToolDefinition<any>> {
-  const sandboxGuard = new SandboxGuard(input.getConfig);
+  const chatMediaStore = new ChatMediaStore(input.paths);
+  const sandboxGuard = new SandboxGuard(input.getConfig, chatMediaStore.getReadRoots());
   const browserController = new BrowserController();
 
   return [
     createBrowserTool({
       controller: browserController,
       sandboxGuard,
-      getConfig: input.getConfig
+      getConfig: input.getConfig,
+      chatMediaStore
     }),
     createSystemTool({
       getConfig: input.getConfig,
-      sandboxGuard
+      sandboxGuard,
+      chatMediaStore
     }),
     createFileTool({
       sandboxGuard

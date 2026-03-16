@@ -1,8 +1,8 @@
 import os from "node:os";
-import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
+import { supportsChatToolResultMedia } from "@main/core/provider-utils";
+import { ChatMediaStore } from "@main/services/chat-media";
 import { SandboxGuard } from "@main/tools/guard/sandbox";
 import type { ToolDefinition, ToolResult } from "@main/tools/types";
 import { ShellExecutor } from "./exec";
@@ -34,6 +34,7 @@ type SystemParams = z.infer<typeof systemParamsSchema>;
 interface SystemToolDeps {
   getConfig: () => AppConfig;
   sandboxGuard: SandboxGuard;
+  chatMediaStore: ChatMediaStore;
 }
 
 type CaptureTarget = Record<string, unknown> & {
@@ -181,16 +182,12 @@ function selectWindowTarget(windows: WindowTarget[], appName?: string): WindowTa
   return filtered.slice().sort((a, b) => readWindowZ(a) - readWindowZ(b))[0];
 }
 
-async function saveSystemScreenshot(buffer: Buffer): Promise<string> {
-  const outputDir = path.join(os.homedir(), ".yobi", "tool-media");
-  await mkdir(outputDir, { recursive: true });
-  const file = path.join(outputDir, `system-${Date.now()}.png`);
-  await writeFile(file, buffer);
-  return file;
-}
-
-async function captureAppScreenshot(appName?: string): Promise<{
-  path: string;
+async function captureAppScreenshot(
+  chatMediaStore: ChatMediaStore,
+  appName?: string
+): Promise<{
+  attachment: Awaited<ReturnType<ChatMediaStore["storeToolMedia"]>>;
+  imageBase64: string;
   appName: string;
   title: string;
   focused: boolean;
@@ -211,9 +208,15 @@ async function captureAppScreenshot(appName?: string): Promise<{
     throw new Error("窗口截图失败，未获取到图像数据。");
   }
 
-  const filePath = await saveSystemScreenshot(image);
+  const attachment = await chatMediaStore.storeToolMedia({
+    mediaType: "image/png",
+    data: image,
+    prefix: "system",
+    filename: "system-screenshot.png"
+  });
   return {
-    path: filePath,
+    attachment,
+    imageBase64: image.toString("base64"),
     appName: readWindowAppName(target),
     title: readWindowTitle(target),
     focused: readWindowFocused(target)
@@ -224,6 +227,55 @@ function ensureSystemEnabled(config: AppConfig): void {
   if (!config.tools.system.enabled) {
     throw new Error("系统操控工具未启用，请先在设置中开启。");
   }
+}
+
+function toSystemModelOutput(getConfig: () => AppConfig, result: ToolResult) {
+  if (!result.success) {
+    return {
+      type: "error-text" as const,
+      value: result.error?.trim() || "应用截图失败"
+    };
+  }
+
+  const media = result.media?.find((item) => item.type === "image");
+  if (!media) {
+    return typeof result.data === "string"
+      ? {
+          type: "text" as const,
+          value: result.data
+        }
+      : {
+          type: "json" as const,
+          value: (result.data ?? null) as any
+        };
+  }
+
+  const pathText =
+    typeof (result.data as { path?: unknown } | undefined)?.path === "string"
+      ? String((result.data as { path?: string }).path)
+      : media?.path;
+  const fallbackText = pathText ? `已截取应用窗口截图，路径：${pathText}` : "已截取应用窗口截图。";
+  if (!media?.dataBase64 || !supportsChatToolResultMedia(getConfig())) {
+    return {
+      type: "text" as const,
+      value: fallbackText
+    };
+  }
+
+  return {
+    type: "content" as const,
+    value: [
+      {
+        type: "text" as const,
+        text: fallbackText
+      },
+      {
+        type: "media" as const,
+        data: media.dataBase64,
+        mediaType: media.mimeType
+      }
+    ]
+  };
 }
 
 export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemParams> {
@@ -237,6 +289,7 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
     description: "执行受控系统操作。支持 shell 命令、本机应用打开、文本输入、快捷键、通知、窗口查询和应用截图。",
     parameters: systemParamsSchema,
     isEnabled: (config) => config.tools.system.enabled,
+    toModelOutput: (result) => toSystemModelOutput(deps.getConfig, result),
     requiresApproval(params) {
       return params.action !== "notify" && params.action !== "get_windows";
     },
@@ -305,15 +358,22 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
       }
 
       if (params.action === "screenshot_app") {
-        const captured = await captureAppScreenshot(params.appName);
+        const captured = await captureAppScreenshot(deps.chatMediaStore, params.appName);
         return {
           success: true,
-          data: captured,
+          data: {
+            path: captured.attachment.path,
+            appName: captured.appName,
+            title: captured.title,
+            focused: captured.focused
+          },
           media: [
             {
               type: "image",
-              path: captured.path,
-              mimeType: "image/png"
+              path: captured.attachment.path,
+              mimeType: captured.attachment.mimeType,
+              filename: captured.attachment.filename,
+              dataBase64: captured.imageBase64
             }
           ]
         };

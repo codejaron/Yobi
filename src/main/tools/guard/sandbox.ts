@@ -70,7 +70,10 @@ function isInsideRoot(target: string, root: string): boolean {
 }
 
 export class SandboxGuard {
-  constructor(private readonly getConfig: () => AppConfig) {}
+  constructor(
+    private readonly getConfig: () => AppConfig,
+    private readonly internalReadRoots: string[] = []
+  ) {}
 
   ensureBrowserEnabled(): void {
     if (!this.getConfig().tools.browser.enabled) {
@@ -163,7 +166,7 @@ export class SandboxGuard {
       throw new Error("文件读取能力未启用。");
     }
 
-    return this.assertPathAllowed(targetPath, config.tools.file.allowedPaths);
+    return this.assertPathAllowed(targetPath, [...config.tools.file.allowedPaths, ...this.internalReadRoots]);
   }
 
   ensureFileWriteAllowed(targetPath: string): string {
@@ -172,7 +175,13 @@ export class SandboxGuard {
       throw new Error("文件写入能力未启用。");
     }
 
-    return this.assertPathAllowed(targetPath, config.tools.file.allowedPaths);
+    const resolved = this.assertPathAllowed(targetPath, config.tools.file.allowedPaths);
+    const blockedInternalRoot = this.internalReadRoots.find((root) => isInsideRoot(resolved, root));
+    if (blockedInternalRoot) {
+      throw new Error(`路径是内部只读目录，禁止写入: ${resolved}`);
+    }
+
+    return resolved;
   }
 
   private assertPathAllowed(targetPath: string, allowedRoots: string[]): string {

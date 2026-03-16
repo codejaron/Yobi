@@ -698,6 +698,35 @@ export interface VoiceHistoryMeta {
   ttsProvider: AppConfig["voice"]["ttsProvider"];
 }
 
+export type ChatAttachmentKind = "image" | "file";
+export type ChatAttachmentSource = "user-upload" | "tool-generated";
+
+export interface ConsoleChatAttachmentInput {
+  name?: string;
+  mimeType?: string | null;
+  size?: number;
+  dataBase64: string;
+}
+
+export interface ChatAttachment {
+  id: string;
+  kind: ChatAttachmentKind;
+  filename: string;
+  mimeType: string;
+  size: number;
+  path: string;
+  source: ChatAttachmentSource;
+  createdAt: string;
+}
+
+export interface AttachmentReferenceNote {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  path: string;
+  reason: "expired" | "missing";
+}
+
 export interface HistoryMessageMeta {
   proactive?: boolean;
   source?: "yobi";
@@ -709,6 +738,8 @@ export interface HistoryMessageMeta {
   };
   voice?: VoiceHistoryMeta;
   speechRecognition?: VoiceInputContext;
+  attachments?: ChatAttachment[];
+  attachmentReferences?: AttachmentReferenceNote[];
 }
 
 export interface VoiceSessionState {

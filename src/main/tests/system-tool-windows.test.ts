@@ -49,6 +49,18 @@ test("createSystemTool: Windows type_text passes text to adapter", async (t) => 
     getConfig: () => config,
     sandboxGuard: {
       ensureExecAllowed: () => undefined
+    } as any,
+    chatMediaStore: {
+      storeToolMedia: async () => ({
+        id: "attachment-1",
+        kind: "image",
+        filename: "system-screenshot.png",
+        mimeType: "image/png",
+        size: 1,
+        path: "/tmp/system-screenshot.png",
+        source: "tool-generated",
+        createdAt: new Date().toISOString()
+      })
     } as any
   });
 
@@ -80,6 +92,18 @@ test("createSystemTool: Windows press_keys passes keys to adapter", async (t) =>
     getConfig: () => config,
     sandboxGuard: {
       ensureExecAllowed: () => undefined
+    } as any,
+    chatMediaStore: {
+      storeToolMedia: async () => ({
+        id: "attachment-1",
+        kind: "image",
+        filename: "system-screenshot.png",
+        mimeType: "image/png",
+        size: 1,
+        path: "/tmp/system-screenshot.png",
+        source: "tool-generated",
+        createdAt: new Date().toISOString()
+      })
     } as any
   });
 
@@ -112,6 +136,18 @@ test("createSystemTool: Windows get_windows passes appName to adapter", async (t
     getConfig: () => config,
     sandboxGuard: {
       ensureExecAllowed: () => undefined
+    } as any,
+    chatMediaStore: {
+      storeToolMedia: async () => ({
+        id: "attachment-1",
+        kind: "image",
+        filename: "system-screenshot.png",
+        mimeType: "image/png",
+        size: 1,
+        path: "/tmp/system-screenshot.png",
+        source: "tool-generated",
+        createdAt: new Date().toISOString()
+      })
     } as any
   });
 

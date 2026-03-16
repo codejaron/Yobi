@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { streamText, stepCountIs, type ToolSet } from "ai";
+import { streamText, stepCountIs, type ModelMessage, type ToolSet } from "ai";
 import type {
   AppConfig,
   AssistantTimelineBlock,
+  ChatAttachment,
   RealtimeEmotionalSignals,
   SkillsCatalogSummary,
   TokenUsageSource,
@@ -26,6 +27,7 @@ import {
 import { resolveOpenAIStoreOption } from "./provider-utils";
 import { createEmotionTagStripper, extractEmotionTag, extractRawSignalsTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
+import { buildUserContentWithAttachments } from "@main/services/chat-media";
 import type { SkillManager } from "@main/skills/manager";
 import type { ToolApprovalHandler, ToolRegistry } from "@main/tools/types";
 import { reportTokenUsage } from "@main/services/token/token-usage-reporter";
@@ -198,6 +200,7 @@ export class ConversationEngine {
 
   async reply(input: {
     text: string;
+    attachments?: ChatAttachment[];
     channel: "telegram" | "console" | "qq" | "feishu";
     resourceId: string;
     threadId: string;
@@ -214,8 +217,9 @@ export class ConversationEngine {
     const config = this.getConfig();
     const providerOptions = resolveOpenAIStoreOption(config);
     const normalizedText = input.text.trim();
+    const attachments = input.attachments ?? [];
 
-    if (!normalizedText) {
+    if (!normalizedText && attachments.length === 0) {
       return "";
     }
 
@@ -227,6 +231,7 @@ export class ConversationEngine {
         text: normalizedText,
         metadata: {
           channel: input.channel,
+          ...(attachments.length > 0 ? { attachments } : {}),
           ...(input.voiceContext
             ? {
                 speechRecognition: {
@@ -257,8 +262,11 @@ export class ConversationEngine {
         .filter((item) => item.role === "user")
         .slice(-3)
         .map((item) => item.text),
-      ...(input.persistUserMessage === false ? [normalizedText] : [])
-    ].slice(-3);
+      ...(input.persistUserMessage === false && normalizedText ? [normalizedText] : [])
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(-3);
     const [factCandidates, episodeCandidates] = await Promise.all([
       this.memory.searchRelevantFacts({
         queryTexts,
@@ -306,10 +314,19 @@ export class ConversationEngine {
       },
       assembled.maxRecentMessages
     );
-    const messages =
-      input.persistUserMessage === false
-        ? [...persistedMessages, { role: "user" as const, content: normalizedText }].slice(-assembled.maxRecentMessages)
-        : persistedMessages;
+    const messages: ModelMessage[] = [...persistedMessages];
+    if (input.persistUserMessage === false) {
+      const currentUserContent = await buildUserContentWithAttachments({
+        text: normalizedText,
+        attachments,
+        includeMedia: true
+      });
+      messages.push({
+        role: "user",
+        content: currentUserContent.content
+      });
+    }
+    const boundedMessages = messages.slice(-assembled.maxRecentMessages);
 
     const tools: ToolSet = this.toolRegistry.getToolSet({
       channel: input.channel,
@@ -334,7 +351,7 @@ export class ConversationEngine {
     const result = this.streamTextImpl({
       model,
       system,
-      messages,
+      messages: boundedMessages,
       tools,
       toolChoice: "auto",
       providerOptions,
@@ -689,7 +706,7 @@ export class ConversationEngine {
           source: tokenSourceFromChannel(input.channel),
           usage: totalUsage,
           systemText: system,
-          inputText: normalizedText,
+          inputText: normalizedText || attachments.map((attachment) => attachment.filename).join(", "),
           outputText: finalText
         });
       })

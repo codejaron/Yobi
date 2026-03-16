@@ -1,8 +1,11 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import type { ModelMessage } from "ai";
 import type {
+  AttachmentReferenceNote,
   AppConfig,
   BufferMessage,
+  ChatAttachment,
   EmbedderRuntimeStatus,
   Episode,
   Fact,
@@ -11,6 +14,10 @@ import type {
   UserProfile
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
+import {
+  ATTACHMENT_REUSE_USER_MESSAGE_WINDOW,
+  buildUserContentWithAttachments
+} from "@main/services/chat-media";
 import {
   fileExists,
   readJsonlFile
@@ -51,11 +58,23 @@ function normalizeTopicText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
 }
 
+function readAttachments(meta?: Record<string, unknown>): ChatAttachment[] {
+  return Array.isArray(meta?.attachments) ? (meta.attachments as ChatAttachment[]) : [];
+}
+
+function readAttachmentReferences(meta?: Record<string, unknown>): AttachmentReferenceNote[] {
+  return Array.isArray(meta?.attachmentReferences)
+    ? (meta.attachmentReferences as AttachmentReferenceNote[])
+    : [];
+}
+
 function toHistoryMessage(message: BufferMessage): HistoryMessage {
   const source = message.meta?.source;
   const proactive = message.meta?.proactive;
   const toolTrace = message.meta?.toolTrace;
   const assistantTimeline = message.meta?.assistantTimeline;
+  const attachments = readAttachments(message.meta);
+  const attachmentReferences = readAttachmentReferences(message.meta);
   const meta: HistoryMessageMeta = {};
 
   if (typeof proactive === "boolean") {
@@ -89,6 +108,14 @@ function toHistoryMessage(message: BufferMessage): HistoryMessage {
           }
         ).blocks
     };
+  }
+
+  if (attachments.length > 0) {
+    meta.attachments = attachments;
+  }
+
+  if (attachmentReferences.length > 0) {
+    meta.attachmentReferences = attachmentReferences;
   }
 
   return {
@@ -143,9 +170,16 @@ export class YobiMemory {
   }): Promise<void> {
     await this.init();
     const allowEmpty =
-      input.role === "assistant" &&
-      typeof input.metadata?.toolTrace === "object" &&
-      input.metadata?.toolTrace !== null;
+      (
+        input.role === "assistant" &&
+        typeof input.metadata?.toolTrace === "object" &&
+        input.metadata?.toolTrace !== null
+      ) ||
+      (
+        input.role === "user" &&
+        Array.isArray(input.metadata?.attachments) &&
+        input.metadata.attachments.length > 0
+      );
     await this.bufferStore.append({
       role: input.role,
       channel: normalizeChannel(input.metadata?.channel),
@@ -250,17 +284,65 @@ export class YobiMemory {
   async mapRecentToModelMessages(
     _input: MemoryResourceContext,
     limit = Math.max(10, this.getConfig().memory.recentMessages)
-  ): Promise<Array<{ role: "system" | "user" | "assistant"; content: string }>> {
+  ): Promise<ModelMessage[]> {
     await this.init();
     const boundedLimit = Math.max(1, limit);
-    return this.bufferStore
-      .listRecent(boundedLimit)
-      .filter((message) => message.text.trim())
-      .map((message) => ({
+    const recent = this.bufferStore.listRecent(boundedLimit);
+    let activeAttachmentMessageId: string | null = null;
+
+    for (let index = recent.length - 1; index >= 0; index -= 1) {
+      const message = recent[index];
+      if (message.role !== "user") {
+        continue;
+      }
+
+      const attachments = readAttachments(message.meta);
+      if (attachments.length === 0) {
+        continue;
+      }
+
+      const laterUserCount = recent
+        .slice(index + 1)
+        .filter((candidate) => candidate.role === "user").length;
+      if (laterUserCount <= ATTACHMENT_REUSE_USER_MESSAGE_WINDOW) {
+        activeAttachmentMessageId = message.id;
+      }
+      break;
+    }
+
+    const messages: ModelMessage[] = [];
+    for (const message of recent) {
+      if (message.role === "user") {
+        const attachments = readAttachments(message.meta);
+        const built = await buildUserContentWithAttachments({
+          text: message.text,
+          attachments,
+          includeMedia: attachments.length > 0 && message.id === activeAttachmentMessageId
+        });
+        const hasContent =
+          typeof built.content === "string" ? built.content.trim().length > 0 : built.content.length > 0;
+        if (!hasContent) {
+          continue;
+        }
+
+        messages.push({
+          role: "user",
+          content: built.content
+        });
+        continue;
+      }
+
+      if (!message.text.trim()) {
+        continue;
+      }
+
+      messages.push({
         role: message.role,
         content: message.text
-      }))
-      .slice(-boundedLimit);
+      });
+    }
+
+    return messages.slice(-boundedLimit);
   }
 
   async listRecentBufferMessages(limit = 60): Promise<BufferMessage[]> {

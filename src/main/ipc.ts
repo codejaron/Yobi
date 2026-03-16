@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell, WebContents } from "electron";
 import type { OpenDialogOptions } from "electron";
 import type {
   AppConfig,
+  ConsoleChatAttachmentInput,
   CommandApprovalDecision
 } from "@shared/types";
 import type { CompanionRuntime } from "./app-runtime";
@@ -210,6 +211,7 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       _,
       payload: {
         text?: string;
+        attachments?: ConsoleChatAttachmentInput[];
         voiceContext?: {
           provider?: AppConfig["voice"]["asrProvider"];
           metadata?: {
@@ -236,7 +238,10 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
                   rawTags: payload.voiceContext.metadata.rawTags
                 }
               }
-            : undefined
+            : undefined,
+        attachments: Array.isArray(payload?.attachments)
+          ? (payload.attachments as ConsoleChatAttachmentInput[])
+          : undefined
       })
   );
   ipcMain.handle("console:chat:stop", (_, payload: { requestId?: string }) =>

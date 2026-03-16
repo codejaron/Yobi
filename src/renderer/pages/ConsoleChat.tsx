@@ -6,6 +6,7 @@ export function ConsoleChatPage() {
     messages,
     draft,
     setDraft,
+    composerAttachments,
     micHint,
     pendingApproval,
     skillsCatalog,
@@ -32,8 +33,13 @@ export function ConsoleChatPage() {
     clearHistory,
     handleChatScroll,
     handleSubmit,
+    handleAttachmentSelection,
+    removeComposerAttachment,
     stopCurrentRequest,
     handleInputKeyDown,
+    handleInputPaste,
+    handleComposerDrop,
+    handleComposerDragOver,
     toggleMicRecording,
     submitApproval
   } = useConsoleChatController();
@@ -58,9 +64,15 @@ export function ConsoleChatPage() {
         submitApproval={submitApproval}
         draft={draft}
         setDraft={setDraft}
+        composerAttachments={composerAttachments}
         inputRef={inputRef}
         inputDisabled={inputDisabled}
         onInputKeyDown={handleInputKeyDown}
+        onInputPaste={handleInputPaste}
+        onAttachmentSelection={handleAttachmentSelection}
+        onRemoveAttachment={removeComposerAttachment}
+        onComposerDrop={handleComposerDrop}
+        onComposerDragOver={handleComposerDragOver}
         toggleMicRecording={toggleMicRecording}
         micButtonDisabled={micButtonDisabled}
         recording={recording}
