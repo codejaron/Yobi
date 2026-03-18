@@ -212,6 +212,7 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       payload: {
         text?: string;
         attachments?: ConsoleChatAttachmentInput[];
+        taskMode?: boolean;
         voiceContext?: {
           provider?: AppConfig["voice"]["asrProvider"];
           metadata?: {
@@ -225,6 +226,7 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     ) =>
       runtime.startConsoleChat({
         text: payload?.text ?? "",
+        taskMode: payload?.taskMode === true,
         voiceContext:
           payload?.voiceContext?.provider &&
           payload?.voiceContext?.metadata &&

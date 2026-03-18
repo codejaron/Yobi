@@ -48,6 +48,13 @@ export interface SenseVoiceModelProgressEvent {
   percent: number;
 }
 
+export interface ConsoleChatRequestInput {
+  text: string;
+  attachments?: ConsoleChatAttachmentInput[];
+  voiceContext?: VoiceInputContext;
+  taskMode?: boolean;
+}
+
 export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
@@ -107,15 +114,8 @@ export interface CompanionApi {
   onStatus(listener: (status: AppStatus) => void): () => void;
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
 
-  sendConsoleChat(input: {
-    text: string;
-    attachments?: ConsoleChatAttachmentInput[];
-  }): Promise<{ requestId: string }>;
-  sendConsoleChatWithVoice(input: {
-    text: string;
-    voiceContext?: VoiceInputContext;
-    attachments?: ConsoleChatAttachmentInput[];
-  }): Promise<{ requestId: string }>;
+  sendConsoleChat(input: ConsoleChatRequestInput): Promise<{ requestId: string }>;
+  sendConsoleChatWithVoice(input: ConsoleChatRequestInput): Promise<{ requestId: string }>;
   stopConsoleChat(requestId: string): Promise<{ accepted: boolean }>;
   transcribeVoice(input: {
     pcm16Base64: string;

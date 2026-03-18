@@ -185,6 +185,17 @@ function buildVoiceInputContextPrompt(voiceContext: VoiceInputContext): string {
   ].join("\n");
 }
 
+function buildTaskModePrompt(): string {
+  return [
+    "[TASK MODE]",
+    "当前控制台会话处于任务模式。面对明确任务请求时，优先执行、搜索、读取、分解并持续推进，不要把先问用户当作默认动作。",
+    "对缺失但可合理假设的细节，先采用保守默认值继续推进，并在结果里简短说明假设。",
+    "仅在以下情况追问：缺少关键输入会导致结果无意义；存在多个高影响方向且默认值风险明显；执行需要用户授权、外部资源或人工判断；继续执行会产生明显副作用或错误结论。",
+    "若工具失败，优先尝试同轮内替代路径，而不是立即回头问用户。",
+    "输出风格偏执行型，减少寒暄和反问，但不要突破已有安全边界。"
+  ].join("\n");
+}
+
 export class ConversationEngine {
   constructor(
     private readonly memory: YobiMemory,
@@ -211,6 +222,7 @@ export class ConversationEngine {
     assistantPersistence?: "engine" | "caller";
     allowedToolNames?: string[];
     preapprovedToolNames?: string[];
+    taskMode?: boolean;
     voiceContext?: VoiceInputContext;
     abortSignal?: AbortSignal;
   }): Promise<string> {
@@ -278,6 +290,7 @@ export class ConversationEngine {
     const externalPromptBlocks = [
       skillCatalog.summary.enabledCount > 0 ? skillCatalog.prompt : "",
       buildLocalNowPrompt(),
+      input.channel === "console" && input.taskMode ? buildTaskModePrompt() : "",
       buildRealtimeSignalContractPrompt(),
       input.voiceContext ? buildVoiceInputContextPrompt(input.voiceContext) : "",
       input.photoUrl ? `用户这轮附带图片 URL: ${input.photoUrl}` : ""

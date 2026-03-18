@@ -11,6 +11,7 @@ export class ChannelRouter {
     attachments?: ChatAttachment[];
     resourceId: string;
     threadId: string;
+    taskMode?: boolean;
     voiceContext?: VoiceInputContext;
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
@@ -22,6 +23,7 @@ export class ChannelRouter {
       channel: "console",
       resourceId: input.resourceId,
       threadId: input.threadId,
+      taskMode: input.taskMode,
       voiceContext: input.voiceContext,
       stream: input.stream,
       requestApproval: input.requestApproval,

@@ -393,6 +393,82 @@ test("ConversationEngine: persists voice recognition metadata and injects hidden
   assert.match(seenSystem, /emotion: happy/i);
 });
 
+test("ConversationEngine: injects task mode prompt only for task-mode console requests", async () => {
+  const config = cloneConfig();
+  const seenSystems: string[] = [];
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async () => undefined,
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    ((input: { system: string }) => {
+      seenSystems.push(input.system);
+      return {
+        fullStream: (async function* () {
+          yield {
+            type: "text-delta",
+            text: "收到"
+          };
+        })(),
+        totalUsage: Promise.resolve(undefined)
+      };
+    }) as any
+  );
+
+  await conversation.reply({
+    text: "把这个任务推进一下",
+    channel: "console",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    persistUserMessage: false,
+    taskMode: true
+  });
+
+  await conversation.reply({
+    text: "正常聊两句",
+    channel: "console",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    persistUserMessage: false
+  });
+
+  assert.match(seenSystems[0] ?? "", /\[TASK MODE\]/);
+  assert.match(seenSystems[0] ?? "", /优先执行、搜索、读取、分解并持续推进/);
+  assert.doesNotMatch(seenSystems[1] ?? "", /\[TASK MODE\]/);
+});
+
 test("ConversationEngine: parses hidden signals from raw final text before visible stripping", async () => {
   const config = cloneConfig();
   let seenSignals: RealtimeEmotionalSignals | null = null;

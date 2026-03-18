@@ -8,6 +8,8 @@ export function ConsoleChatPage() {
     setDraft,
     composerAttachments,
     micHint,
+    taskMode,
+    setTaskMode,
     pendingApproval,
     skillsCatalog,
     activatedSkills,
@@ -83,6 +85,8 @@ export function ConsoleChatPage() {
         pendingVoiceContext={pendingVoiceContext}
         toggleVoiceSession={toggleVoiceSession}
         micHint={micHint}
+        taskMode={taskMode}
+        setTaskMode={setTaskMode}
         onSubmit={handleSubmit}
         stopCurrentRequest={stopCurrentRequest}
         clearHistory={clearHistory}

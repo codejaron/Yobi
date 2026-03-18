@@ -55,6 +55,7 @@ interface ConsoleRequestHandle {
   finalized: boolean;
   finishReason?: "completed" | "aborted" | "error";
   finalEventEmitted: boolean;
+  taskMode: boolean;
   voiceContext?: VoiceInputContext;
 }
 
@@ -496,6 +497,7 @@ export class CompanionRuntime {
     text?: string;
     voiceContext?: VoiceInputContext;
     attachments?: ConsoleChatAttachmentInput[];
+    taskMode?: boolean;
   }): Promise<{ requestId: string }> {
     const text = typeof input === "string" ? input : input?.text ?? "";
     const attachmentInputs = typeof input === "string" ? [] : input?.attachments ?? [];
@@ -522,6 +524,7 @@ export class CompanionRuntime {
       abortController: new AbortController(),
       finalized: false,
       finalEventEmitted: false,
+      taskMode: typeof input === "string" ? false : input?.taskMode === true,
       voiceContext: typeof input === "string" ? undefined : input?.voiceContext
     });
     queueMicrotask(() => {
@@ -667,6 +670,7 @@ export class CompanionRuntime {
           attachments,
           resourceId: PRIMARY_RESOURCE_ID,
           threadId: PRIMARY_THREAD_ID,
+          taskMode: handle.taskMode,
           voiceContext: handle.voiceContext,
           abortSignal: handle.abortController.signal,
           stream: {

@@ -290,7 +290,11 @@ export function createSystemTool(deps: SystemToolDeps): ToolDefinition<SystemPar
     parameters: systemParamsSchema,
     isEnabled: (config) => config.tools.system.enabled,
     toModelOutput: (result) => toSystemModelOutput(deps.getConfig, result),
-    requiresApproval(params) {
+    requiresApproval(params, config) {
+      if (!config.tools.system.approvalRequired) {
+        return false;
+      }
+
       return params.action !== "notify" && params.action !== "get_windows";
     },
     approvalText(params) {

@@ -14,6 +14,7 @@ import {
   createConsoleChatLiveVoiceState,
   type ConsoleChatLiveVoiceMessage
 } from "@shared/console-chat-live-voice";
+import { buildConsoleChatRequestPayload } from "@shared/console-chat-request";
 import {
   applyConsoleEventToAssistantProcess,
   createAssistantTurnProcess,
@@ -47,6 +48,8 @@ export interface ConsoleChatController {
   micState: "idle" | "recording" | "transcribing";
   micHint: string;
   activeRequestId: string | null;
+  taskMode: boolean;
+  setTaskMode: (value: boolean) => void;
   pendingApproval: PendingApproval | null;
   skillsCatalog: ConsoleSkillsCatalogState | null;
   activatedSkills: ConsoleActivatedSkill[];
@@ -276,6 +279,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [micHint, setMicHint] = useState("");
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [taskMode, setTaskMode] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [skillsCatalog, setSkillsCatalog] = useState<ConsoleSkillsCatalogState | null>(null);
   const [activatedSkills, setActivatedSkills] = useState<ConsoleActivatedSkill[]>([]);
@@ -909,16 +913,15 @@ export function useConsoleChatController(): ConsoleChatController {
       ]);
 
       try {
+        const requestPayload = buildConsoleChatRequestPayload({
+          text,
+          attachments: attachmentInputs,
+          voiceContext: pendingVoiceContext ?? undefined,
+          taskMode
+        });
         const started = pendingVoiceContext
-          ? await window.companion.sendConsoleChatWithVoice({
-              text,
-              voiceContext: pendingVoiceContext,
-              attachments: attachmentInputs
-            })
-          : await window.companion.sendConsoleChat({
-              text,
-              attachments: attachmentInputs
-            });
+          ? await window.companion.sendConsoleChatWithVoice(requestPayload)
+          : await window.companion.sendConsoleChat(requestPayload);
         setActiveRequestId(started.requestId);
         setPendingVoiceContext(null);
         setLiveMessages((prev) => {
@@ -937,7 +940,7 @@ export function useConsoleChatController(): ConsoleChatController {
         pushAssistantError(message);
       }
     },
-    [activeRequestId, composerAttachments, draft, pendingVoiceContext, pushAssistantError]
+    [activeRequestId, composerAttachments, draft, pendingVoiceContext, pushAssistantError, taskMode]
   );
 
   const stopCurrentRequest = useCallback(async () => {
@@ -1028,6 +1031,8 @@ export function useConsoleChatController(): ConsoleChatController {
     micState,
     micHint,
     activeRequestId,
+    taskMode,
+    setTaskMode,
     pendingApproval,
     skillsCatalog,
     activatedSkills,

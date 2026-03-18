@@ -4,6 +4,7 @@ import type { CommandApprovalDecision, VoiceInputContext, VoiceSessionState } fr
 import { FileText, Loader2, Mic, Paperclip, Square, X } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { Switch } from "@renderer/components/ui/switch";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { MarkdownContent } from "@renderer/components/chat/MarkdownContent";
 import { AssistantProcessView } from "./AssistantProcessView";
@@ -53,6 +54,8 @@ interface ConsoleChatPaneProps {
   pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
   micHint: string;
+  taskMode: boolean;
+  setTaskMode: (value: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   stopCurrentRequest: () => Promise<void>;
   clearHistory: () => Promise<void>;
@@ -165,6 +168,8 @@ export function ConsoleChatPane({
   pendingVoiceContext,
   toggleVoiceSession,
   micHint,
+  taskMode,
+  setTaskMode,
   onSubmit,
   stopCurrentRequest,
   clearHistory
@@ -203,6 +208,15 @@ export function ConsoleChatPane({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-md border border-border/70 bg-white/70 px-3 py-2 text-sm">
+            <span className="text-foreground">任务模式</span>
+            <Switch
+              checked={taskMode}
+              onChange={setTaskMode}
+              aria-label="切换任务模式"
+              title="少追问，优先推进任务"
+            />
+          </div>
           <Button
             variant="outline"
             size="sm"
