@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { RealtimeVoiceService } from "../services/realtime-voice.js";
-import { createVoiceSessionState } from "../services/realtime-voice-state.js";
+import { createVoiceSessionState, reduceVoiceSessionState } from "../services/realtime-voice-state.js";
 import type { VoiceHostCommand } from "../services/voice-host-window.js";
-import type { StreamingTtsSession } from "../services/voice-router.js";
+import type { StreamingAsrSession, StreamingTtsSession } from "../services/voice-router.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -18,7 +18,9 @@ function createDeferred<T>() {
   };
 }
 
-function createService() {
+function createService(overrides?: {
+  voiceRouter?: Partial<ConstructorParameters<typeof RealtimeVoiceService>[0]["voiceRouter"]>;
+}) {
   const service = new RealtimeVoiceService({
     paths: {} as never,
     logger: {
@@ -50,7 +52,18 @@ function createService() {
           ttsProvider: "edge"
         }
       }) as never,
-    voiceRouter: {} as never,
+    voiceRouter: {
+      createStreamingAsrSession: () =>
+        ({
+          pushPcm: async () => undefined,
+          flush: async () => ({
+            text: "",
+            metadata: null
+          }),
+          abort: async () => undefined
+        }) satisfies StreamingAsrSession,
+      ...(overrides?.voiceRouter ?? {})
+    } as never,
     conversation: {
       rememberAssistantMessage: async () => undefined
     } as never,
@@ -104,4 +117,75 @@ test("realtime voice: stopSession blocks in-flight tts chunks from re-enqueueing
     commands.map((command) => command.type),
     ["stop-capture", "clear-playback"]
   );
+});
+
+test("realtime voice: speech start interrupts assistant thinking before opening a new ASR session", async () => {
+  const order: string[] = [];
+  const service = createService({
+    voiceRouter: {
+      createStreamingAsrSession: () => {
+        order.push("create-asr");
+        return {
+          pushPcm: async () => undefined,
+          flush: async () => ({
+            text: "",
+            metadata: null
+          }),
+          abort: async () => undefined
+        } satisfies StreamingAsrSession;
+      }
+    }
+  });
+  const abortController = new AbortController();
+
+  service.host = {
+    send: async (command: VoiceHostCommand) => {
+      order.push(command.type);
+    }
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+  service.state = reduceVoiceSessionState(service.state, {
+    type: "assistant-thinking-started"
+  });
+  service.replyAbortController = abortController;
+
+  await service.beginSpeech();
+
+  assert.equal(abortController.signal.aborted, true);
+  assert.deepEqual(order, ["clear-playback", "create-asr"]);
+  assert.equal(service.state.phase, "user-speaking");
+  assert.equal(service.speechActive, true);
+  assert.ok(service.activeAsrSession);
+});
+
+test("realtime voice: beginSpeech clears stale transcripts from the previous turn", async () => {
+  const service = createService();
+
+  service.state = {
+    ...createVoiceSessionState({
+      sessionId: "session-1",
+      mode: "free",
+      target: {
+        resourceId: "primary-user",
+        threadId: "primary-thread"
+      }
+    }),
+    phase: "listening",
+    userTranscript: "上一次的问题",
+    assistantTranscript: "上一次的回复"
+  };
+
+  await service.beginSpeech();
+
+  assert.equal(service.state.phase, "user-speaking");
+  assert.equal(service.state.userTranscript, "");
+  assert.equal(service.state.assistantTranscript, "");
+  assert.equal(service.speechActive, true);
 });

@@ -240,7 +240,7 @@ export class YobiMemory {
     nextCursor: string | null;
   }> {
     await this.init();
-    const limit = Math.max(1, Math.min(100, input.limit ?? 20));
+    const limit = Math.max(1, Math.min(10_000, input.limit ?? 20));
     const all = (await this.listAllMessages())
       .filter((item) => item.role === "user" || item.role === "assistant")
       .map((item) => toHistoryMessage(item));

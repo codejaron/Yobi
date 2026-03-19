@@ -21,8 +21,6 @@ interface ConsoleChatPaneProps {
   busy: boolean;
   clearingHistory: boolean;
   historyLoaded: boolean;
-  historyHasMore: boolean;
-  loadingMoreHistory: boolean;
   messages: ConsoleMessage[];
   chatListRef: RefObject<HTMLDivElement | null>;
   chatBottomRef: RefObject<HTMLDivElement | null>;
@@ -135,8 +133,6 @@ export function ConsoleChatPane({
   busy,
   clearingHistory,
   historyLoaded,
-  historyHasMore,
-  loadingMoreHistory,
   messages,
   chatListRef,
   chatBottomRef,
@@ -268,14 +264,6 @@ export function ConsoleChatPane({
           className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2"
           onScroll={onChatScroll}
         >
-          {historyLoaded && historyHasMore ? (
-            <div className="flex justify-center">
-              <span className="surface-panel rounded-full px-3 py-1 text-xs text-muted-foreground">
-                {loadingMoreHistory ? "正在加载更早消息..." : "上滑到顶部自动加载历史消息"}
-              </span>
-            </div>
-          ) : null}
-
           {!historyLoaded ? (
             <p className="surface-dashed px-3 py-4 text-sm text-muted-foreground">
               正在加载历史消息...

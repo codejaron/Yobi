@@ -318,7 +318,7 @@ export class RealtimeVoiceService {
 
       this.pttHeld = true;
       this.resetSpeechTracking();
-      this.beginSpeech();
+      await this.beginSpeech();
       await this.host.send({
         type: "start-capture",
         aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
@@ -419,13 +419,31 @@ export class RealtimeVoiceService {
     }
   }
 
-  private beginSpeech(): void {
+  private clearCurrentTurnTranscripts(): void {
+    this.state = {
+      ...this.state,
+      userTranscript: "",
+      userTranscriptMetadata: null,
+      assistantTranscript: "",
+      updatedAt: nowIso()
+    };
+  }
+
+  private shouldInterruptAssistantForSpeechStart(): boolean {
+    if (!this.input.getConfig().realtimeVoice.autoInterrupt) {
+      return false;
+    }
+
+    return this.state.phase === "assistant-thinking" || this.state.phase === "assistant-speaking";
+  }
+
+  private async beginSpeech(): Promise<void> {
     if (this.speechActive) {
       return;
     }
 
-    if (this.state.phase === "assistant-speaking" && this.input.getConfig().realtimeVoice.autoInterrupt) {
-      void this.interrupt("vad");
+    if (this.shouldInterruptAssistantForSpeechStart()) {
+      await this.interrupt("vad");
     }
 
     this.speechActive = true;
@@ -435,12 +453,7 @@ export class RealtimeVoiceService {
     this.input.logger.info("realtime-voice", "speech:start", {
       sessionId: this.state.sessionId ?? "unknown"
     });
-    this.state = {
-      ...this.state,
-      userTranscript: "",
-      userTranscriptMetadata: null,
-      updatedAt: nowIso()
-    };
+    this.clearCurrentTurnTranscripts();
     this.applyState({
       type: "speech-started"
     });
@@ -685,7 +698,7 @@ export class RealtimeVoiceService {
 
     if (!this.speechActive) {
       if (probability >= threshold) {
-        this.beginSpeech();
+        await this.beginSpeech();
       }
 
       if (this.speechActive && this.activeAsrSession) {
@@ -954,6 +967,7 @@ export class RealtimeVoiceService {
       await this.input.onAssistantMessage?.();
     }
 
+    this.clearCurrentTurnTranscripts();
     this.applyState({
       type: "assistant-playback-finished"
     });

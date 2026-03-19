@@ -6,10 +6,14 @@ import type {
   SkillActivatedEventPayload,
   SkillsCatalogSummary
 } from "@shared/types";
-import type { AssistantTurnProcess } from "@shared/tool-trace";
+import type {
+  ConsoleChatFeedMessage,
+  ConsoleChatFeedMessageRole,
+  ConsoleChatFeedMessageState
+} from "@shared/console-chat-feed";
 
-export type MessageRole = "user" | "assistant";
-export type MessageState = "streaming" | "done" | "error";
+export type MessageRole = ConsoleChatFeedMessageRole;
+export type MessageState = ConsoleChatFeedMessageState;
 
 export interface ConsoleAttachmentView {
   id: string;
@@ -23,18 +27,7 @@ export interface ConsoleAttachmentView {
   input?: ConsoleChatAttachmentInput;
 }
 
-export interface ConsoleMessage {
-  id: string;
-  requestId: string;
-  role: MessageRole;
-  text: string;
-  state: MessageState;
-  attachments?: ConsoleAttachmentView[];
-  transientOrigin?: "voice";
-  process?: AssistantTurnProcess;
-  source?: "yobi";
-  historyMode?: boolean;
-}
+export type ConsoleMessage = ConsoleChatFeedMessage<ConsoleAttachmentView>;
 
 export interface PendingApproval {
   requestId: string;
@@ -46,7 +39,7 @@ export interface PendingApproval {
 export type ConsoleSkillsCatalogState = SkillsCatalogSummary;
 export type ConsoleActivatedSkill = SkillActivatedEventPayload;
 
-export const CONSOLE_HISTORY_PAGE_SIZE = 20;
+export const CONSOLE_HISTORY_INITIAL_LIMIT = 1_000;
 
 export const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string }> = [
   { decision: "allow-once", label: "同意一次" },

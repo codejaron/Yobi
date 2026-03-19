@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type {
   CommandApprovalDecision,
@@ -16,6 +16,11 @@ import {
 } from "@shared/console-chat-live-voice";
 import { buildConsoleChatRequestPayload } from "@shared/console-chat-request";
 import {
+  reconcileTransientConsoleChatFeedMessages,
+  updateAssistantConsoleChatFeedMessageIfPresent,
+  upsertAssistantConsoleChatFeedMessage
+} from "@shared/console-chat-feed";
+import {
   applyConsoleEventToAssistantProcess,
   createAssistantTurnProcess,
   hasAssistantVisibleContent
@@ -27,7 +32,7 @@ import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
 import {
   APPROVAL_OPTIONS,
-  CONSOLE_HISTORY_PAGE_SIZE,
+  CONSOLE_HISTORY_INITIAL_LIMIT,
   appendRecognizedText,
   historyRoleToMessageRole,
   toConsoleAttachmentView
@@ -56,8 +61,6 @@ export interface ConsoleChatController {
   approvalIndex: number;
   setApprovalIndex: (index: number) => void;
   historyLoaded: boolean;
-  historyHasMore: boolean;
-  loadingMoreHistory: boolean;
   clearingHistory: boolean;
   busy: boolean;
   recording: boolean;
@@ -179,100 +182,9 @@ function createTransientVoiceMessage(message: ConsoleChatLiveVoiceMessage): Cons
   };
 }
 
-function reconcileTransientVoiceMessages(
-  current: ConsoleMessage[],
-  nextVoiceMessages: ConsoleChatLiveVoiceMessage[]
-): ConsoleMessage[] {
-  const nextById = new Map(
-    nextVoiceMessages.map((message) => [message.id, createTransientVoiceMessage(message)])
-  );
-  const emitted = new Set<string>();
-  const next: ConsoleMessage[] = [];
-
-  for (const message of current) {
-    if (message.transientOrigin !== "voice") {
-      next.push(message);
-      continue;
-    }
-
-    const replacement = nextById.get(message.id);
-    if (!replacement) {
-      continue;
-    }
-
-    next.push(replacement);
-    emitted.add(message.id);
-  }
-
-  for (const message of nextVoiceMessages) {
-    if (emitted.has(message.id)) {
-      continue;
-    }
-
-    next.push(createTransientVoiceMessage(message));
-  }
-
-  return next;
-}
-
-function dropVoiceMessagesDuplicatedInHistory(
-  historyMessages: ConsoleMessage[],
-  liveMessages: ConsoleMessage[]
-): ConsoleMessage[] {
-  const doneVoiceMessages = liveMessages.filter(
-    (message) => message.transientOrigin === "voice" && message.state === "done"
-  );
-  if (doneVoiceMessages.length === 0 || historyMessages.length === 0) {
-    return liveMessages;
-  }
-
-  let duplicateCount = 0;
-  const maxMatchLength = Math.min(doneVoiceMessages.length, historyMessages.length);
-  for (let length = 1; length <= maxMatchLength; length += 1) {
-    let matches = true;
-    for (let index = 0; index < length; index += 1) {
-      const liveMessage = doneVoiceMessages[index];
-      const historyMessage = historyMessages[historyMessages.length - length + index];
-      if (
-        liveMessage?.role !== historyMessage?.role ||
-        liveMessage?.text !== historyMessage?.text
-      ) {
-        matches = false;
-        break;
-      }
-    }
-
-    if (matches) {
-      duplicateCount = length;
-    }
-  }
-
-  if (duplicateCount === 0) {
-    return liveMessages;
-  }
-
-  let remainingDuplicates = duplicateCount;
-  return liveMessages.filter((message) => {
-    if (
-      remainingDuplicates > 0 &&
-      message.transientOrigin === "voice" &&
-      message.state === "done"
-    ) {
-      remainingDuplicates -= 1;
-      return false;
-    }
-
-    return true;
-  });
-}
-
 export function useConsoleChatController(): ConsoleChatController {
-  const [liveMessages, setLiveMessages] = useState<ConsoleMessage[]>([]);
-  const [persistedMessages, setPersistedMessages] = useState<HistoryMessage[]>([]);
+  const [messages, setMessages] = useState<ConsoleMessage[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [historyHasMore, setHistoryHasMore] = useState(false);
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
-  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [draft, setDraft] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ConsoleAttachmentView[]>([]);
@@ -292,48 +204,32 @@ export function useConsoleChatController(): ConsoleChatController {
   const chatListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const autoFollowRef = useRef(true);
-  const loadingMoreHistoryRef = useRef(false);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
   const liveVoiceStateRef = useRef(createConsoleChatLiveVoiceState());
 
   const pushAssistantError = useCallback((message: string) => {
-    setLiveMessages((prev) => [...prev, createAssistantErrorMessage(message)]);
+    setMessages((current) => [...current, createAssistantErrorMessage(message)]);
   }, []);
 
   const upsertAssistantMessage = useCallback(
     (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
-      setLiveMessages((prev) => {
-        const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
-
-        if (index < 0) {
-          return [...prev, updater(createStreamingAssistantMessage(requestId))];
-        }
-
-        const next = [...prev];
-        next[index] = updater(next[index]);
-        return next;
-      });
+      setMessages((current) =>
+        upsertAssistantConsoleChatFeedMessage(
+          current,
+          requestId,
+          updater,
+          createStreamingAssistantMessage
+        )
+      );
     },
     []
   );
 
   const updateAssistantMessageIfPresent = useCallback(
     (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage | null) => {
-      setLiveMessages((prev) => {
-        const index = prev.findIndex((item) => item.requestId === requestId && item.role === "assistant");
-        if (index < 0) {
-          return prev;
-        }
-
-        const nextMessage = updater(prev[index]);
-        if (!nextMessage) {
-          return prev.filter((item) => item.id !== prev[index]?.id);
-        }
-
-        const next = [...prev];
-        next[index] = nextMessage;
-        return next;
-      });
+      setMessages((current) =>
+        updateAssistantConsoleChatFeedMessageIfPresent(current, requestId, updater)
+      );
     },
     []
   );
@@ -412,8 +308,8 @@ export function useConsoleChatController(): ConsoleChatController {
       }
 
       if (event.type === "external-assistant-message") {
-        setLiveMessages((prev) => [
-          ...prev,
+        setMessages((current) => [
+          ...current,
           {
             id: event.messageId,
             requestId: event.requestId,
@@ -472,12 +368,14 @@ export function useConsoleChatController(): ConsoleChatController {
   const loadLatestHistory = useCallback(async () => {
     try {
       const page = await window.companion.listConsoleHistory({
-        limit: CONSOLE_HISTORY_PAGE_SIZE
+        limit: CONSOLE_HISTORY_INITIAL_LIMIT
       });
 
-      setPersistedMessages(page.items);
-      setHistoryHasMore(page.hasMore);
-      setHistoryCursor(page.nextCursor);
+      setMessages(
+        page.items
+          .filter((item) => item.role === "user" || item.role === "assistant")
+          .map((item) => createHistoryMessage(item))
+      );
     } finally {
       setHistoryLoaded(true);
     }
@@ -503,7 +401,7 @@ export function useConsoleChatController(): ConsoleChatController {
   }, []);
 
   const startMicRecording = useCallback(async () => {
-    if (micState !== "idle") {
+    if (!historyLoaded || micState !== "idle") {
       return;
     }
 
@@ -526,7 +424,7 @@ export function useConsoleChatController(): ConsoleChatController {
       setMicHint(message);
       setMicState("idle");
     }
-  }, [checkSttAvailability, micState]);
+  }, [checkSttAvailability, historyLoaded, micState]);
 
   const stopMicRecording = useCallback(async () => {
     if (micState !== "recording") {
@@ -603,8 +501,11 @@ export function useConsoleChatController(): ConsoleChatController {
     }
 
     liveVoiceStateRef.current = nextVoiceState;
-    setLiveMessages((current) =>
-      reconcileTransientVoiceMessages(current, nextVoiceState.messages)
+    setMessages((current) =>
+      reconcileTransientConsoleChatFeedMessages(
+        current,
+        nextVoiceState.messages.map((message) => createTransientVoiceMessage(message))
+      )
     );
   }, []);
 
@@ -622,82 +523,13 @@ export function useConsoleChatController(): ConsoleChatController {
     try {
       await window.companion.clearHistory();
       liveVoiceStateRef.current = createConsoleChatLiveVoiceState();
-      setPersistedMessages([]);
-      setLiveMessages([]);
+      setMessages([]);
       setComposerAttachments([]);
-      setHistoryHasMore(false);
-      setHistoryCursor(null);
       setPendingApproval(null);
     } finally {
       setClearingHistory(false);
     }
   }, [activeRequestId, clearingHistory]);
-
-  const loadMoreHistory = useCallback(async () => {
-    if (!historyHasMore || !historyCursor || loadingMoreHistoryRef.current) {
-      return;
-    }
-
-    loadingMoreHistoryRef.current = true;
-    setLoadingMoreHistory(true);
-    const container = chatListRef.current;
-    const previousScrollTop = container?.scrollTop ?? 0;
-    const previousScrollHeight = container?.scrollHeight ?? 0;
-
-    try {
-      const page = await window.companion.listConsoleHistory({
-        cursor: historyCursor,
-        limit: CONSOLE_HISTORY_PAGE_SIZE
-      });
-
-      if (page.items.length === 0) {
-        setHistoryHasMore(false);
-        setHistoryCursor(null);
-        return;
-      }
-
-      setPersistedMessages((prev) => {
-        const existingIds = new Set(prev.map((item) => item.id));
-        const additions = page.items.filter((item) => !existingIds.has(item.id));
-        return additions.length > 0 ? [...additions, ...prev] : prev;
-      });
-
-      if (page.nextCursor === historyCursor) {
-        setHistoryHasMore(false);
-        setHistoryCursor(null);
-      } else {
-        setHistoryHasMore(page.hasMore);
-        setHistoryCursor(page.nextCursor);
-      }
-
-      requestAnimationFrame(() => {
-        const node = chatListRef.current;
-        if (!node) {
-          return;
-        }
-
-        const nextHeight = node.scrollHeight;
-        const delta = Math.max(0, nextHeight - previousScrollHeight);
-        node.scrollTop = previousScrollTop + delta;
-      });
-    } finally {
-      loadingMoreHistoryRef.current = false;
-      setLoadingMoreHistory(false);
-    }
-  }, [historyCursor, historyHasMore]);
-
-  const maybeLoadMoreHistory = useCallback(() => {
-    const container = chatListRef.current;
-    if (!container || !historyLoaded || !historyHasMore || loadingMoreHistoryRef.current) {
-      return;
-    }
-
-    if (container.scrollTop > 36) {
-      return;
-    }
-
-    void loadMoreHistory();
-  }, [historyHasMore, historyLoaded, loadMoreHistory]);
 
   const handleChatScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
@@ -709,19 +541,25 @@ export function useConsoleChatController(): ConsoleChatController {
         type: "user-scroll",
         metrics: readScrollMetrics(event.currentTarget)
       });
-
-      maybeLoadMoreHistory();
     },
-    [maybeLoadMoreHistory]
+    []
   );
 
   useEffect(() => {
+    if (!historyLoaded) {
+      return;
+    }
+
     return window.companion.onConsoleRunEvent((event) => {
       handleChatEvent(event);
     });
-  }, [handleChatEvent]);
+  }, [handleChatEvent, historyLoaded]);
 
   useEffect(() => {
+    if (!historyLoaded) {
+      return;
+    }
+
     void window.companion.getVoiceSessionState().then((state) => {
       applyVoiceSessionEvent({
         type: "state",
@@ -733,9 +571,13 @@ export function useConsoleChatController(): ConsoleChatController {
     return window.companion.onVoiceSessionEvent((event) => {
       applyVoiceSessionEvent(event);
     });
-  }, [applyVoiceSessionEvent]);
+  }, [applyVoiceSessionEvent, historyLoaded]);
 
   const toggleVoiceSession = useCallback(async () => {
+    if (!historyLoaded) {
+      return;
+    }
+
     if (voiceSession?.sessionId) {
       await window.companion.stopVoiceSession();
       return;
@@ -749,7 +591,7 @@ export function useConsoleChatController(): ConsoleChatController {
       state: started,
       timestamp: new Date().toISOString()
     });
-  }, [applyVoiceSessionEvent, voiceSession?.sessionId]);
+  }, [applyVoiceSessionEvent, historyLoaded, voiceSession?.sessionId]);
 
   const interruptVoiceSession = useCallback(async () => {
     await window.companion.interruptVoiceSession({
@@ -778,7 +620,7 @@ export function useConsoleChatController(): ConsoleChatController {
     }
 
     chatBottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-  }, [liveMessages]);
+  }, [messages]);
 
   useEffect(() => {
     if (!pendingApproval) {
@@ -884,7 +726,7 @@ export function useConsoleChatController(): ConsoleChatController {
       event.preventDefault();
 
       const text = draft.trim();
-      if ((!text && composerAttachments.length === 0) || activeRequestId) {
+      if (!historyLoaded || (!text && composerAttachments.length === 0) || activeRequestId) {
         return;
       }
 
@@ -900,8 +742,8 @@ export function useConsoleChatController(): ConsoleChatController {
         type: "submit-message"
       });
       const localRequestId = makeClientId("request-local");
-      setLiveMessages((prev) => [
-        ...prev,
+      setMessages((current) => [
+        ...current,
         {
           id: makeClientId("user"),
           requestId: localRequestId,
@@ -924,23 +766,37 @@ export function useConsoleChatController(): ConsoleChatController {
           : await window.companion.sendConsoleChat(requestPayload);
         setActiveRequestId(started.requestId);
         setPendingVoiceContext(null);
-        setLiveMessages((prev) => {
-          if (prev.some((item) => item.requestId === started.requestId && item.role === "assistant")) {
-            return prev;
+        setMessages((current) => {
+          if (
+            current.some(
+              (item) => item.requestId === started.requestId && item.role === "assistant"
+            )
+          ) {
+            return current;
           }
 
-          return [...prev, createStreamingAssistantMessage(started.requestId)];
+          return [...current, createStreamingAssistantMessage(started.requestId)];
         });
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "提交请求失败，请稍后重试";
-        setLiveMessages((prev) => prev.filter((item) => item.requestId !== localRequestId));
+        setMessages((current) =>
+          current.filter((item) => item.requestId !== localRequestId)
+        );
         setDraft(text);
         setComposerAttachments(attachments);
         pushAssistantError(message);
       }
     },
-    [activeRequestId, composerAttachments, draft, pendingVoiceContext, pushAssistantError, taskMode]
+    [
+      activeRequestId,
+      composerAttachments,
+      draft,
+      historyLoaded,
+      pendingVoiceContext,
+      pushAssistantError,
+      taskMode
+    ]
   );
 
   const stopCurrentRequest = useCallback(async () => {
@@ -1004,8 +860,8 @@ export function useConsoleChatController(): ConsoleChatController {
   const busy = activeRequestId !== null;
   const recording = micState === "recording";
   const transcribing = micState === "transcribing";
-  const inputDisabled = (busy && !pendingApproval) || transcribing;
-  const micButtonDisabled = shouldDisableConsoleMicButton({
+  const inputDisabled = !historyLoaded || (busy && !pendingApproval) || transcribing;
+  const micButtonDisabled = !historyLoaded || shouldDisableConsoleMicButton({
     pendingApproval: pendingApproval !== null,
     recording,
     transcribing,
@@ -1013,15 +869,6 @@ export function useConsoleChatController(): ConsoleChatController {
   });
   const micButtonLabel = transcribing ? "识别中" : recording ? "结束" : "语音";
   const stoppingRequest = stoppingRequestId !== null && stoppingRequestId === activeRequestId;
-
-  const messages = useMemo<ConsoleMessage[]>(() => {
-    const historyMessages = persistedMessages
-      .filter((item) => item.role === "user" || item.role === "assistant")
-      .map((item) => createHistoryMessage(item));
-    const visibleLiveMessages = dropVoiceMessagesDuplicatedInHistory(historyMessages, liveMessages);
-
-    return [...historyMessages, ...visibleLiveMessages];
-  }, [persistedMessages, liveMessages]);
 
   return {
     messages,
@@ -1039,8 +886,6 @@ export function useConsoleChatController(): ConsoleChatController {
     approvalIndex,
     setApprovalIndex,
     historyLoaded,
-    historyHasMore,
-    loadingMoreHistory,
     clearingHistory,
     busy,
     recording,

@@ -92,8 +92,11 @@ export class SenseVoiceLocalService {
     }
 
     let closed = false;
+    let closing = false;
     let transcribing = false;
     let scheduled: NodeJS.Timeout | null = null;
+    let inFlightPartial: Promise<void> | null = null;
+    let activePartialRunId = 0;
     let latestText = "";
     const openPromise = this.waitUntilReady()
       .then(() => this.client.openStream({
@@ -104,27 +107,41 @@ export class SenseVoiceLocalService {
       });
     void openPromise.catch(() => undefined);
 
-    const runPartial = async (): Promise<void> => {
+    const runPartial = (): Promise<void> => {
+      if (closed || closing || transcribing) {
+        return Promise.resolve();
+      }
+
+      const runId = activePartialRunId + 1;
+      activePartialRunId = runId;
+      const partialPromise = (async (): Promise<void> => {
+        scheduled = null;
+        transcribing = true;
+        try {
+          const { streamId } = await openPromise;
+          const partial = this.parseResult((await this.client.flushStream(streamId)).rawText);
+          if (!closed && !closing && partial.text && partial.text !== latestText) {
+            latestText = partial.text;
+            input.onPartial?.(partial.text);
+          }
+        } finally {
+          transcribing = false;
+          if (activePartialRunId === runId) {
+            inFlightPartial = null;
+          }
+        }
+      })();
+
+      inFlightPartial = partialPromise;
+      return partialPromise;
+    };
+
+    const schedulePartial = (): void => {
       if (closed || transcribing) {
         return;
       }
 
-      scheduled = null;
-      transcribing = true;
-      try {
-        const { streamId } = await openPromise;
-        const partial = this.parseResult((await this.client.flushStream(streamId)).rawText);
-        if (!closed && partial.text && partial.text !== latestText) {
-          latestText = partial.text;
-          input.onPartial?.(partial.text);
-        }
-      } finally {
-        transcribing = false;
-      }
-    };
-
-    const schedulePartial = (): void => {
-      if (closed || scheduled || transcribing) {
+      if (scheduled || closing) {
         return;
       }
 
@@ -157,19 +174,25 @@ export class SenseVoiceLocalService {
           return emptyResult();
         }
 
+        closing = true;
+        await inFlightPartial?.catch(() => undefined);
+
         const { streamId } = await openPromise;
         const result = this.parseResult((await this.client.closeStream(streamId)).rawText);
         latestText = result.text;
         closed = true;
+        closing = false;
         return result;
       },
       abort: async () => {
+        closing = true;
         closed = true;
         if (scheduled) {
           clearTimeout(scheduled);
           scheduled = null;
         }
 
+        await inFlightPartial?.catch(() => undefined);
         const stream = await openPromise.catch(() => null);
         if (stream?.streamId) {
           await this.client.abortStream(stream.streamId).catch(() => undefined);

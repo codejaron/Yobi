@@ -81,22 +81,34 @@ export function reduceConsoleChatLiveVoiceState(
       return current;
     }
 
-    const turnIndex =
-      current.turnStage === "user"
-        ? Math.max(1, current.activeTurnIndex)
-        : Math.max(1, current.activeTurnIndex + 1);
+    const activeTurnIndex = Math.max(1, current.activeTurnIndex || 1);
+    const currentTurn =
+      current.activeTurnIndex > 0
+        ? getTurnMessages(current.messages, sessionId, activeTurnIndex)
+        : { user: null, assistant: null };
+    const reuseCurrentTurn = shouldReuseCurrentUserTurn(current, currentTurn, action.text);
+    const turnIndex = reuseCurrentTurn
+      ? activeTurnIndex
+      : Math.max(1, current.activeTurnIndex + 1);
     const requestId = buildTurnRequestId(sessionId, turnIndex);
+    const nextText = mergeTranscriptText(currentTurn.user?.text ?? "", action.text);
+    const nextState =
+      reuseCurrentTurn && currentTurn.user?.state === "done"
+        ? "done"
+        : action.isFinal
+          ? "done"
+          : "streaming";
 
     return {
       ...current,
       activeTurnIndex: turnIndex,
-      turnStage: action.isFinal ? "assistant-pending" : "user",
+      turnStage: resolveUserTurnStage(current.turnStage, reuseCurrentTurn, action.isFinal),
       messages: upsertMessage(current.messages, {
         id: buildMessageId(sessionId, turnIndex, "user"),
         requestId,
         role: "user",
-        text: action.text,
-        state: action.isFinal ? "done" : "streaming"
+        text: nextText,
+        state: nextState
       })
     };
   }
@@ -131,18 +143,19 @@ function applyVoiceSessionSnapshot(
   current: ConsoleChatLiveVoiceState,
   snapshot: VoiceSessionState
 ): ConsoleChatLiveVoiceState {
-  let next = syncSession(current, snapshot.sessionId);
+  const normalizedSnapshot = normalizeSnapshotForTransientRendering(snapshot);
+  let next = syncSession(current, normalizedSnapshot.sessionId);
 
-  if (!snapshot.sessionId) {
+  if (!normalizedSnapshot.sessionId) {
     return next;
   }
 
-  if (snapshot.phase === "interrupted" || snapshot.phase === "error") {
+  if (normalizedSnapshot.phase === "interrupted" || normalizedSnapshot.phase === "error") {
     next = closeCurrentTurn(next);
   }
 
-  const hasUser = snapshot.userTranscript.trim().length > 0;
-  const hasAssistant = snapshot.assistantTranscript.trim().length > 0;
+  const hasUser = normalizedSnapshot.userTranscript.trim().length > 0;
+  const hasAssistant = normalizedSnapshot.assistantTranscript.trim().length > 0;
   if (!hasUser && !hasAssistant) {
     return next;
   }
@@ -150,39 +163,61 @@ function applyVoiceSessionSnapshot(
   if (
     next.activeTurnIndex === 0 &&
     next.turnStage === "idle" &&
-    (snapshot.phase === "idle" || snapshot.phase === "listening")
+    (normalizedSnapshot.phase === "idle" || normalizedSnapshot.phase === "listening")
   ) {
     return next;
   }
 
-  const turnIndex = resolveSnapshotTurnIndex(next, snapshot);
+  const turnIndex = resolveSnapshotTurnIndex(next, normalizedSnapshot);
   let messages = next.messages;
   if (hasUser) {
     messages = upsertMessage(messages, {
-      id: buildMessageId(snapshot.sessionId, turnIndex, "user"),
-      requestId: buildTurnRequestId(snapshot.sessionId, turnIndex),
+      id: buildMessageId(normalizedSnapshot.sessionId, turnIndex, "user"),
+      requestId: buildTurnRequestId(normalizedSnapshot.sessionId, turnIndex),
       role: "user",
-      text: snapshot.userTranscript,
-      state: isUserFinalPhase(snapshot.phase) ? "done" : "streaming"
+      text: normalizedSnapshot.userTranscript,
+      state: isUserFinalPhase(normalizedSnapshot.phase) ? "done" : "streaming"
     });
   }
 
   if (hasAssistant) {
     messages = upsertMessage(messages, {
-      id: buildMessageId(snapshot.sessionId, turnIndex, "assistant"),
-      requestId: buildTurnRequestId(snapshot.sessionId, turnIndex),
+      id: buildMessageId(normalizedSnapshot.sessionId, turnIndex, "assistant"),
+      requestId: buildTurnRequestId(normalizedSnapshot.sessionId, turnIndex),
       role: "assistant",
-      text: snapshot.assistantTranscript,
-      state: isAssistantFinalPhase(snapshot.phase) ? "done" : "streaming"
+      text: normalizedSnapshot.assistantTranscript,
+      state: isAssistantFinalPhase(normalizedSnapshot.phase) ? "done" : "streaming"
     });
   }
 
   return {
     ...next,
     activeTurnIndex: turnIndex,
-    turnStage: deriveTurnStage(snapshot),
+    turnStage: deriveTurnStage(normalizedSnapshot),
     messages
   };
+}
+
+function normalizeSnapshotForTransientRendering(snapshot: VoiceSessionState): VoiceSessionState {
+  if (snapshot.userTranscript.trim()) {
+    return snapshot;
+  }
+
+  if (
+    snapshot.phase === "idle" ||
+    snapshot.phase === "listening" ||
+    snapshot.phase === "user-speaking" ||
+    snapshot.phase === "transcribing" ||
+    snapshot.phase === "interrupted" ||
+    snapshot.phase === "error"
+  ) {
+    return {
+      ...snapshot,
+      assistantTranscript: ""
+    };
+  }
+
+  return snapshot;
 }
 
 function syncSession(
@@ -261,6 +296,82 @@ function resolveSnapshotTurnIndex(
   }
 
   return Math.max(1, current.activeTurnIndex + 1);
+}
+
+function shouldReuseCurrentUserTurn(
+  current: ConsoleChatLiveVoiceState,
+  turn: TurnMessages,
+  nextText: string
+): boolean {
+  if (current.turnStage === "user") {
+    return true;
+  }
+
+  if (!turn.user) {
+    return false;
+  }
+
+  if (current.turnStage === "assistant-pending") {
+    return transcriptsBelongToSameUtterance(turn.user.text, nextText);
+  }
+
+  if (current.turnStage === "assistant") {
+    return normalizeTranscriptText(turn.user.text) === normalizeTranscriptText(nextText);
+  }
+
+  return false;
+}
+
+function resolveUserTurnStage(
+  currentTurnStage: ConsoleChatLiveVoiceTurnStage,
+  reuseCurrentTurn: boolean,
+  isFinal: boolean
+): ConsoleChatLiveVoiceTurnStage {
+  if (reuseCurrentTurn && currentTurnStage === "assistant") {
+    return "assistant";
+  }
+
+  if (reuseCurrentTurn && !isFinal && currentTurnStage === "assistant-pending") {
+    return "assistant-pending";
+  }
+
+  return isFinal ? "assistant-pending" : "user";
+}
+
+function transcriptsBelongToSameUtterance(currentText: string, nextText: string): boolean {
+  const current = normalizeTranscriptText(currentText);
+  const next = normalizeTranscriptText(nextText);
+  if (!current || !next) {
+    return false;
+  }
+
+  return current === next || current.startsWith(next) || next.startsWith(current);
+}
+
+function mergeTranscriptText(currentText: string, nextText: string): string {
+  const current = normalizeTranscriptText(currentText);
+  const next = normalizeTranscriptText(nextText);
+  if (!current) {
+    return nextText;
+  }
+
+  if (!next) {
+    return currentText;
+  }
+
+  if (next.startsWith(current)) {
+    return nextText;
+  }
+
+  if (current.startsWith(next)) {
+    return currentText;
+  }
+
+  return nextText;
+}
+
+function normalizeTranscriptText(text: string): string {
+  return text.trim();
 }
 
 function snapshotMatchesTurn(snapshot: VoiceSessionState, turn: TurnMessages): boolean {

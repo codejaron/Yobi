@@ -72,6 +72,52 @@ test("console chat live voice: user partial and final update a single bubble", (
   assert.equal(state.turnStage, "assistant-pending");
 });
 
+test("console chat live voice: late repeated user transcript after final does not open a duplicate turn", () => {
+  let state = createConsoleChatLiveVoiceState();
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(
+    state,
+    createStateEvent(createVoiceSessionState({ sessionId: "session-1", phase: "listening" }))
+  );
+
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "user-transcript",
+    text: "他有时候就会截断",
+    isFinal: true,
+    timestamp: "2026-03-14T00:00:01.000Z"
+  });
+  const firstUserId = state.messages[0]?.id;
+
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "user-transcript",
+    text: "他有时候就会截",
+    isFinal: false,
+    timestamp: "2026-03-14T00:00:01.100Z"
+  });
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "user-transcript",
+    text: "他有时候就会截断",
+    isFinal: true,
+    timestamp: "2026-03-14T00:00:01.200Z"
+  });
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0]?.id, firstUserId);
+  assert.equal(state.messages[0]?.text, "他有时候就会截断");
+  assert.equal(state.messages[0]?.state, "done");
+  assert.equal(state.activeTurnIndex, 1);
+  assert.equal(state.turnStage, "assistant-pending");
+
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "assistant-transcript",
+    text: "对，就是这样。",
+    isFinal: true,
+    timestamp: "2026-03-14T00:00:02.000Z"
+  });
+
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[1]?.id, "voice-live:session-1:1:assistant");
+});
+
 test("console chat live voice: assistant partial and final stay on the same turn", () => {
   let state = createConsoleChatLiveVoiceState();
   state = applyVoiceSessionEventToConsoleChatLiveVoiceState(
@@ -302,5 +348,40 @@ test("console chat live voice: repeated state snapshots do not duplicate the sam
 
   assert.equal(state.messages.length, 2);
   assert.equal(state.messages[0]?.id, "voice-live:session-1:1:user");
+  assert.equal(state.messages[1]?.id, "voice-live:session-1:1:assistant");
+});
+
+test("console chat live voice: stale assistant snapshot on second speech does not open a duplicate turn", () => {
+  let state = createConsoleChatLiveVoiceState();
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(
+    state,
+    createStateEvent(createVoiceSessionState({ sessionId: "session-1", phase: "listening" }))
+  );
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "user-transcript",
+    text: "他这个是语音识别问题",
+    isFinal: true,
+    timestamp: "2026-03-14T00:00:01.000Z"
+  });
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "assistant-transcript",
+    text: "对，我知道，是语音识别的问题。",
+    isFinal: true,
+    timestamp: "2026-03-14T00:00:02.000Z"
+  });
+
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(
+    state,
+    createStateEvent(
+      createVoiceSessionState({
+        sessionId: "session-1",
+        phase: "user-speaking",
+        assistantTranscript: "对，我知道，是语音识别的问题。"
+      })
+    )
+  );
+
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.activeTurnIndex, 1);
   assert.equal(state.messages[1]?.id, "voice-live:session-1:1:assistant");
 });
