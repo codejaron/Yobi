@@ -15,7 +15,12 @@ import { SentenceChunkBuffer } from "./realtime-voice-chunker";
 import { shouldAutoStartVoiceSession } from "./realtime-voice-lifecycle";
 import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
 import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voice-state";
-import { estimateSpeechProbabilityFromRms } from "./realtime-voice-vad";
+import {
+  createVoiceActivityDetector,
+  getVoiceActivityDetectorConfig,
+  type VoiceActivityDetector,
+  type VoiceActivityDetectorConfig
+} from "./realtime-voice-vad";
 import { VoiceHostWindowController, type VoiceHostMessage } from "./voice-host-window";
 import { VoiceProviderRouter, type StreamingAsrSession, type StreamingTtsSession } from "./voice-router";
 
@@ -37,6 +42,10 @@ interface RealtimeVoiceServiceInput {
   }) => Promise<void>;
   onAssistantMessage?: () => Promise<void>;
   onStatusChange?: () => void | Promise<void>;
+  createVad?: (input: {
+    config: VoiceActivityDetectorConfig;
+    logger: AppLogger;
+  }) => Promise<VoiceActivityDetector>;
 }
 
 function nowIso(): string {
@@ -73,48 +82,16 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
   };
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-
-  return Math.max(min, Math.min(max, value));
-}
-
-function pcm16Rms(chunk: Buffer): number {
-  if (chunk.length < 2) {
-    return 0;
-  }
-
-  const sampleCount = Math.floor(chunk.length / 2);
-  let energy = 0;
-  for (let index = 0; index < sampleCount; index += 1) {
-    const sample = chunk.readInt16LE(index * 2) / 0x8000;
-    energy += sample * sample;
-  }
-
-  return Math.sqrt(energy / sampleCount);
-}
-
-class LocalVad {
-  process(chunk: Buffer): number {
-    return estimateSpeechProbabilityFromRms(pcm16Rms(chunk));
-  }
-
-  reset(): void {}
-
-  dispose(): void {}
-}
-
 export class RealtimeVoiceService {
   private readonly host: VoiceHostWindowController;
   private readonly listeners = new Set<(event: VoiceSessionEvent) => void>();
   private state: VoiceSessionState;
   private pttHeld = false;
-  private vad: LocalVad | null = null;
+  private vad: VoiceActivityDetector | null = null;
+  private vadPromise: Promise<VoiceActivityDetector> | null = null;
+  private vadConfig: VoiceActivityDetectorConfig | null = null;
   private speechActive = false;
   private speechStartedAtMs = 0;
-  private lastSpeechAtMs = 0;
   private preRollBuffers: Buffer[] = [];
   private speechBuffers: Buffer[] = [];
   private activeAsrSession: StreamingAsrSession | null = null;
@@ -144,7 +121,9 @@ export class RealtimeVoiceService {
   start(): void {
     const config = this.input.getConfig();
     this.state = createEmptyVoiceState(config.realtimeVoice.mode);
-    this.ensureVad();
+    void this.ensureVadReady().catch((error) => {
+      this.input.logger.warn("realtime-voice", "vad-warmup-failed", undefined, error);
+    });
     if (
       shouldAutoStartVoiceSession({
         enabled: config.realtimeVoice.enabled,
@@ -160,8 +139,7 @@ export class RealtimeVoiceService {
   stop(): void {
     void this.stopSession();
     this.host.close();
-    this.vad?.dispose();
-    this.vad = null;
+    this.disposeVad();
   }
 
   isActive(): boolean {
@@ -215,10 +193,10 @@ export class RealtimeVoiceService {
     this.applyState({
       type: "session-started"
     });
-    this.ensureVad();
     this.resetSpeechTracking();
 
     if (mode === "free") {
+      await this.ensureVadReady();
       await this.host.send({
         type: "start-capture",
         aecEnabled: config.realtimeVoice.aecEnabled
@@ -382,18 +360,58 @@ export class RealtimeVoiceService {
     });
   }
 
-  private ensureVad(): void {
-    if (this.vad) {
-      return;
+  private async ensureVadReady(): Promise<VoiceActivityDetector> {
+    const config = getVoiceActivityDetectorConfig(this.input.getConfig().realtimeVoice);
+    if (this.vad && this.vadConfig && this.isSameVadConfig(this.vadConfig, config)) {
+      return this.vad;
     }
 
-    this.vad = new LocalVad();
+    if (this.vadPromise && this.vadConfig && this.isSameVadConfig(this.vadConfig, config)) {
+      return this.vadPromise;
+    }
+
+    this.disposeVad();
+    this.vadConfig = config;
+    const createVad = this.input.createVad ?? createVoiceActivityDetector;
+
+    this.vadPromise = createVad({
+      config,
+      logger: this.input.logger
+    })
+      .then((vad) => {
+        this.vad = vad;
+        return vad;
+      })
+      .catch((error) => {
+        this.vadPromise = null;
+        this.vadConfig = null;
+        throw error;
+      });
+
+    return this.vadPromise;
+  }
+
+  private disposeVad(): void {
+    this.vad?.dispose();
+    this.vad = null;
+    this.vadPromise = null;
+    this.vadConfig = null;
+  }
+
+  private isSameVadConfig(
+    left: VoiceActivityDetectorConfig,
+    right: VoiceActivityDetectorConfig
+  ): boolean {
+    return (
+      left.vadThreshold === right.vadThreshold &&
+      left.minSpeechMs === right.minSpeechMs &&
+      left.minSilenceMs === right.minSilenceMs
+    );
   }
 
   private resetSpeechTracking(): void {
     this.speechActive = false;
     this.speechStartedAtMs = 0;
-    this.lastSpeechAtMs = 0;
     this.preRollBuffers = [];
     this.speechBuffers = [];
     this.vad?.reset();
@@ -448,7 +466,6 @@ export class RealtimeVoiceService {
 
     this.speechActive = true;
     this.speechStartedAtMs = Date.now();
-    this.lastSpeechAtMs = this.speechStartedAtMs;
     this.speechBuffers = [];
     this.input.logger.info("realtime-voice", "speech:start", {
       sessionId: this.state.sessionId ?? "unknown"
@@ -691,38 +708,31 @@ export class RealtimeVoiceService {
       return;
     }
 
-    this.rememberPreRoll(chunk);
-    const probability = this.vad?.process(chunk) ?? clampNumber(pcm16Rms(chunk) * 4, 0, 1);
-    const threshold = clampNumber(this.input.getConfig().realtimeVoice.vadThreshold, 0.05, 0.95);
+    const wasSpeechActive = this.speechActive;
+    const vad = await this.ensureVadReady();
+    const result = await vad.processChunk(chunk);
     const nowMs = Date.now();
 
-    if (!this.speechActive) {
-      if (probability >= threshold) {
-        await this.beginSpeech();
-      }
-
-      if (this.speechActive && this.activeAsrSession) {
-        this.speechBuffers.push(Buffer.from(chunk));
-        await this.activeAsrSession.pushPcm(chunk);
-      }
-      return;
+    if (!wasSpeechActive && !result.speechStarted) {
+      this.rememberPreRoll(chunk);
     }
 
-    this.speechBuffers.push(Buffer.from(chunk));
-    await this.activeAsrSession?.pushPcm(chunk);
-    if (probability >= threshold) {
-      this.lastSpeechAtMs = nowMs;
+    if (result.speechStarted) {
+      await this.beginSpeech();
     }
 
-    const speechDuration = nowMs - this.speechStartedAtMs;
-    const silenceDuration = nowMs - this.lastSpeechAtMs;
+    if (this.speechActive && this.activeAsrSession) {
+      this.speechBuffers.push(Buffer.from(chunk));
+      await this.activeAsrSession.pushPcm(chunk);
+    }
+
     const config = this.input.getConfig().realtimeVoice;
-    if (speechDuration >= config.maxUtteranceMs) {
+    if (this.speechActive && nowMs - this.speechStartedAtMs >= config.maxUtteranceMs) {
       await this.finishSpeech();
       return;
     }
 
-    if (speechDuration >= config.minSpeechMs && silenceDuration >= config.minSilenceMs) {
+    if (this.speechActive && result.speechEnded) {
       await this.finishSpeech();
     }
   }
