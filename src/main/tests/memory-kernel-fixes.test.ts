@@ -1485,3 +1485,93 @@ test("KernelEngine.maybeEmitProactiveMessage: does not send cold-start greeting 
     await cleanupMemoryPaths(paths, memory);
   }
 });
+
+test("KernelEngine.tick: reschedules the next heartbeat when a tick step fails", async () => {
+  const paths = await createTempPaths("yobi-tick-reschedule-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    const stateStore = new StateStore(paths);
+    await memory.init();
+    await stateStore.init();
+
+    const engine = new KernelEngine({
+      paths,
+      memory,
+      stateStore,
+      getConfig: () => config,
+      resourceId: "main",
+      threadId: "main",
+      backgroundWorker: {
+        init: async () => undefined,
+        getStatus: () => ({ available: false, message: "stub" })
+      } as any,
+      queueHandlers: [],
+      proactiveRewriteHandler: {
+        rewrite: async () => null,
+        getWorkerStatus: () => ({ available: false, message: "stub" }),
+        getPauseReason: () => "stub"
+      }
+    });
+    await engine.init();
+
+    const scheduled: number[] = [];
+    (engine as any).running = true;
+    (engine as any).processQueuedEvents = async () => {
+      throw new Error("tick-step-failed");
+    };
+    (engine as any).resolveTickIntervalMs = () => 4321;
+    (engine as any).scheduleNextTick = (delayMs: number) => {
+      scheduled.push(delayMs);
+    };
+
+    await (engine as any).tick();
+
+    assert.deepEqual(scheduled, [4321]);
+    assert.equal(engine.getStatus().lastTickAt, null);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("KernelEngine.runTickNow: still surfaces tick failures to the caller", async () => {
+  const paths = await createTempPaths("yobi-run-tick-now-error-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    const stateStore = new StateStore(paths);
+    await memory.init();
+    await stateStore.init();
+
+    const engine = new KernelEngine({
+      paths,
+      memory,
+      stateStore,
+      getConfig: () => config,
+      resourceId: "main",
+      threadId: "main",
+      backgroundWorker: {
+        init: async () => undefined,
+        getStatus: () => ({ available: false, message: "stub" })
+      } as any,
+      queueHandlers: [],
+      proactiveRewriteHandler: {
+        rewrite: async () => null,
+        getWorkerStatus: () => ({ available: false, message: "stub" }),
+        getPauseReason: () => "stub"
+      }
+    });
+    await engine.init();
+
+    (engine as any).running = true;
+    (engine as any).processQueuedEvents = async () => {
+      throw new Error("manual-tick-failed");
+    };
+
+    await assert.rejects(engine.runTickNow(), /manual-tick-failed/);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});

@@ -195,7 +195,10 @@ export class KernelEngine {
   }
 
   async runTickNow(): Promise<void> {
-    await this.tick();
+    if (!this.running) {
+      return;
+    }
+    await this.runTickCycle();
   }
 
   async runDailyNow(): Promise<void> {
@@ -226,6 +229,20 @@ export class KernelEngine {
       return;
     }
 
+    try {
+      await this.runTickCycle();
+    } catch (error) {
+      logger.error("kernel", "tick-failed", undefined, error);
+    } finally {
+      if (!this.running) {
+        return;
+      }
+      this.currentTickIntervalMs = this.resolveTickIntervalMs();
+      this.scheduleNextTick(this.currentTickIntervalMs);
+    }
+  }
+
+  private async runTickCycle(): Promise<void> {
     this.applyStateDecay();
     await this.processQueuedEvents();
     await this.maybeQueueIncrementalFactExtraction();
@@ -238,8 +255,6 @@ export class KernelEngine {
     await this.input.stateStore.flushIfDirty();
 
     this.lastTickAt = new Date().toISOString();
-    this.currentTickIntervalMs = this.resolveTickIntervalMs();
-    this.scheduleNextTick(this.currentTickIntervalMs);
   }
 
   private async processUrgentEvents(): Promise<void> {
