@@ -177,6 +177,22 @@ const api = {
   },
   runScheduledTaskNow(taskId) {
     return ipcRenderer.invoke('scheduler:run-now', { taskId });
+  },
+  getCognitionDebugSnapshot() {
+    return ipcRenderer.invoke('cognition:getDebugSnapshot');
+  },
+  triggerCognitionManualSpread(input) {
+    return ipcRenderer.invoke('cognition:triggerManualSpread', input ?? {});
+  },
+  updateCognitionConfig(input) {
+    return ipcRenderer.invoke('cognition:updateConfig', input ?? {});
+  },
+  onCognitionTickCompleted(listener) {
+    const channel = 'cognition:tick-completed';
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on(channel, wrapped);
+    ipcRenderer.send('cognition:tick:subscribe');
+    return () => ipcRenderer.removeListener(channel, wrapped);
   }
 };
 

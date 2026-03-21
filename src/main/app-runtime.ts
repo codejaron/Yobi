@@ -22,6 +22,7 @@ import {
   type VoiceTranscriptionResult
 } from "@shared/types";
 import type { ProviderModelListResult } from "@shared/provider-catalog";
+import type { ActivationLogEntry, CognitionConfigPatch } from "@shared/cognition";
 import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
@@ -39,6 +40,7 @@ import {
   ensureKernelBootstrap
 } from "@main/kernel/init";
 import { SenseVoiceModelManager } from "@main/services/sensevoice-model-manager";
+import { CognitionEngine } from "@main/cognition/engine";
 import { buildRuntimeRegistry, type RuntimeRegistry } from "@main/runtime/runtime-registry";
 
 interface HistoryQuery {
@@ -88,10 +90,12 @@ export class CompanionRuntime {
   private readonly lifecycleCoordinator: RuntimeRegistry["lifecycleCoordinator"];
   private readonly dataCoordinator: RuntimeRegistry["dataCoordinator"];
   private readonly statusCoordinator: RuntimeRegistry["statusCoordinator"];
+  private readonly cognitionEngine: CognitionEngine;
   private readonly scheduledTaskStore: ScheduledTaskStore;
   private readonly scheduledTaskService: ScheduledTaskService;
   private readonly chatMediaStore: ChatMediaStore;
   private chatMediaCleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private cognitionTickListeners = new Set<(entry: ActivationLogEntry) => void>();
 
   constructor(registry: RuntimeRegistry) {
     this.paths = registry.paths;
@@ -120,6 +124,22 @@ export class CompanionRuntime {
     this.lifecycleCoordinator = registry.lifecycleCoordinator;
     this.dataCoordinator = registry.dataCoordinator;
     this.statusCoordinator = registry.statusCoordinator;
+    this.cognitionEngine = new CognitionEngine({
+      paths: this.paths,
+      getConfig: () => this.getConfig(),
+      memory: this.memory,
+      conversation: this.conversation,
+      logger: this.logger,
+      getUserOnline: () => this.isCognitionUserOnline(),
+      onProactiveMessage: (input) => {
+        void this.handleCognitionProactive(input);
+      },
+      onTickCompleted: (entry) => {
+        this.emitCognitionTick(entry);
+      }
+    });
+    this.channelCoordinator.setPostReplyHook((input) => this.ingestDialogue(input));
+    this.realtimeVoice.setAssistantReplyHook((input) => this.ingestDialogue(input));
     this.chatMediaStore = new ChatMediaStore(this.paths);
     this.scheduledTaskStore = new ScheduledTaskStore(this.paths);
     this.scheduledTaskService = new ScheduledTaskService({
@@ -175,6 +195,7 @@ export class CompanionRuntime {
     await this.startQQ();
     this.kernel.start();
     await this.scheduledTaskService.start();
+    await this.cognitionEngine.start();
     if (!this.chatMediaCleanupTimer) {
       this.chatMediaCleanupTimer = setInterval(() => {
         void this.chatMediaStore.cleanupExpired().catch((error) => {
@@ -199,6 +220,7 @@ export class CompanionRuntime {
     }
     await this.scheduledTaskService.stop();
     await this.kernel.stop();
+    await this.cognitionEngine.stop();
     await this.memory.stop();
     await this.mcpManager.dispose();
     await this.toolRegistry.dispose();
@@ -423,6 +445,18 @@ export class CompanionRuntime {
     return this.statusCoordinator.collectStatus();
   }
 
+  async getCognitionDebugSnapshot() {
+    return this.cognitionEngine.getDebugSnapshot();
+  }
+
+  async triggerCognitionManualSpread(input: { text?: string }) {
+    return this.cognitionEngine.triggerManualSpread(input.text ?? "");
+  }
+
+  async updateCognitionConfig(input: CognitionConfigPatch) {
+    return this.cognitionEngine.updateConfig(input);
+  }
+
   async getScheduledTasks(): Promise<{ tasks: ReturnType<ScheduledTaskService["listTasks"]>; runs: ScheduledTaskRun[] }> {
     return this.scheduledTaskService.getSnapshot();
   }
@@ -570,6 +604,11 @@ export class CompanionRuntime {
     });
     const result = await this.petService.chatFromPet(text, voiceContext);
     if (result.replyText.trim()) {
+      await this.ingestDialogue({
+        channel: "console",
+        userText: text,
+        assistantText: result.replyText
+      });
       await this.kernel.onAssistantMessage();
     }
     return result;
@@ -592,7 +631,15 @@ export class CompanionRuntime {
     replyText?: string;
     message?: string;
   }> {
-    return this.petService.transcribeAndSendFromPet(input);
+    const result = await this.petService.transcribeAndSendFromPet(input);
+    if (result.sent && result.text.trim() && result.replyText?.trim()) {
+      await this.ingestDialogue({
+        channel: "console",
+        userText: result.text,
+        assistantText: result.replyText
+      });
+    }
+    return result;
   }
 
   getVoiceSessionState(): VoiceSessionState {
@@ -793,6 +840,11 @@ export class CompanionRuntime {
 
       latestHandle.finalized = true;
       latestHandle.finishReason = "completed";
+      await this.ingestDialogue({
+        channel: "console",
+        userText: text,
+        assistantText: visibleReply
+      });
       this.emitConsoleFinal(requestId, latestHandle, "completed", visibleReply);
       this.petService.emitPetTalkingReply(visibleReply);
       await this.kernel.onAssistantMessage();
@@ -927,6 +979,60 @@ export class CompanionRuntime {
     await this.activityCoordinator.recordProactiveActivity();
   }
 
+  onCognitionTick(listener: (entry: ActivationLogEntry) => void): () => void {
+    this.cognitionTickListeners.add(listener);
+
+    return () => {
+      this.cognitionTickListeners.delete(listener);
+    };
+  }
+
+  private emitCognitionTick(entry: ActivationLogEntry): void {
+    for (const listener of this.cognitionTickListeners) {
+      listener(entry);
+    }
+  }
+
+  private async ingestDialogue(input: {
+    channel: RuntimeInboundChannel;
+    assistantText: string;
+    userText?: string;
+    chatId?: string;
+  }): Promise<void> {
+    try {
+      await this.cognitionEngine.ingestDialogue(input);
+    } catch (error) {
+      this.logger.warn("cognition", "ingest-dialogue-failed", undefined, error);
+    }
+  }
+
+  private async handleCognitionProactive(input: {
+    message: string;
+    metadata?: {
+      proactive?: boolean;
+      source?: string;
+    };
+    pushTargets?: {
+      telegram: boolean;
+      feishu: boolean;
+    };
+    recordProactive?: boolean;
+  }): Promise<void> {
+    const normalized = input.message?.trim();
+    if (!normalized) {
+      return;
+    }
+    await this.dispatchAssistantAutomationMessage({
+      message: normalized,
+      metadata: {
+        proactive: input.metadata?.proactive ?? true,
+        source: "yobi"
+      },
+      pushTargets: input.pushTargets ?? this.getConfig().proactive.pushTargets,
+      recordProactive: input.recordProactive ?? true
+    });
+  }
+
   private async handleKernelProactive(message: string): Promise<void> {
     await this.dispatchAssistantAutomationMessage({
       message,
@@ -1053,6 +1159,10 @@ export class CompanionRuntime {
       await this.pushToConfiguredChannels(normalizedMessage, input.pushTargets);
     }
 
+    if (input.metadata.proactive === true || input.recordProactive) {
+      await this.pushToLastQQChat(normalizedMessage);
+    }
+
     this.petService.emitPetTalkingReply(normalizedMessage);
     if (input.recordProactive) {
       await this.recordProactiveActivity();
@@ -1068,6 +1178,44 @@ export class CompanionRuntime {
     }
   ): Promise<void> {
     await this.activityCoordinator.pushToConfiguredChannels(text, targets);
+  }
+
+  private async pushToLastQQChat(text: string): Promise<void> {
+    const qqChannel = this.channelCoordinator.getQQChannel();
+    const targetChatId = this.activityCoordinator.getSnapshot().lastQQChatId;
+    if (!qqChannel || !qqChannel.isConnected() || !targetChatId?.trim()) {
+      return;
+    }
+
+    try {
+      await qqChannel.send({
+        kind: "text",
+        text,
+        chatId: targetChatId
+      });
+    } catch (error) {
+      this.logger.warn("cognition", "proactive:qq-push-failed", undefined, error);
+    }
+  }
+
+  private isCognitionUserOnline(): boolean {
+    if (this.consoleChannel.hasListeners()) {
+      return true;
+    }
+
+    const activity = this.activityCoordinator.getSnapshot();
+    const config = this.getConfig();
+    const telegramReachable =
+      config.proactive.pushTargets.telegram &&
+      Boolean((activity.lastTelegramChatId ?? config.telegram.chatId).trim());
+    const feishuReachable =
+      config.proactive.pushTargets.feishu &&
+      Boolean(activity.lastFeishuChatId?.trim());
+    const qqReachable =
+      this.channelCoordinator.isQQConnected() &&
+      Boolean(activity.lastQQChatId?.trim());
+
+    return telegramReachable || feishuReachable || qqReachable;
   }
 
 

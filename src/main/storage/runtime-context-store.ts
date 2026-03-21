@@ -10,6 +10,7 @@ export interface RuntimeContextStoreDocument {
   lastInboundChatId: string | null;
   lastTelegramChatId: string | null;
   lastFeishuChatId: string | null;
+  lastQQChatId: string | null;
 }
 
 const DEFAULT_RUNTIME_CONTEXT: RuntimeContextStoreDocument = {
@@ -18,7 +19,8 @@ const DEFAULT_RUNTIME_CONTEXT: RuntimeContextStoreDocument = {
   lastInboundChannel: null,
   lastInboundChatId: null,
   lastTelegramChatId: null,
-  lastFeishuChatId: null
+  lastFeishuChatId: null,
+  lastQQChatId: null
 };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -68,7 +70,8 @@ function normalizeContext(raw: unknown): RuntimeContextStoreDocument {
     lastInboundChannel: normalizeChannel(raw.lastInboundChannel),
     lastInboundChatId: normalizeChatId(raw.lastInboundChatId),
     lastTelegramChatId: normalizeChatId(raw.lastTelegramChatId),
-    lastFeishuChatId: normalizeChatId(raw.lastFeishuChatId)
+    lastFeishuChatId: normalizeChatId(raw.lastFeishuChatId),
+    lastQQChatId: normalizeChatId(raw.lastQQChatId)
   };
 }
 

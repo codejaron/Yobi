@@ -390,6 +390,12 @@ export class YobiMemory {
     return this.profileStore.getProfile();
   }
 
+  async embedText(text: string): Promise<number[] | null> {
+    await this.init();
+    const embedded = await this.embedder.embed(text);
+    return embedded?.vector ?? null;
+  }
+
   async listRecentEpisodes(limit = 30): Promise<Episode[]> {
     await this.init();
     return this.episodesStore.listRecent(limit);

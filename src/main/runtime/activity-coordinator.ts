@@ -13,6 +13,7 @@ export interface ActivityCoordinatorState {
   lastInboundChatId: string | null;
   lastTelegramChatId: string | null;
   lastFeishuChatId: string | null;
+  lastQQChatId: string | null;
 }
 
 interface ActivityCoordinatorInput {
@@ -34,7 +35,8 @@ export class RuntimeActivityCoordinator {
     lastInboundChannel: null,
     lastInboundChatId: null,
     lastTelegramChatId: null,
-    lastFeishuChatId: null
+    lastFeishuChatId: null,
+    lastQQChatId: null
   };
 
   constructor(private readonly input: ActivityCoordinatorInput) {}
@@ -47,7 +49,8 @@ export class RuntimeActivityCoordinator {
       lastInboundChannel: context.lastInboundChannel,
       lastInboundChatId: context.lastInboundChatId,
       lastTelegramChatId: context.lastTelegramChatId,
-      lastFeishuChatId: context.lastFeishuChatId
+      lastFeishuChatId: context.lastFeishuChatId,
+      lastQQChatId: context.lastQQChatId
     };
     this.input.onLastUserLoaded(this.state.lastUserAt);
     this.input.onLastProactiveLoaded(this.state.lastProactiveAt);
@@ -72,6 +75,9 @@ export class RuntimeActivityCoordinator {
     }
     if (input.channel === "feishu" && this.state.lastInboundChatId) {
       this.state.lastFeishuChatId = this.state.lastInboundChatId;
+    }
+    if (input.channel === "qq" && this.state.lastInboundChatId) {
+      this.state.lastQQChatId = this.state.lastInboundChatId;
     }
     await this.persist();
     await this.input.onUserMessage({
@@ -126,7 +132,8 @@ export class RuntimeActivityCoordinator {
         lastInboundChannel: this.state.lastInboundChannel,
         lastInboundChatId: this.state.lastInboundChatId,
         lastTelegramChatId: this.state.lastTelegramChatId,
-        lastFeishuChatId: this.state.lastFeishuChatId
+        lastFeishuChatId: this.state.lastFeishuChatId,
+        lastQQChatId: this.state.lastQQChatId
       });
     } catch (error) {
       this.input.logger.warn("runtime", "persist-runtime-context-failed", undefined, error);

@@ -195,7 +195,7 @@ export function createModelForProvider(provider: ProviderConfig, model: string):
 export class ModelFactory {
   constructor(private readonly getConfig: () => AppConfig) {}
 
-  private getModelByRoute(routeKey: "chat" | "factExtraction" | "reflection"): any {
+  private getModelByRoute(routeKey: keyof AppConfig["modelRouting"]): any {
     const routes = this.getConfig().modelRouting;
     const route = routes[routeKey];
     if (!route) {
@@ -219,5 +219,9 @@ export class ModelFactory {
 
   getReflectionModel(): any {
     return this.getModelByRoute("reflection");
+  }
+
+  getCognitionModel(): any {
+    return this.getModelByRoute("cognition");
   }
 }

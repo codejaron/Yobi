@@ -216,7 +216,7 @@ function voiceOrDefault(value: Record<string, unknown>): Record<string, unknown>
 
 function assertRouteProvidersExist(config: AppConfig): void {
   const providerIds = new Set(config.providers.map((provider) => provider.id));
-  const routes: Array<keyof AppConfig["modelRouting"]> = ["chat", "factExtraction", "reflection"];
+  const routes: Array<keyof AppConfig["modelRouting"]> = ["chat", "factExtraction", "reflection", "cognition"];
   for (const routeKey of routes) {
     const route = config.modelRouting[routeKey];
     if (!route) {

@@ -10,6 +10,7 @@ import type { CompanionRuntime } from "./app-runtime";
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
 const VOICE_SESSION_EVENT_CHANNEL = "runtime:voice-session-event";
+const COGNITION_TICK_CHANNEL = "cognition:tick-completed";
 const SENSEVOICE_MODEL_PROGRESS_CHANNEL = "runtime:sensevoice-model-progress";
 
 interface IpcSubscription {
@@ -20,6 +21,7 @@ interface IpcSubscription {
 const statusSubscriptions = new Map<number, IpcSubscription>();
 const consoleRunSubscriptions = new Map<number, IpcSubscription>();
 const voiceSessionSubscriptions = new Map<number, IpcSubscription>();
+const cognitionTickSubscriptions = new Map<number, IpcSubscription>();
 
 function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSubscription>): void {
   const current = subscriptions.get(target.id);
@@ -302,6 +304,15 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("scheduler:run-now", (_, payload: { taskId?: string }) =>
     runtime.runScheduledTaskNow(payload?.taskId ?? "")
   );
+  ipcMain.handle("cognition:getDebugSnapshot", () => runtime.getCognitionDebugSnapshot());
+  ipcMain.handle("cognition:triggerManualSpread", (_, payload: { text?: string }) =>
+    runtime.triggerCognitionManualSpread({
+      text: payload?.text ?? ""
+    })
+  );
+  ipcMain.handle("cognition:updateConfig", (_, payload: Record<string, unknown>) =>
+    runtime.updateCognitionConfig(payload as any)
+  );
 
   ipcMain.on("status:subscribe", (event) => {
     subscribeToStatus(runtime, event.sender);
@@ -313,6 +324,10 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
 
   ipcMain.on("voice:session:subscribe", (event) => {
     subscribeToVoiceSession(runtime, event.sender);
+  });
+
+  ipcMain.on("cognition:tick:subscribe", (event) => {
+    subscribeToCognitionTicks(runtime, event.sender);
   });
 
   ipcMain.handle("open:path", (_, location: string) => {
@@ -386,6 +401,29 @@ function subscribeToVoiceSession(runtime: CompanionRuntime, target: WebContents)
   };
 
   voiceSessionSubscriptions.set(target.id, {
+    unsubscribe,
+    onDestroyed
+  });
+  target.on("destroyed", onDestroyed);
+}
+
+function subscribeToCognitionTicks(runtime: CompanionRuntime, target: WebContents): void {
+  clearSubscription(target, cognitionTickSubscriptions);
+
+  const unsubscribe = runtime.onCognitionTick((entry) => {
+    if (target.isDestroyed()) {
+      clearSubscription(target, cognitionTickSubscriptions);
+      return;
+    }
+
+    target.send(COGNITION_TICK_CHANNEL, entry);
+  });
+
+  const onDestroyed = () => {
+    clearSubscription(target, cognitionTickSubscriptions);
+  };
+
+  cognitionTickSubscriptions.set(target.id, {
     unsubscribe,
     onDestroyed
   });

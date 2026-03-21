@@ -50,6 +50,14 @@ interface ChannelCoordinatorInput {
 
 export class ChannelCoordinator {
   private qqChannel: QQChannel | null = null;
+  private postReplyHook:
+    | ((input: {
+        channel: RuntimeInboundChannel;
+        userText: string;
+        assistantText: string;
+        chatId?: string;
+      }) => Promise<void> | void)
+    | null = null;
 
   constructor(private readonly input: ChannelCoordinatorInput) {}
 
@@ -67,6 +75,17 @@ export class ChannelCoordinator {
 
   isQQConnected(): boolean {
     return this.qqChannel?.isConnected() ?? false;
+  }
+
+  setPostReplyHook(
+    hook: (input: {
+      channel: RuntimeInboundChannel;
+      userText: string;
+      assistantText: string;
+      chatId?: string;
+    }) => Promise<void> | void
+  ): void {
+    this.postReplyHook = hook;
   }
 
   async startTelegram(): Promise<void> {
@@ -200,6 +219,12 @@ export class ChannelCoordinator {
 
       if (visibleReply) {
         await input.sendReply(visibleReply, input.inbound.chatId);
+        await Promise.resolve(this.postReplyHook?.({
+          channel: input.channel,
+          userText: input.inbound.text,
+          assistantText: visibleReply,
+          chatId: input.inbound.chatId
+        }));
         await this.input.onAssistantMessage();
       }
     } finally {
@@ -286,6 +311,12 @@ export class ChannelCoordinator {
         } else {
           await this.input.feishu.send({ kind: "text", text: visibleReply, chatId: inbound.chatId });
         }
+        await Promise.resolve(this.postReplyHook?.({
+          channel: "feishu",
+          userText: inbound.text,
+          assistantText: visibleReply,
+          chatId: inbound.chatId
+        }));
         await this.input.onAssistantMessage();
       } else if (streamingEnabled) {
         await this.input.feishu.finishStreaming(streamedText).catch(() => undefined);

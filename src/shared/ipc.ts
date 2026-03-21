@@ -22,6 +22,7 @@ import type {
   VoiceSessionTarget
 } from "./types";
 import type { ProviderModelListResult } from "./provider-catalog";
+import type { CognitionConfig, CognitionConfigPatch, CognitionDebugSnapshot } from "./cognition";
 
 export interface CursorHistoryPage {
   items: HistoryMessage[];
@@ -154,4 +155,12 @@ export interface CompanionApi {
   importSkillFolder(): Promise<{ canceled: boolean; skill?: SkillCatalogItem }>;
   setSkillEnabled(input: { skillId: string; enabled: boolean }): Promise<SkillCatalogItem>;
   deleteSkill(skillId: string): Promise<{ removed: boolean; skillId: string }>;
+
+  getCognitionDebugSnapshot(): Promise<CognitionDebugSnapshot>;
+  triggerCognitionManualSpread(input: { text: string }): Promise<{
+    entry: CognitionDebugSnapshot["lastLogs"][number];
+    snapshot: CognitionDebugSnapshot;
+  }>;
+  updateCognitionConfig(input: CognitionConfigPatch): Promise<CognitionConfig>;
+  onCognitionTickCompleted(listener: (entry: CognitionDebugSnapshot["lastLogs"][number]) => void): () => void;
 }

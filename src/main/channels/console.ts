@@ -28,6 +28,10 @@ export class ConsoleChannel {
     }
   }
 
+  hasListeners(): boolean {
+    return this.listeners.size > 0;
+  }
+
   emitExternalAssistantMessage(input: { text: string; source: "yobi" }): void {
     const text = input.text.trim();
     if (!text) {

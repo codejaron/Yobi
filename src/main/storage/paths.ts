@@ -13,6 +13,10 @@ export class CompanionPaths {
     return path.join(this.baseDir, "config.json");
   }
 
+  get cognitionConfigPath(): string {
+    return path.join(this.baseDir, "cognition-config.json");
+  }
+
   get soulPath(): string {
     return path.join(this.baseDir, "soul.md");
   }
@@ -43,6 +47,22 @@ export class CompanionPaths {
 
   get memoryDir(): string {
     return path.join(this.baseDir, "memory");
+  }
+
+  get cognitionDir(): string {
+    return path.join(this.baseDir, "cognition");
+  }
+
+  get cognitionGraphHotPath(): string {
+    return path.join(this.cognitionDir, "graph-hot.msgpack");
+  }
+
+  get cognitionThoughtPoolPath(): string {
+    return path.join(this.cognitionDir, "thought-pool.jsonl");
+  }
+
+  get cognitionActivationLogPath(): string {
+    return path.join(this.cognitionDir, "activation-log.jsonl");
   }
 
   get factsPath(): string {
@@ -176,6 +196,7 @@ export class CompanionPaths {
   ensureLayout(): void {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.memoryDir, { recursive: true });
+    mkdirSync(this.cognitionDir, { recursive: true });
     mkdirSync(this.episodesDir, { recursive: true });
     mkdirSync(this.sessionsDir, { recursive: true });
     mkdirSync(this.mainSessionDir, { recursive: true });

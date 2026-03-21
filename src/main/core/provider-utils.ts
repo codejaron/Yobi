@@ -4,8 +4,11 @@ import { providerUsesResponsesApi } from "./model-factory";
 
 type StreamProviderOptions = NonNullable<Parameters<typeof streamText>[0]["providerOptions"]>;
 
-export function resolveOpenAIStoreOption(config: AppConfig): StreamProviderOptions | undefined {
-  const provider = resolveChatProvider(config);
+export function resolveOpenAIStoreOption(
+  config: AppConfig,
+  routeKey: keyof AppConfig["modelRouting"] = "chat"
+): StreamProviderOptions | undefined {
+  const provider = resolveProviderForRoute(config, routeKey);
   if (!provider) {
     return undefined;
   }
@@ -22,7 +25,14 @@ export function resolveOpenAIStoreOption(config: AppConfig): StreamProviderOptio
 }
 
 export function resolveChatProvider(config: AppConfig): ProviderConfig | undefined {
-  const route = config.modelRouting.chat;
+  return resolveProviderForRoute(config, "chat");
+}
+
+export function resolveProviderForRoute(
+  config: AppConfig,
+  routeKey: keyof AppConfig["modelRouting"]
+): ProviderConfig | undefined {
+  const route = config.modelRouting[routeKey];
   return config.providers.find((candidate) => candidate.id === route.providerId);
 }
 

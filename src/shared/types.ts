@@ -336,7 +336,8 @@ export const appConfigSchema = z
       .object({
         chat: modelRouteSchema,
         factExtraction: modelRouteSchema,
-        reflection: modelRouteSchema
+        reflection: modelRouteSchema,
+        cognition: modelRouteSchema
       })
       .strict(),
     voice: z
@@ -1546,6 +1547,10 @@ export const DEFAULT_CONFIG: AppConfig = {
       model: "claude-3-5-haiku-latest"
     },
     reflection: {
+      providerId: "anthropic-main",
+      model: "claude-3-5-haiku-latest"
+    },
+    cognition: {
       providerId: "anthropic-main",
       model: "claude-3-5-haiku-latest"
     }

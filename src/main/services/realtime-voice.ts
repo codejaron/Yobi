@@ -85,6 +85,13 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
 export class RealtimeVoiceService {
   private readonly host: VoiceHostWindowController;
   private readonly listeners = new Set<(event: VoiceSessionEvent) => void>();
+  private assistantReplyHook:
+    | ((input: {
+        channel: RuntimeInboundChannel;
+        userText: string;
+        assistantText: string;
+      }) => Promise<void> | void)
+    | null = null;
   private state: VoiceSessionState;
   private pttHeld = false;
   private vad: VoiceActivityDetector | null = null;
@@ -140,6 +147,16 @@ export class RealtimeVoiceService {
     void this.stopSession();
     this.host.close();
     this.disposeVad();
+  }
+
+  setAssistantReplyHook(
+    hook: (input: {
+      channel: RuntimeInboundChannel;
+      userText: string;
+      assistantText: string;
+    }) => Promise<void> | void
+  ): void {
+    this.assistantReplyHook = hook;
   }
 
   isActive(): boolean {
@@ -956,6 +973,7 @@ export class RealtimeVoiceService {
 
     this.assistantCommitPersisted = true;
     if (this.llmVisibleText.trim()) {
+      const userTranscript = this.state.userTranscript;
       await this.input.conversation.rememberAssistantMessage({
         threadId: this.state.target.threadId,
         resourceId: this.state.target.resourceId,
@@ -974,6 +992,11 @@ export class RealtimeVoiceService {
           }
         }
       });
+      await Promise.resolve(this.assistantReplyHook?.({
+        channel: "console",
+        userText: userTranscript,
+        assistantText: this.llmVisibleText
+      }));
       await this.input.onAssistantMessage?.();
     }
 
@@ -1003,6 +1026,7 @@ export class RealtimeVoiceService {
     }
 
     this.assistantCommitPersisted = true;
+    const userTranscript = this.state.userTranscript;
     await this.input.conversation.rememberAssistantMessage({
       threadId: this.state.target.threadId,
       resourceId: this.state.target.resourceId,
@@ -1013,6 +1037,11 @@ export class RealtimeVoiceService {
         ...commit.metadata
       }
     });
+    await Promise.resolve(this.assistantReplyHook?.({
+      channel: "console",
+      userText: userTranscript,
+      assistantText: commit.text
+    }));
     await this.input.onAssistantMessage?.();
   }
 

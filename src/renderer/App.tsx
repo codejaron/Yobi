@@ -37,10 +37,32 @@ const McpPage = lazy(async () => {
   const module = await import("@renderer/pages/Mcp");
   return { default: module.McpPage };
 });
+const CognitionDebugPage = lazy(async () => {
+  const module = await import("@renderer/pages/CognitionDebug");
+  return { default: module.CognitionDebugPage };
+});
 const SettingsPage = lazy(async () => {
   const module = await import("@renderer/pages/Settings");
   return { default: module.SettingsPage };
 });
+
+function pageFromHash(hash: string): PageId | null {
+  return hash === "#/dev/cognition" ? "cognition" : null;
+}
+
+function syncHashWithPage(pageId: PageId): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const targetHash = pageId === "cognition" ? "#/dev/cognition" : "";
+  if (window.location.hash === targetHash) {
+    return;
+  }
+
+  const nextUrl = `${window.location.pathname}${window.location.search}${targetHash}`;
+  window.history.replaceState(null, "", nextUrl);
+}
 
 function themeModeLabel(mode: ThemeMode): string {
   if (mode === "dark") {
@@ -59,7 +81,7 @@ function configFingerprint(config: AppConfig): string {
 }
 
 export default function App() {
-  const [activePage, setActivePage] = useState<PageId>("dashboard");
+  const [activePage, setActivePage] = useState<PageId>(() => pageFromHash(window.location.hash) ?? "dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [committedConfig, setCommittedConfig] = useState<AppConfig | null>(null);
@@ -104,6 +126,24 @@ export default function App() {
       console.error("[app] refreshMindSnapshot failed:", error);
     }
   }, [loadWithTimeout]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const nextPage = pageFromHash(window.location.hash);
+      if (nextPage) {
+        setActivePage(nextPage);
+      }
+    };
+
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    syncHashWithPage(activePage);
+  }, [activePage]);
 
   useEffect(() => {
     let unsubStatus: (() => void) | null = null;
@@ -431,12 +471,21 @@ export default function App() {
       );
     }
 
+    if (activePage === "cognition") {
+      return (
+        <Suspense fallback={loading}>
+          <CognitionDebugPage />
+        </Suspense>
+      );
+    }
+
     return (
       <Suspense fallback={loading}>
         <SettingsPage
           config={config}
           status={status}
           setConfig={setConfig}
+          onNavigateToCognition={() => setActivePage("cognition")}
           themeSaving={autoSaving}
           onThemeModeChange={handleThemeModeChange}
         />

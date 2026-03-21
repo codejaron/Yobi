@@ -5,6 +5,7 @@ import {
   Gauge,
   MessageSquare,
   Moon,
+  Orbit,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
@@ -29,6 +30,7 @@ const items: Array<{
   { id: "providers", label: "Provider", icon: Bot },
   { id: "memory", label: "记忆", icon: Brain },
   { id: "mcp", label: "MCP", icon: Plug },
+  { id: "cognition", label: "认知", icon: Orbit },
   { id: "settings", label: "设置", icon: Settings2 }
 ];
 
