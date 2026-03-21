@@ -102,6 +102,9 @@ export class MemoryGraphStore {
 
   addEdge(edge: MemoryEdge): MemoryEdge {
     const normalized = normalizeEdge(edge);
+    if (normalized.source === normalized.target) {
+      return normalized;
+    }
     const existingIndex = this.graph.edges.findIndex((candidate) =>
       candidate.id === normalized.id ||
       (

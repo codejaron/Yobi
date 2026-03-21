@@ -1,6 +1,9 @@
 import { MemoryGraphStore } from "../graph/memory-graph";
 
 const MANUAL_SEED_SIMILARITY_THRESHOLD = 0.55;
+const MANUAL_SEED_TYPE_WEIGHT: Record<string, number> = {
+  time_marker: 0.7
+};
 
 interface TimeSignalPayload {
   hour: number;
@@ -114,7 +117,7 @@ export async function signalToSeeds(
   return nodes
     .map((node) => ({
       nodeId: node.id,
-      energy: cosineSimilarity(queryEmbedding, node.embedding)
+      energy: cosineSimilarity(queryEmbedding, node.embedding) * (MANUAL_SEED_TYPE_WEIGHT[node.type] ?? 1)
     }))
     .filter((item) => item.energy >= MANUAL_SEED_SIMILARITY_THRESHOLD)
     .sort((left, right) => right.energy - left.energy)

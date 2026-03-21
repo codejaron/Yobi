@@ -50,8 +50,137 @@ interface PlaybackFrame {
   progress: number;
 }
 
+type StageNodeActivation = {
+  node_id: string;
+  activation: number;
+};
+
+type ExtendedPathRound = ActivationPathLogRound & {
+  propagation_totals?: StageNodeActivation[];
+  inhibition_winners?: StageNodeActivation[] | string[];
+  inhibited_totals?: StageNodeActivation[];
+  gated_totals?: StageNodeActivation[];
+  trimmed_totals?: StageNodeActivation[];
+};
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeStageEntries(value: unknown): StageNodeActivation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized: StageNodeActivation[] = [];
+  for (const item of value) {
+    if (!item) {
+      continue;
+    }
+
+    if (typeof item === "string") {
+      normalized.push({ node_id: item, activation: 0 });
+      continue;
+    }
+
+    if (typeof item !== "object") {
+      continue;
+    }
+
+    const maybeNodeId =
+      "node_id" in item && typeof item.node_id === "string"
+        ? item.node_id
+        : "nodeId" in item && typeof item.nodeId === "string"
+          ? item.nodeId
+          : null;
+    if (!maybeNodeId) {
+      continue;
+    }
+
+    const maybeActivation =
+      "activation" in item && typeof item.activation === "number"
+        ? item.activation
+        : "value" in item && typeof item.value === "number"
+          ? item.value
+          : 0;
+    normalized.push({ node_id: maybeNodeId, activation: maybeActivation });
+  }
+
+  return normalized;
+}
+
+function aggregatePropagation(round: ActivationPathLogRound): StageNodeActivation[] {
+  const totals = new Map<string, number>();
+  for (const edge of round.propagated) {
+    totals.set(edge.to, (totals.get(edge.to) ?? 0) + edge.activation);
+  }
+  return [...totals.entries()].map(([node_id, activation]) => ({ node_id, activation }));
+}
+
+function rankStageEntries(entries: StageNodeActivation[]): StageNodeActivation[] {
+  return [...entries]
+    .sort((left, right) =>
+      right.activation === left.activation
+        ? left.node_id.localeCompare(right.node_id)
+        : right.activation - left.activation
+    )
+    .slice(0, 5);
+}
+
+function formatStageEntries(input: {
+  entries: StageNodeActivation[];
+  labelById: Map<string, string>;
+}): string {
+  const ranked = rankStageEntries(input.entries);
+  if (ranked.length === 0) {
+    return "无";
+  }
+  return ranked
+    .map((entry) => `${input.labelById.get(entry.node_id) ?? entry.node_id} (${entry.activation.toFixed(2)})`)
+    .join(" · ");
+}
+
+function buildRoundStageRows(input: {
+  pathLog: ActivationPathLogRound[] | null | undefined;
+  labelById: Map<string, string>;
+}): Array<{
+  depth: number;
+  propagation: string;
+  inhibition: string;
+  sigmoid: string;
+  trimmed?: string;
+}> {
+  const rows: Array<{
+    depth: number;
+    propagation: string;
+    inhibition: string;
+    sigmoid: string;
+    trimmed?: string;
+  }> = [];
+
+  for (const rawRound of input.pathLog ?? []) {
+    const round = rawRound as ExtendedPathRound;
+    const propagationTotals =
+      normalizeStageEntries(round.propagation_totals).length > 0
+        ? normalizeStageEntries(round.propagation_totals)
+        : aggregatePropagation(rawRound);
+    const inhibitionTotals =
+      normalizeStageEntries(round.inhibited_totals).length > 0
+        ? normalizeStageEntries(round.inhibited_totals)
+        : normalizeStageEntries(round.inhibition_winners);
+    const sigmoidTotals = normalizeStageEntries(round.gated_totals);
+    const trimmedTotals = normalizeStageEntries(round.trimmed_totals);
+
+    rows.push({
+      depth: rawRound.depth,
+      propagation: formatStageEntries({ entries: propagationTotals, labelById: input.labelById }),
+      inhibition: formatStageEntries({ entries: inhibitionTotals, labelById: input.labelById }),
+      sigmoid: formatStageEntries({ entries: sigmoidTotals, labelById: input.labelById }),
+      trimmed: trimmedTotals.length > 0 ? formatStageEntries({ entries: trimmedTotals, labelById: input.labelById }) : undefined
+    });
+  }
+
+  return rows;
 }
 
 function drawGraphCanvas(input: {
@@ -264,6 +393,7 @@ export function CognitionDebugPage() {
   const playbackTimeoutRef = useRef<number | null>(null);
   const [playbackSession, setPlaybackSession] = useState<PlaybackSession | null>(null);
   const [playbackFrame, setPlaybackFrame] = useState<PlaybackFrame | null>(null);
+  const [expandedLogDetails, setExpandedLogDetails] = useState<Record<string, boolean>>({});
 
   const loadSnapshot = useCallback(async () => {
     try {
@@ -613,6 +743,13 @@ export function CognitionDebugPage() {
         .sort((left, right) => right.timestamp - left.timestamp),
     [snapshot]
   );
+  const nodeLabelById = useMemo(() => {
+    const labelById = new Map<string, string>();
+    for (const node of snapshot?.graph.nodes ?? []) {
+      labelById.set(node.id, node.content);
+    }
+    return labelById;
+  }, [snapshot]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-3">
@@ -717,6 +854,27 @@ export function CognitionDebugPage() {
                   {selectedLog.expression_text ? <div>表达：{selectedLog.expression_text}</div> : null}
                   {selectedLog.evaluation_score != null ? (
                     <div>评分：{selectedLog.evaluation_score.toFixed(2)}</div>
+                  ) : null}
+                  {(selectedLog.path_log ?? []).length > 0 ? (
+                    <details className="mt-2 rounded-md border border-border/60 bg-white/70 px-2 py-1">
+                      <summary className="cursor-pointer select-none font-medium text-slate-900">
+                        三阶段详情（每轮 Top）
+                      </summary>
+                      <div className="mt-2 space-y-2">
+                        {buildRoundStageRows({
+                          pathLog: selectedLog.path_log,
+                          labelById: nodeLabelById
+                        }).map((round) => (
+                          <div key={`selected-round-${selectedLog.timestamp}-${round.depth}`} className="rounded-md border border-border/50 bg-white/80 p-2">
+                            <div className="font-medium text-slate-900">Round {round.depth}</div>
+                            <div className="mt-1 text-slate-700">Propagation: {round.propagation}</div>
+                            <div className="text-slate-700">Inhibition: {round.inhibition}</div>
+                            <div className="text-slate-700">Sigmoid: {round.sigmoid}</div>
+                            {round.trimmed ? <div className="text-slate-700">Trimmed: {round.trimmed}</div> : null}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   ) : null}
                 </div>
               ) : (
@@ -868,6 +1026,39 @@ export function CognitionDebugPage() {
                       </div>
                     )}
                   </div>
+                  {(entry.path_log ?? []).length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-border/60 bg-slate-50/70 px-3 py-2 text-xs text-slate-700">
+                      <div
+                        className="flex w-full items-center justify-between text-left font-medium text-slate-900"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const key = `${entry.timestamp}-${entry.manual_text ?? entry.trigger_type}`;
+                          setExpandedLogDetails((current) => ({ ...current, [key]: !current[key] }));
+                        }}
+                      >
+                        <span>三阶段详情（每轮 Top）</span>
+                        <span>
+                          {expandedLogDetails[`${entry.timestamp}-${entry.manual_text ?? entry.trigger_type}`] ? "收起" : "展开"}
+                        </span>
+                      </div>
+                      {expandedLogDetails[`${entry.timestamp}-${entry.manual_text ?? entry.trigger_type}`] ? (
+                        <div className="mt-2 space-y-2">
+                          {buildRoundStageRows({
+                            pathLog: entry.path_log,
+                            labelById: nodeLabelById
+                          }).map((round) => (
+                            <div key={`experiment-round-${entry.timestamp}-${round.depth}`} className="rounded-lg border border-border/50 bg-white/90 p-2">
+                              <div className="font-medium text-slate-900">Round {round.depth}</div>
+                              <div className="mt-1">Propagation: {round.propagation}</div>
+                              <div>Inhibition: {round.inhibition}</div>
+                              <div>Sigmoid: {round.sigmoid}</div>
+                              {round.trimmed ? <div>Trimmed: {round.trimmed}</div> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {entry.expression_text ? (
                     <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-900">

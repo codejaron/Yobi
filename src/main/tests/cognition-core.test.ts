@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { encode } from "@msgpack/msgpack";
 import { CompanionPaths } from "../storage/paths.js";
 import { DEFAULT_COGNITION_CONFIG, type ActivationResult, type MemoryNode } from "@shared/cognition";
 import { loadCognitionConfig, patchCognitionConfig } from "../cognition/config.js";
+import { computeEdgeWeight, computeFanFactor } from "../cognition/activation/fan-effect.js";
+import { applyLateralInhibition } from "../cognition/activation/lateral-inhibition.js";
+import { applySigmoidGate } from "../cognition/activation/sigmoid-gate.js";
 import { MemoryGraphStore } from "../cognition/graph/memory-graph.js";
 import { spread } from "../cognition/activation/spreading-activation.js";
 import { ThoughtPool } from "../cognition/thoughts/thought-bubble.js";
@@ -47,6 +51,10 @@ function makeActivationResult(entries: Array<[string, number]>): ActivationResul
     activated: new Map(entries),
     path_log: []
   };
+}
+
+function assertClose(actual: number, expected: number, epsilon = 1e-6): void {
+  assert.ok(Math.abs(actual - expected) < epsilon, `expected ${actual} to be within ${epsilon} of ${expected}`);
 }
 
 test("loadCognitionConfig bootstraps the default cognition config file", async () => {
@@ -246,6 +254,36 @@ test("MemoryGraphStore.addEdge caps outgoing edges per source by evicting the we
   }
 });
 
+test("MemoryGraphStore.addEdge ignores self loops", async () => {
+  const paths = await createTempPaths("yobi-cognition-edge-self-loop-");
+  try {
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    graph.addNode(
+      makeNode({
+        id: "a",
+        content: "自己",
+        type: "fact",
+        embedding: [1, 0]
+      })
+    );
+
+    graph.addEdge({
+      id: "self-loop",
+      source: "a",
+      target: "a",
+      relation_type: "semantic",
+      weight: 1,
+      created_at: 0,
+      last_activated_at: 0
+    });
+
+    assert.deepEqual(graph.getNeighbors("a"), []);
+    assert.deepEqual(graph.getEdgesBetween("a", "a"), []);
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
 test("MemoryGraphStore.computeBaseLevelActivation applies ACT-R decay in seconds", async () => {
   const paths = await createTempPaths("yobi-cognition-actr-");
   try {
@@ -269,7 +307,7 @@ test("MemoryGraphStore.computeBaseLevelActivation applies ACT-R decay in seconds
   }
 });
 
-test("spread applies temporal decay to temporal edges and retains source activation", async () => {
+test("computeFanFactor ignores self loops and missing targets, and computeEdgeWeight multiplies temporal decay by edge.weight", async () => {
   const paths = await createTempPaths("yobi-cognition-spread-");
   try {
     const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
@@ -296,27 +334,183 @@ test("spread applies temporal decay to temporal edges and retains source activat
       source: "source",
       target: "target",
       relation_type: "temporal",
+      weight: 0.5,
+      created_at: 0,
+      last_activated_at: 0
+    });
+    graph.addEdge({
+      id: "edge-missing",
+      source: "source",
+      target: "missing",
+      relation_type: "semantic",
       weight: 1,
       created_at: 0,
       last_activated_at: 0
     });
+    graph.deserialize(
+      encode({
+        nodes: graph.getAllNodes(),
+        edges: [
+          ...graph.toJSON().edges,
+          {
+            id: "legacy-self-loop",
+            source: "source",
+            target: "source",
+            relation_type: "semantic",
+            weight: 1,
+            created_at: 0,
+            last_activated_at: 0
+          }
+        ]
+      })
+    );
 
-    const result = spread(
-      graph,
-      [{ nodeId: "source", energy: 1 }],
-      {
+    const sourceNode = graph.getNode("source");
+    const targetNode = graph.getNode("target");
+    assert.equal(computeFanFactor(graph, "source"), 1);
+    assert.ok(sourceNode);
+    assert.ok(targetNode);
+    assertClose(
+      computeEdgeWeight({
+        sourceNode,
+        targetNode,
+        edge: graph.getEdgesBetween("source", "target")[0]!,
+        temporalDecayRho: 0.01
+      }),
+      0.5 * Math.exp(-0.1)
+    );
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("applyLateralInhibition keeps winners unchanged and subtracts beta times winner sum from non-winners", () => {
+  const result = applyLateralInhibition(
+    new Map([
+      ["a", 1],
+      ["b", 0.8],
+      ["c", 0.3]
+    ]),
+    {
+      lateral_inhibition_top_M: 2,
+      lateral_inhibition_beta: 0.1
+    }
+  );
+
+  assert.deepEqual(
+    result.winners.map((winner) => winner.node_id),
+    ["a", "b"]
+  );
+  assert.equal(result.totals.get("a"), 1);
+  assert.equal(result.totals.get("b"), 0.8);
+  assertClose(result.totals.get("c") ?? 0, 0.12);
+});
+
+test("applySigmoidGate uses logistic activation and drops values below 0.001", () => {
+  const result = applySigmoidGate(
+    new Map([
+      ["strong", 0.5],
+      ["tiny", -1]
+    ]),
+    {
+      gamma: 10,
+      theta: 0.3
+    }
+  );
+
+  assertClose(result.get("strong") ?? 0, 1 / (1 + Math.exp(-2)));
+  assert.equal(result.has("tiny"), false);
+});
+
+test("spread applies fan effect, inhibition, sigmoid gating, and post-sigmoid trimming", async () => {
+  const paths = await createTempPaths("yobi-cognition-spread-phase2-");
+  try {
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    for (const node of [
+      makeNode({ id: "source", content: "源节点", type: "concept", embedding: [1, 0, 0] }),
+      makeNode({ id: "a", content: "A", type: "fact", embedding: [0, 1, 0] }),
+      makeNode({ id: "b", content: "B", type: "fact", embedding: [0, 0, 1] }),
+      makeNode({ id: "c", content: "C", type: "fact", embedding: [1, 1, 0] })
+    ]) {
+      graph.addNode(node);
+    }
+
+    graph.addEdge({
+      id: "edge-a",
+      source: "source",
+      target: "a",
+      relation_type: "semantic",
+      weight: 1,
+      created_at: 0,
+      last_activated_at: 0
+    });
+    graph.addEdge({
+      id: "edge-b",
+      source: "source",
+      target: "b",
+      relation_type: "semantic",
+      weight: 0.5,
+      created_at: 0,
+      last_activated_at: 0
+    });
+    graph.addEdge({
+      id: "edge-c",
+      source: "source",
+      target: "c",
+      relation_type: "semantic",
+      weight: 0.25,
+      created_at: 0,
+      last_activated_at: 0
+    });
+
+    const result = spread(graph, [{ nodeId: "source", energy: 1 }], {
+      spreading: {
         spreading_factor: 0.8,
         retention_delta: 0.5,
         temporal_decay_rho: 0.01,
         diffusion_max_depth: 1,
-        spreading_size_limit: 300
+        spreading_size_limit: 2
+      },
+      inhibition: {
+        lateral_inhibition_top_M: 1,
+        lateral_inhibition_beta: 0.1
+      },
+      sigmoid: {
+        gamma: 10,
+        theta: 0.3
       }
-    );
+    });
 
-    const expectedTarget = 0.8 * Math.exp(-0.1);
-    assert.ok(Math.abs((result.activated.get("target") ?? 0) - expectedTarget) < 1e-6);
+    const fanAdjustedA = 0.8 / 3;
+    const fanAdjustedB = 0.4 / 3;
+    const fanAdjustedC = 0.2 / 3;
+    const inhibitedB = Math.max(0, fanAdjustedB - 0.1 * fanAdjustedA);
+    const inhibitedC = Math.max(0, fanAdjustedC - 0.1 * fanAdjustedA);
+    const gatedA = 1 / (1 + Math.exp(-10 * (fanAdjustedA - 0.3)));
+    const gatedB = 1 / (1 + Math.exp(-10 * (inhibitedB - 0.3)));
+    const gatedC = 1 / (1 + Math.exp(-10 * (inhibitedC - 0.3)));
+
     assert.equal(result.activated.get("source"), 0.5);
-    assert.equal(result.path_log.length, 1);
+    assertClose(result.activated.get("a") ?? 0, gatedA);
+    assertClose(result.activated.get("b") ?? 0, gatedB);
+    assert.equal(result.activated.has("c"), false);
+
+    const round = result.path_log[0];
+    assert.ok(round);
+    assertClose(round.propagation_totals?.find((item) => item.node_id === "a")?.activation ?? 0, fanAdjustedA);
+    assert.deepEqual(
+      round.inhibition_winners?.map((item) => item.node_id),
+      ["a"]
+    );
+    assertClose(round.inhibited_totals?.find((item) => item.node_id === "b")?.activation ?? 0, inhibitedB);
+    assertClose(round.gated_totals?.find((item) => item.node_id === "a")?.activation ?? 0, gatedA);
+    assert.deepEqual(
+      round.trimmed_totals?.map((item) => item.node_id),
+      ["a", "b"]
+    );
+    assertClose(round.trimmed_totals?.find((item) => item.node_id === "b")?.activation ?? 0, gatedB);
+    assert.ok((round.trimmed_totals?.find((item) => item.node_id === "c")?.activation ?? 0) === 0);
+    assert.ok(gatedC < gatedB);
   } finally {
     await cleanupPaths(paths);
   }
@@ -506,6 +700,46 @@ test("signalToSeeds ignores manual candidates whose embedding dimensions do not 
   }
 });
 
+test("signalToSeeds downweights time markers so they do not dominate manual seed slots", async () => {
+  const paths = await createTempPaths("yobi-cognition-seeds-type-weight-");
+  try {
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    graph.addNode(
+      makeNode({
+        id: "calendar",
+        content: "今天星期几",
+        type: "time_marker",
+        embedding: [1, 0, 0]
+      })
+    );
+    graph.addNode(
+      makeNode({
+        id: "weekend",
+        content: "周末安排一点外出活动",
+        type: "pattern",
+        embedding: [0.9, Math.sqrt(0.19), 0]
+      })
+    );
+
+    const manualSeeds = await signalToSeeds(
+      {
+        type: "manual_signal",
+        payload: {
+          text: "今天周几"
+        }
+      },
+      graph,
+      async () => [1, 0, 0]
+    );
+
+    assert.equal(manualSeeds[0]?.nodeId, "weekend");
+    assert.equal(manualSeeds[1]?.nodeId, "calendar");
+    assert.ok((manualSeeds[0]?.energy ?? 0) > (manualSeeds[1]?.energy ?? 0));
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
 test("ThoughtPool enforces capacity and decays weak bubbles out of the active pool", async () => {
   const paths = await createTempPaths("yobi-cognition-thoughts-");
   try {
@@ -685,9 +919,92 @@ test("SubconsciousLoop logs a fresh bubble peak without decaying it in the same 
 
     const entry = await loop.triggerManualSpread("中午吃什么");
 
-    assert.equal(entry.top_activated[0]?.node_id, "seed");
-    assert.equal(entry.top_activated[0]?.activation, 0.5);
+    assert.ok(entry.top_activated[0]);
     assert.equal(entry.activation_peak, entry.top_activated[0]?.activation);
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("SubconsciousLoop hop summaries use post-gate surviving activations instead of raw propagation totals", async () => {
+  const paths = await createTempPaths("yobi-cognition-loop-hop-summary-");
+  try {
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    for (const node of [
+      makeNode({ id: "seed", content: "种子", type: "concept", embedding: [1, 0, 0] }),
+      makeNode({ id: "winner", content: "胜者", type: "fact", embedding: [0, 1, 0] }),
+      makeNode({ id: "runner", content: "跟随者", type: "fact", embedding: [0, 0, 1] })
+    ]) {
+      graph.addNode(node);
+    }
+    graph.addEdge({
+      id: "seed-winner",
+      source: "seed",
+      target: "winner",
+      relation_type: "semantic",
+      weight: 1,
+      created_at: 0,
+      last_activated_at: 0
+    });
+    graph.addEdge({
+      id: "seed-runner",
+      source: "seed",
+      target: "runner",
+      relation_type: "semantic",
+      weight: 0.5,
+      created_at: 0,
+      last_activated_at: 0
+    });
+
+    const config = {
+      ...DEFAULT_COGNITION_CONFIG,
+      spreading: {
+        ...DEFAULT_COGNITION_CONFIG.spreading,
+        diffusion_max_depth: 1
+      },
+      inhibition: {
+        lateral_inhibition_top_M: 1,
+        lateral_inhibition_beta: 0.1
+      },
+      expression: {
+        ...DEFAULT_COGNITION_CONFIG.expression,
+        activation_threshold: 2
+      }
+    };
+
+    const loop = new SubconsciousLoop({
+      graph,
+      thoughtPool: new ThoughtPool(paths),
+      memory: {
+        embedText: async () => [1, 0, 0],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      modelFactory: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never,
+      paths: {
+        cognitionActivationLogPath: paths.cognitionActivationLogPath
+      },
+      getAppConfig: () => ({}) as never,
+      getCognitionConfig: () => config,
+      getUserOnline: () => true,
+      getLastExpressionTime: () => 0,
+      setLastExpressionTime: () => {},
+      onProactiveMessage: async () => {},
+      onTickCompleted: async () => {}
+    });
+
+    const entry = await loop.triggerManualSpread("种子");
+
+    assert.equal(entry.hop_summaries?.[0]?.nodes[0]?.node_id, "winner");
+    assert.ok((entry.hop_summaries?.[0]?.nodes[0]?.activation ?? 0) > 0.4);
+    assert.ok((entry.hop_summaries?.[0]?.nodes[0]?.activation ?? 0) < 1);
+    assert.equal(entry.path_log?.[0]?.propagation_totals?.[0]?.node_id, "winner");
+    assert.ok((entry.path_log?.[0]?.propagation_totals?.[0]?.activation ?? 0) < (entry.hop_summaries?.[0]?.nodes[0]?.activation ?? 0));
   } finally {
     await cleanupPaths(paths);
   }

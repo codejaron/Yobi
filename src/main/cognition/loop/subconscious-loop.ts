@@ -14,6 +14,39 @@ const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
+function sortActivationEntries(entries: Array<[string, number]>): Array<[string, number]> {
+  return entries.sort((left, right) => {
+    if (right[1] !== left[1]) {
+      return right[1] - left[1];
+    }
+    return left[0].localeCompare(right[0]);
+  });
+}
+
+function summarizeRound(
+  round: NonNullable<ActivationLogEntry["path_log"]>[number],
+  graph: MemoryGraphStore
+): NonNullable<ActivationLogEntry["hop_summaries"]>[number] {
+  const surviving = round.trimmed_totals ?? round.gated_totals ?? [];
+  const nodes = [...surviving]
+    .sort((left, right) => {
+      if (right.activation !== left.activation) {
+        return right.activation - left.activation;
+      }
+      return left.node_id.localeCompare(right.node_id);
+    })
+    .slice(0, 3)
+    .map((item) => ({
+      node_id: item.node_id,
+      label: graph.getNode(item.node_id)?.content ?? item.node_id,
+      activation: item.activation
+    }));
+  return {
+    depth: round.depth,
+    nodes
+  };
+}
+
 interface SubconsciousLoopInput {
   graph: MemoryGraphStore;
   thoughtPool: ThoughtPool;
@@ -156,9 +189,12 @@ export class SubconsciousLoop {
       this.input.graph.setActivationLevel(node.id, Number.isFinite(baseLevel) ? Math.max(0, baseLevel) : 0);
     }
 
-    const activationResult = spread(this.input.graph, seeds, config.spreading);
-    const rankedActivated = [...activationResult.activated.entries()]
-      .sort((left, right) => right[1] - left[1]);
+    const activationResult = spread(this.input.graph, seeds, {
+      spreading: config.spreading,
+      inhibition: config.inhibition,
+      sigmoid: config.sigmoid
+    });
+    const rankedActivated = sortActivationEntries([...activationResult.activated.entries()]);
     const bubble = this.input.thoughtPool.createBubble(
       seeds.map((seed) => seed.nodeId),
       rankedActivated.map(([nodeId, activation]) => ({
@@ -232,24 +268,7 @@ export class SubconsciousLoop {
         activation
       })),
       path_log: activationResult.path_log,
-      hop_summaries: activationResult.path_log.map((round) => {
-        const aggregated = new Map<string, number>();
-        for (const item of round.propagated) {
-          aggregated.set(item.to, (aggregated.get(item.to) ?? 0) + item.activation);
-        }
-        const nodes = [...aggregated.entries()]
-          .sort((left, right) => right[1] - left[1])
-          .slice(0, 3)
-          .map(([nodeId, activation]) => ({
-            node_id: nodeId,
-            label: this.input.graph.getNode(nodeId)?.content ?? nodeId,
-            activation
-          }));
-        return {
-          depth: round.depth,
-          nodes
-        };
-      }),
+      hop_summaries: activationResult.path_log.map((round) => summarizeRound(round, this.input.graph)),
       config_snapshot: this.buildConfigSnapshot(config),
       activated_count: activationResult.activated.size,
       activation_peak: bubble.activation_peak,

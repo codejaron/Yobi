@@ -96,10 +96,10 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     retention_delta: 0.5,
     temporal_decay_rho: 0.01,
     diffusion_max_depth: 3,
-    spreading_size_limit: 300
+    spreading_size_limit: 50
   },
   inhibition: {
-    lateral_inhibition_top_M: 7,
+    lateral_inhibition_top_M: 3,
     lateral_inhibition_beta: 0.1
   },
   sigmoid: {
@@ -259,6 +259,11 @@ export interface ActivationPathLogRound {
   frontier: Array<{ node_id: string; activation: number }>;
   retained: Array<{ node_id: string; activation: number }>;
   propagated: Array<{ from: string; to: string; activation: number; relation_type: MemoryEdge["relation_type"] }>;
+  propagation_totals?: Array<{ node_id: string; activation: number }>;
+  inhibition_winners?: Array<{ node_id: string; activation: number }>;
+  inhibited_totals?: Array<{ node_id: string; activation: number }>;
+  gated_totals?: Array<{ node_id: string; activation: number }>;
+  trimmed_totals?: Array<{ node_id: string; activation: number }>;
 }
 
 export interface ActivationResult {
