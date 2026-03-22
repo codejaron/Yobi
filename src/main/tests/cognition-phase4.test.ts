@@ -20,6 +20,7 @@ import { MemoryGraphStore } from "../cognition/graph/memory-graph.js";
 import { ThoughtPool } from "../cognition/thoughts/thought-bubble.js";
 import { SubconsciousLoop } from "../cognition/loop/subconscious-loop.js";
 import { CognitionEngine } from "../cognition/engine.js";
+import { GlobalWorkspace } from "../cognition/workspace/global-workspace.js";
 
 async function createTempPaths(prefix: string): Promise<CompanionPaths> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -123,7 +124,7 @@ test("PredictionEngine warms up for five cycles and persists stable history orde
       const result = engine.applyPredictionCoding(new Map([["a", 1]]), allNodeIds);
       assert.equal(result.status, "warming_up");
       assert.equal(result.progress, `${index + 1}/5`);
-      engine.recordActivationFingerprint(new Map([["a", 1]]), allNodeIds);
+      engine.recordActivationFingerprint(new Map([["a", 1]]), allNodeIds, index + 1);
     }
 
     const active = engine.applyPredictionCoding(new Map([["b", 1.2]]), allNodeIds);
@@ -214,6 +215,14 @@ test("SubconsciousLoop logs prediction warmup and attention carries top nodes ac
       getCognitionConfig: () => config
     });
     await attentionSchema.load();
+    const globalWorkspace = new GlobalWorkspace({
+      graph,
+      emotionState,
+      predictionEngine,
+      attentionSchema,
+      logger: { warn() {} } as never,
+      getCognitionConfig: () => config
+    });
 
     const loop = new SubconsciousLoop({
       graph,
@@ -221,6 +230,7 @@ test("SubconsciousLoop logs prediction warmup and attention carries top nodes ac
       emotionState,
       predictionEngine,
       attentionSchema,
+      globalWorkspace,
       memory: {
         embedText: async (text: string) => (text === "种子" ? [1, 0, 0] : [0, 0, 1]),
         getProfile: async () => ({}) as never,

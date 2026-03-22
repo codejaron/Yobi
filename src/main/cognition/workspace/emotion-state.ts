@@ -129,8 +129,7 @@ export class EmotionStateManager {
     });
   }
 
-  updateFromBubble(bubble: ThoughtBubble): EmotionWorkspaceState {
-    const alpha = 0.2;
+  updateFromBubble(bubble: ThoughtBubble, alpha = 0.2): EmotionWorkspaceState {
     const nextArousal = clamp(
       this.state.arousal + alpha * (Math.min(1, Math.max(Math.abs(bubble.emotional_tone), bubble.activation_peak)) - this.state.arousal),
       0,

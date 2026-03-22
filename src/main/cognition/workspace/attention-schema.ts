@@ -1,7 +1,8 @@
 import type {
   ActivationResult,
   AttentionWorkspaceState,
-  CognitionConfig
+  CognitionConfig,
+  ThoughtBubble
 } from "@shared/cognition";
 import type { CompanionPaths } from "@main/storage/paths";
 import { readJsonFile, writeJsonFileAtomic } from "@main/storage/fs";
@@ -39,6 +40,27 @@ export class AttentionSchema {
     this.focusNodeIds = sortActivationEntries([...activationResult.activated.entries()])
       .slice(0, maxFocusNodes)
       .map(([nodeId]) => nodeId);
+    return this.getWorkspaceState();
+  }
+
+  updateFromBroadcast(bubble: ThoughtBubble): AttentionWorkspaceState {
+    const config = this.input.getCognitionConfig();
+    const broadcastTopIds = [...bubble.activated_nodes]
+      .sort((left, right) => right.activation - left.activation || left.node_id.localeCompare(right.node_id))
+      .slice(0, config.workspace.broadcast_focus_top_n)
+      .map((item) => item.node_id);
+    const nextFocus: string[] = [];
+    for (const nodeId of broadcastTopIds) {
+      if (!nextFocus.includes(nodeId)) {
+        nextFocus.push(nodeId);
+      }
+    }
+    for (const existing of this.focusNodeIds) {
+      if (!nextFocus.includes(existing)) {
+        nextFocus.push(existing);
+      }
+    }
+    this.focusNodeIds = nextFocus.slice(0, config.attention.max_focus_nodes);
     return this.getWorkspaceState();
   }
 

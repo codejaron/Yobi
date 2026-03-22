@@ -22,7 +22,7 @@ import type {
   VoiceSessionTarget
 } from "./types";
 import type { ProviderModelListResult } from "./provider-catalog";
-import type { CognitionConfig, CognitionConfigPatch, CognitionDebugSnapshot, HealthMetrics } from "./cognition";
+import type { BroadcastSummary, CognitionConfig, CognitionConfigPatch, CognitionDebugSnapshot, HealthMetrics } from "./cognition";
 
 export interface CursorHistoryPage {
   items: HistoryMessage[];
@@ -163,5 +163,6 @@ export interface CompanionApi {
   }>;
   updateCognitionConfig(input: CognitionConfigPatch): Promise<CognitionConfig>;
   getCognitionHealthMetrics(): Promise<HealthMetrics>;
+  getCognitionBroadcastHistory(): Promise<BroadcastSummary[]>;
   onCognitionTickCompleted(listener: (entry: CognitionDebugSnapshot["lastLogs"][number]) => void): () => void;
 }

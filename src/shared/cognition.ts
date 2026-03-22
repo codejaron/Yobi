@@ -117,6 +117,18 @@ export const cognitionConfigSchema = z.object({
     focus_seed_energy: z.number(),
     update_on: z.enum(["every_diffusion"])
   }).strict(),
+  workspace: z.object({
+    broadcast_enabled: z.boolean(),
+    broadcast_snapshot_top_n: z.number().int(),
+    broadcast_hebbian_rate: z.number(),
+    broadcast_hebbian_overlap_threshold: z.number(),
+    broadcast_emotion_alpha: z.number(),
+    broadcast_prediction_weight: z.number(),
+    broadcast_focus_top_n: z.number().int(),
+    broadcast_focus_replace_mode: z.enum(["prepend"]),
+    broadcast_failure_policy: z.enum(["warn_and_skip"]),
+    broadcast_history_max: z.number().int()
+  }).strict(),
   expression: z.object({
     activation_threshold: z.number(),
     cooldown_minutes: z.number()
@@ -133,6 +145,7 @@ export type TriggerConfig = CognitionConfig["triggers"];
 export type EmotionConfig = CognitionConfig["emotion"];
 export type PredictionConfig = CognitionConfig["prediction"];
 export type AttentionConfig = CognitionConfig["attention"];
+export type WorkspaceConfig = CognitionConfig["workspace"];
 export type ExpressionConfig = CognitionConfig["expression"];
 export type CognitionConfigPatch = DeepPartial<CognitionConfig>;
 
@@ -216,6 +229,18 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     max_focus_nodes: 5,
     focus_seed_energy: 0.3,
     update_on: "every_diffusion"
+  },
+  workspace: {
+    broadcast_enabled: true,
+    broadcast_snapshot_top_n: 30,
+    broadcast_hebbian_rate: 0.02,
+    broadcast_hebbian_overlap_threshold: 0.1,
+    broadcast_emotion_alpha: 0.15,
+    broadcast_prediction_weight: 1.5,
+    broadcast_focus_top_n: 3,
+    broadcast_focus_replace_mode: "prepend",
+    broadcast_failure_policy: "warn_and_skip",
+    broadcast_history_max: 20
   },
   expression: {
     activation_threshold: 0.4,
@@ -371,6 +396,7 @@ export interface HealthMetrics {
   weight_mean_current: number;
   weight_mean_trend: number;
   path_diversity: number;
+  broadcast_overlap_warnings_count: number;
   alerts: HealthAlert[];
   heartbeat_stats: HeartbeatStats;
 }
@@ -401,6 +427,55 @@ export interface CognitionWorkspaceSnapshot {
   emotion: EmotionWorkspaceState;
   prediction: PredictionWorkspaceState;
   attention: AttentionWorkspaceState;
+}
+
+export interface BroadcastPacket {
+  broadcast_id: string;
+  timestamp: number;
+  selected_bubble: ThoughtBubble;
+  activation_snapshot: ActivatedNodeRef[];
+  emotion_at_broadcast: {
+    valence: number;
+    arousal: number;
+  };
+}
+
+export interface BroadcastModuleReport {
+  module_name: string;
+  success: boolean;
+  details?: Record<string, unknown> | null;
+  error?: string | null;
+}
+
+export interface HebbianBroadcastReport {
+  updated_edges_count: number;
+  strengthened_count: number;
+  weakened_count: number;
+  normalization_triggered_nodes: number;
+  max_single_tick_delta: number;
+  overlap_warning: boolean;
+  top_strengthened: EdgeChange[];
+  top_weakened: EdgeChange[];
+}
+
+export interface BroadcastResult {
+  broadcast_id: string;
+  packet: BroadcastPacket;
+  hebbian_report: HebbianBroadcastReport | null;
+  emotion_report: BroadcastModuleReport | null;
+  prediction_report: BroadcastModuleReport | null;
+  attention_report: BroadcastModuleReport | null;
+  errors: Array<{ module_name: string; message: string }>;
+}
+
+export interface BroadcastSummary {
+  broadcast_id: string;
+  timestamp: number;
+  bubble_id: string;
+  bubble_summary: string;
+  modules_updated: string[];
+  has_errors: boolean;
+  overlap_warning: boolean;
 }
 
 export interface ActivationLogEntry {
@@ -439,6 +514,8 @@ export interface ActivationLogEntry {
     source: string;
   } | null;
   attention_focus?: string[] | null;
+  broadcast_result?: BroadcastResult | null;
+  broadcast_summary?: BroadcastSummary | null;
 }
 
 export interface MemoryGraphSnapshot {
@@ -479,6 +556,7 @@ export interface CognitionDebugSnapshot {
   config: CognitionConfig;
   lastLogs: ActivationLogEntry[];
   workspace: CognitionWorkspaceSnapshot;
+  broadcastHistory: BroadcastSummary[];
 }
 
 export interface DialogueExtractionDraft {

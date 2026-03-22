@@ -190,6 +190,9 @@ const api = {
   getCognitionHealthMetrics() {
     return ipcRenderer.invoke('cognition:getHealthMetrics');
   },
+  getCognitionBroadcastHistory() {
+    return ipcRenderer.invoke('cognition:getBroadcastHistory');
+  },
   onCognitionTickCompleted(listener) {
     const channel = 'cognition:tick-completed';
     const wrapped = (_event, payload) => listener(payload);

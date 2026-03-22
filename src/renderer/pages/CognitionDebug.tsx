@@ -4,6 +4,7 @@ import {
   DEFAULT_COGNITION_CONFIG,
   type ActivationLogEntry,
   type ActivationPathLogRound,
+  type BroadcastSummary,
   type CognitionConfig,
   type CognitionConfigPatch,
   type CognitionDebugSnapshot,
@@ -91,6 +92,10 @@ type CognitionWorkspaceSnapshot = {
   prediction?: WorkspacePredictionSnapshot | null;
   attention?: WorkspaceAttentionSnapshot | null;
 };
+
+function broadcastHistoryOf(snapshot: CognitionDebugSnapshot | null): BroadcastSummary[] {
+  return ((snapshot as unknown as { broadcastHistory?: BroadcastSummary[] })?.broadcastHistory ?? []) as BroadcastSummary[];
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -450,6 +455,36 @@ const sliderDefinitions = [
     step: 0.01,
     state: (cfg: CognitionConfig) => ((cfg as unknown as { prediction?: { familiarity_penalty?: number } }).prediction?.familiarity_penalty ?? 0.1),
     update: (value: number) => ({ prediction: { familiarity_penalty: value } } as unknown as CognitionConfigPatch)
+  },
+  {
+    id: "workspace_broadcast_hebbian_rate",
+    label: "广播 Hebbian 学习率",
+    description: "表达成功后对广播快照施加的额外强化",
+    min: 0,
+    max: 0.1,
+    step: 0.005,
+    state: (cfg: CognitionConfig) => ((cfg as unknown as { workspace?: { broadcast_hebbian_rate?: number } }).workspace?.broadcast_hebbian_rate ?? 0.02),
+    update: (value: number) => ({ workspace: { broadcast_hebbian_rate: value } } as unknown as CognitionConfigPatch)
+  },
+  {
+    id: "workspace_broadcast_emotion_alpha",
+    label: "广播情绪更新 α",
+    description: "表达成功后情绪状态的 EMA 更新强度",
+    min: 0,
+    max: 0.3,
+    step: 0.01,
+    state: (cfg: CognitionConfig) => ((cfg as unknown as { workspace?: { broadcast_emotion_alpha?: number } }).workspace?.broadcast_emotion_alpha ?? 0.15),
+    update: (value: number) => ({ workspace: { broadcast_emotion_alpha: value } } as unknown as CognitionConfigPatch)
+  },
+  {
+    id: "workspace_broadcast_prediction_weight",
+    label: "广播预测权重",
+    description: "成功表达模式写入预测历史时的附加权重",
+    min: 1,
+    max: 3,
+    step: 0.1,
+    state: (cfg: CognitionConfig) => ((cfg as unknown as { workspace?: { broadcast_prediction_weight?: number } }).workspace?.broadcast_prediction_weight ?? 1.5),
+    update: (value: number) => ({ workspace: { broadcast_prediction_weight: value } } as unknown as CognitionConfigPatch)
   }
 ];
 
@@ -581,6 +616,7 @@ export function CognitionDebugPage() {
   const [snapshot, setSnapshot] = useState<CognitionDebugSnapshot | null>(null);
   const [configState, setConfigState] = useState<CognitionConfig | null>(null);
   const [healthMetrics, setHealthMetrics] = useState<HealthMetrics | null>(null);
+  const [broadcastHistory, setBroadcastHistory] = useState<BroadcastSummary[]>([]);
   const [manualText, setManualText] = useState("中午吃什么");
   const [manualStatus, setManualStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -615,10 +651,20 @@ export function CognitionDebugPage() {
     }
   }, []);
 
+  const loadBroadcastHistory = useCallback(async () => {
+    try {
+      const next = await window.companion.getCognitionBroadcastHistory();
+      setBroadcastHistory(next);
+    } catch {
+      setBroadcastHistory(broadcastHistoryOf(snapshot));
+    }
+  }, [snapshot]);
+
   useEffect(() => {
     loadSnapshot();
     void loadHealthMetrics();
-  }, [loadHealthMetrics, loadSnapshot]);
+    void loadBroadcastHistory();
+  }, [loadBroadcastHistory, loadHealthMetrics, loadSnapshot]);
 
   const startPlaybackFromEntry = useCallback((entry: ActivationLogEntry | null) => {
     const pathLog = entry?.path_log ?? [];
@@ -656,9 +702,10 @@ export function CognitionDebugPage() {
       startPlaybackFromEntry(entry);
       void loadSnapshot();
       void loadHealthMetrics();
+      void loadBroadcastHistory();
     });
     return () => unsubscribe();
-  }, [autoRefresh, loadHealthMetrics, loadSnapshot, startPlaybackFromEntry]);
+  }, [autoRefresh, loadBroadcastHistory, loadHealthMetrics, loadSnapshot, startPlaybackFromEntry]);
 
   useEffect(() => {
     if (!snapshot || !canvasRef.current || size.width === 0 || size.height === 0) {
@@ -853,6 +900,7 @@ export function CognitionDebugPage() {
       setManualStatus("success");
       setSnapshot(result.snapshot);
       setConfigState(result.snapshot.config);
+      setBroadcastHistory(broadcastHistoryOf(result.snapshot));
       setSelectedLog(result.entry);
       startPlaybackFromEntry(result.entry);
       await loadHealthMetrics();
@@ -903,6 +951,10 @@ export function CognitionDebugPage() {
       triggers: {
         ...base.triggers,
         ...(partial.triggers ?? {})
+      },
+      workspace: {
+        ...((base as unknown as { workspace?: CognitionConfig["workspace"] }).workspace ?? DEFAULT_COGNITION_CONFIG.workspace),
+        ...((partial as unknown as { workspace?: Partial<CognitionConfig["workspace"]> }).workspace ?? {})
       }
     };
     const asBase = base as unknown as Record<string, unknown>;
@@ -926,6 +978,12 @@ export function CognitionDebugPage() {
         ...asPatch.attention as Record<string, unknown>
       };
     }
+    if (typeof asPatch.workspace === "object" && asPatch.workspace !== null) {
+      asMerged.workspace = {
+        ...(typeof asBase.workspace === "object" && asBase.workspace !== null ? asBase.workspace : {}),
+        ...asPatch.workspace as Record<string, unknown>
+      };
+    }
     return merged;
   };
 
@@ -939,6 +997,7 @@ export function CognitionDebugPage() {
       await window.companion.updateCognitionConfig(partial);
       await loadSnapshot();
       await loadHealthMetrics();
+      await loadBroadcastHistory();
     } catch {
       // ignore
     }
@@ -954,6 +1013,10 @@ export function CognitionDebugPage() {
   }, [snapshot]);
 
   const logDots = useMemo(() => snapshot?.lastLogs ?? [], [snapshot]);
+  const effectiveBroadcastHistory = useMemo(
+    () => (broadcastHistory.length > 0 ? broadcastHistory : broadcastHistoryOf(snapshot)),
+    [broadcastHistory, snapshot]
+  );
 
   const timelineBounds = useMemo(() => {
     const logs = logDots.filter((log) => log.timestamp);
@@ -968,6 +1031,9 @@ export function CognitionDebugPage() {
   const timelineHeight = 100;
 
   const timelineColor = (log: ActivationLogEntry) => {
+    if (log.broadcast_result) {
+      return "#D4A017";
+    }
     if (log.expression_produced) {
       return "#34D399";
     }
@@ -1161,6 +1227,7 @@ export function CognitionDebugPage() {
                   {formatNumeric(healthSummary?.weight_mean_trend, 4)})
                 </span>
                 <span>多样性 {formatNumeric(healthSummary?.path_diversity)}</span>
+                <span>广播叠加告警 {healthSummary?.broadcast_overlap_warnings_count ?? 0}</span>
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-600">
                 <span>平均 Top1 激活 {formatNumeric(healthSummary?.avg_top1_activation)}</span>
@@ -1287,6 +1354,34 @@ export function CognitionDebugPage() {
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>广播历史</CardTitle>
+              <CardDescription>表达成功后触发的全局工作空间广播</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {effectiveBroadcastHistory.length > 0 ? (
+                effectiveBroadcastHistory
+                  .slice()
+                  .reverse()
+                  .map((item) => (
+                    <div key={item.broadcast_id} className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="font-medium text-slate-900">{item.bubble_summary || item.bubble_id}</div>
+                        <div className="text-xs text-slate-600">{formatTime(item.timestamp)}</div>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-700">
+                        模块: {item.modules_updated.join(" · ") || "无"} {item.has_errors ? "· 有错误" : ""}
+                        {item.overlap_warning ? " · overlap warning" : ""}
+                      </div>
+                    </div>
+                  ))
+              ) : (
+                <div className="text-xs text-muted-foreground">尚无广播事件。</div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card className="min-h-[260px]">
             <CardHeader>
               <CardTitle>心跳日志</CardTitle>
@@ -1309,6 +1404,34 @@ export function CognitionDebugPage() {
                       ? timelineWidth / 2
                       : ((time - timelineBounds.min) / Math.max(1, timelineBounds.max - timelineBounds.min)) *
                         timelineWidth;
+                  const commonProps = {
+                    onMouseEnter: () => setSelectedLog(log),
+                    onMouseLeave: () => setSelectedLog(null),
+                    onClick: () => {
+                      setSelectedLog(log);
+                      startPlaybackFromEntry(log);
+                    },
+                    style: { cursor: "pointer" }
+                  };
+                  if (log.broadcast_result) {
+                    const rOuter = 8;
+                    const rInner = 4;
+                    const starPoints = Array.from({ length: 10 }, (_, pointIndex) => {
+                      const angle = (-Math.PI / 2) + (pointIndex * Math.PI) / 5;
+                      const radius = pointIndex % 2 === 0 ? rOuter : rInner;
+                      return `${x + Math.cos(angle) * radius},${timelineHeight / 2 + Math.sin(angle) * radius}`;
+                    }).join(" ");
+                    return (
+                      <polygon
+                        key={`${log.timestamp}-${index}`}
+                        points={starPoints}
+                        fill={timelineColor(log)}
+                        stroke="#7c5e10"
+                        strokeWidth={1}
+                        {...commonProps}
+                      />
+                    );
+                  }
                   return (
                     <circle
                       key={`${log.timestamp}-${index}`}
@@ -1316,13 +1439,7 @@ export function CognitionDebugPage() {
                       cy={timelineHeight / 2}
                       r={6}
                       fill={timelineColor(log)}
-                      onMouseEnter={() => setSelectedLog(log)}
-                      onMouseLeave={() => setSelectedLog(null)}
-                      onClick={() => {
-                        setSelectedLog(log);
-                        startPlaybackFromEntry(log);
-                      }}
-                      style={{ cursor: "pointer" }}
+                      {...commonProps}
                     />
                   );
                 })}
@@ -1426,6 +1543,61 @@ export function CognitionDebugPage() {
                       {formatNumeric(selectedLog.graph_stats.max_weight)}
                     </div>
                   ) : null}
+                  {selectedLog.broadcast_result ? (
+                    <details className="mt-2 rounded-md border border-amber-300 bg-amber-50/70 px-2 py-1">
+                      <summary className="cursor-pointer select-none font-medium text-amber-950">
+                        全局广播
+                      </summary>
+                      <div className="mt-2 space-y-2 text-slate-700">
+                        <div>广播 ID：{selectedLog.broadcast_result.broadcast_id}</div>
+                        <div>快照节点数：{selectedLog.broadcast_result.packet.activation_snapshot.length}</div>
+                        <div>
+                          广播情绪：V {formatSigned(selectedLog.broadcast_result.packet.emotion_at_broadcast.valence)} · A{" "}
+                          {formatNumeric(selectedLog.broadcast_result.packet.emotion_at_broadcast.arousal)}
+                        </div>
+                        {selectedLog.broadcast_result.hebbian_report ? (
+                          <div className={selectedLog.broadcast_result.hebbian_report.overlap_warning ? "rounded-md border border-amber-400 bg-amber-100 px-2 py-2" : ""}>
+                            Hebbian：更新 {selectedLog.broadcast_result.hebbian_report.updated_edges_count} 条边，最大单 tick delta{" "}
+                            {formatNumeric(selectedLog.broadcast_result.hebbian_report.max_single_tick_delta)}
+                            {selectedLog.broadcast_result.hebbian_report.overlap_warning ? " · overlap warning" : ""}
+                          </div>
+                        ) : null}
+                        {selectedLog.broadcast_result.emotion_report?.details ? (
+                          <div>
+                            情绪更新：V {formatNumeric(Number(selectedLog.broadcast_result.emotion_report.details.before_valence ?? 0))} →{" "}
+                            {formatNumeric(Number(selectedLog.broadcast_result.emotion_report.details.after_valence ?? 0))}，A{" "}
+                            {formatNumeric(Number(selectedLog.broadcast_result.emotion_report.details.before_arousal ?? 0))} →{" "}
+                            {formatNumeric(Number(selectedLog.broadcast_result.emotion_report.details.after_arousal ?? 0))}
+                          </div>
+                        ) : null}
+                        {selectedLog.broadcast_result.prediction_report?.details ? (
+                          <div>
+                            预测权重：{formatNumeric(Number(selectedLog.broadcast_result.prediction_report.details.weight ?? 0))}
+                            {" · "}历史 {String(selectedLog.broadcast_result.prediction_report.details.history_progress_before ?? "--")} →{" "}
+                            {String(selectedLog.broadcast_result.prediction_report.details.history_progress_after ?? "--")}
+                          </div>
+                        ) : null}
+                        {selectedLog.broadcast_result.attention_report?.details ? (
+                          <div>
+                            新焦点：{Array.isArray(selectedLog.broadcast_result.attention_report.details.focus_node_ids)
+                              ? (selectedLog.broadcast_result.attention_report.details.focus_node_ids as unknown[]).map((nodeId) =>
+                                resolveNodeLabel({ nodeId: String(nodeId), labelById: nodeLabelById })
+                              ).join(" · ")
+                              : "无"}
+                          </div>
+                        ) : null}
+                        {selectedLog.broadcast_result.errors.length > 0 ? (
+                          <div className="rounded-md border border-rose-300 bg-rose-50 px-2 py-2">
+                            {selectedLog.broadcast_result.errors.map((error, index) => (
+                              <div key={`broadcast-error-${index}`}>
+                                {error.module_name}: {error.message}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground">悬浮看详情，点击圆点回放某一轮扩散</p>
@@ -1439,6 +1611,24 @@ export function CognitionDebugPage() {
               <CardDescription>调整扩散、表达与心跳</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <label className="flex items-center gap-2 rounded-xl border border-border/60 bg-slate-50/70 px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={((configState as unknown as { workspace?: { broadcast_enabled?: boolean } } | null)?.workspace?.broadcast_enabled ?? true) === true}
+                  onChange={(event) => {
+                    const partial = { workspace: { broadcast_enabled: event.target.checked } } as unknown as CognitionConfigPatch;
+                    if (configState) {
+                      setConfigState(mergeConfig(configState, partial));
+                    }
+                    void window.companion.updateCognitionConfig(partial).then(async () => {
+                      await loadSnapshot();
+                      await loadBroadcastHistory();
+                      await loadHealthMetrics();
+                    }).catch(() => {});
+                  }}
+                />
+                <span>启用全局广播</span>
+              </label>
               {sliderDefinitions.map((slider) => {
                 const value = configState ? slider.state(configState) : slider.state(DEFAULT_COGNITION_CONFIG);
                 return (

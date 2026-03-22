@@ -43,6 +43,11 @@ function encodeFingerprint(
   return vector;
 }
 
+interface WeightedFingerprint {
+  fingerprint: Float32Array;
+  weight: number;
+}
+
 export interface PredictionCodingResult {
   activated: Map<string, number>;
   status: "warming_up" | "active";
@@ -58,8 +63,9 @@ interface PredictionEngineInput {
 }
 
 export class PredictionEngine {
-  private history: Float32Array[] = [];
+  private history: WeightedFingerprint[] = [];
   private workspaceState: PredictionWorkspaceState;
+  lastRecordedTickId: number | null = null;
 
   constructor(private readonly input: PredictionEngineInput) {
     const historyWindow = this.input.getCognitionConfig().prediction.history_window;
@@ -79,9 +85,12 @@ export class PredictionEngine {
     const rawRecord = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : null;
     const historyRows: unknown[] = Array.isArray(rawRecord?.history) ? rawRecord.history : [];
     this.history = historyRows
-      .filter((row): row is number[] => Array.isArray(row) && row.every((value) => typeof value === "number"))
-      .slice(-historyWindow)
-      .map((row) => Float32Array.from(row));
+      .map((row) => this.parseWeightedFingerprint(row))
+      .filter((row): row is WeightedFingerprint => row !== null)
+      .slice(-historyWindow);
+    this.lastRecordedTickId = typeof rawRecord?.last_recorded_tick_id === "number"
+      ? Number(rawRecord.last_recorded_tick_id)
+      : null;
     this.workspaceState = {
       warming_up: this.history.length < historyWindow,
       progress: `${Math.min(this.history.length, historyWindow)}/${historyWindow}`,
@@ -190,13 +199,22 @@ export class PredictionEngine {
 
   recordActivationFingerprint(
     activationMap: Map<string, number>,
-    allNodeIds: string[]
+    allNodeIds: string[],
+    tickId: number,
+    weight = 1
   ): void {
     const config = this.input.getCognitionConfig().prediction;
-    this.history.push(encodeFingerprint(activationMap, allNodeIds));
+    if (this.lastRecordedTickId === tickId) {
+      return;
+    }
+    this.history.push({
+      fingerprint: encodeFingerprint(activationMap, allNodeIds),
+      weight
+    });
     if (this.history.length > config.history_window) {
       this.history = this.history.slice(-config.history_window);
     }
+    this.lastRecordedTickId = tickId;
 
     if (this.workspaceState.warming_up) {
       this.workspaceState = {
@@ -208,9 +226,22 @@ export class PredictionEngine {
     }
   }
 
+  integrateSuccessfulBroadcast(
+    activationMap: Map<string, number>,
+    allNodeIds: string[],
+    broadcastWeight: number,
+    tickId: number
+  ): void {
+    this.recordActivationFingerprint(activationMap, allNodeIds, tickId, broadcastWeight);
+  }
+
   async persist(): Promise<void> {
     await writeJsonFileAtomic(this.input.paths.cognitionPredictionVectorPath, {
-      history: this.history.map((row) => Array.from(row)),
+      history: this.history.map((row) => ({
+        fingerprint: Array.from(row.fingerprint),
+        weight: row.weight
+      })),
+      last_recorded_tick_id: this.lastRecordedTickId,
       last_similarity: this.workspaceState.last_similarity ?? null,
       surprising_node_ids: this.workspaceState.surprising_node_ids ?? [],
       familiar_node_ids: this.workspaceState.familiar_node_ids ?? [],
@@ -225,14 +256,41 @@ export class PredictionEngine {
     }
 
     const expected = new Float32Array(length);
+    let totalWeight = 0;
     for (const row of this.history) {
+      const weight = row.weight > 0 ? row.weight : 0;
+      totalWeight += weight;
       for (let index = 0; index < length; index += 1) {
-        expected[index] = (expected[index] ?? 0) + (row[index] ?? 0);
+        expected[index] = (expected[index] ?? 0) + (row.fingerprint[index] ?? 0) * weight;
       }
     }
+    if (totalWeight <= 0) {
+      return expected;
+    }
     for (let index = 0; index < length; index += 1) {
-      expected[index] = clamp(expected[index] / this.history.length, 0, Number.MAX_SAFE_INTEGER);
+      expected[index] = clamp(expected[index] / totalWeight, 0, Number.MAX_SAFE_INTEGER);
     }
     return expected;
+  }
+
+  private parseWeightedFingerprint(input: unknown): WeightedFingerprint | null {
+    if (Array.isArray(input) && input.every((value) => typeof value === "number")) {
+      return {
+        fingerprint: Float32Array.from(input),
+        weight: 1
+      };
+    }
+    if (!input || typeof input !== "object") {
+      return null;
+    }
+    const record = input as Record<string, unknown>;
+    if (!Array.isArray(record.fingerprint) || !record.fingerprint.every((value) => typeof value === "number")) {
+      return null;
+    }
+    const weight = typeof record.weight === "number" ? record.weight : 1;
+    return {
+      fingerprint: Float32Array.from(record.fingerprint as number[]),
+      weight
+    };
   }
 }

@@ -132,9 +132,7 @@ export class CompanionRuntime {
       logger: this.logger,
       getUserOnline: () => this.isCognitionUserOnline(),
       getUserActivityState: () => this.getCognitionUserActivityState(),
-      onProactiveMessage: (input) => {
-        void this.handleCognitionProactive(input);
-      },
+      onProactiveMessage: (input) => this.handleCognitionProactive(input),
       onTickCompleted: (entry) => {
         this.emitCognitionTick(entry);
       }
@@ -460,6 +458,10 @@ export class CompanionRuntime {
 
   async getCognitionHealthMetrics() {
     return this.cognitionEngine.getHealthMetrics();
+  }
+
+  async getCognitionBroadcastHistory() {
+    return this.cognitionEngine.getBroadcastHistory();
   }
 
   async getScheduledTasks(): Promise<{ tasks: ReturnType<ScheduledTaskService["listTasks"]>; runs: ScheduledTaskRun[] }> {

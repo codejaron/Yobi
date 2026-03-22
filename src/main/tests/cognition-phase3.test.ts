@@ -22,6 +22,7 @@ import { SubconsciousLoop } from "../cognition/loop/subconscious-loop.js";
 import { EmotionStateManager } from "../cognition/workspace/emotion-state.js";
 import { PredictionEngine } from "../cognition/activation/prediction-coding.js";
 import { AttentionSchema } from "../cognition/workspace/attention-schema.js";
+import { GlobalWorkspace } from "../cognition/workspace/global-workspace.js";
 
 async function createTempPaths(prefix: string): Promise<CompanionPaths> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -55,7 +56,11 @@ function assertClose(actual: number, expected: number, epsilon = 1e-6): void {
   assert.ok(Math.abs(actual - expected) < epsilon, `expected ${actual} to be within ${epsilon} of ${expected}`);
 }
 
-async function createWorkspaceManagers(paths: CompanionPaths, config: CognitionConfig) {
+async function createWorkspaceManagers(
+  paths: CompanionPaths,
+  config: CognitionConfig,
+  graph = new MemoryGraphStore(paths, config.graph_maintenance)
+) {
   const emotionState = new EmotionStateManager({
     paths,
     logger: { warn() {} } as never,
@@ -73,10 +78,19 @@ async function createWorkspaceManagers(paths: CompanionPaths, config: CognitionC
     getCognitionConfig: () => config
   });
   await attentionSchema.load();
+  const globalWorkspace = new GlobalWorkspace({
+    graph,
+    emotionState,
+    predictionEngine,
+    attentionSchema,
+    logger: { warn() {} } as never,
+    getCognitionConfig: () => config
+  });
   return {
     emotionState,
     predictionEngine,
-    attentionSchema
+    attentionSchema,
+    globalWorkspace
   };
 }
 
@@ -510,13 +524,14 @@ test("SubconsciousLoop applies passive edge decay and reports health metrics eve
         passive_decay_rate: 0.1
       }
     };
-    const workspace = await createWorkspaceManagers(paths, config);
+    const workspace = await createWorkspaceManagers(paths, config, graph);
     const loop = new SubconsciousLoop({
       graph,
       thoughtPool: new ThoughtPool(paths),
       emotionState: workspace.emotionState,
       predictionEngine: workspace.predictionEngine,
       attentionSchema: workspace.attentionSchema,
+      globalWorkspace: workspace.globalWorkspace,
       memory: {
         embedText: async () => [1, 0, 0],
         getProfile: async () => ({}) as never,
@@ -598,7 +613,7 @@ test("SubconsciousLoop records Hebbian updates, final graph stats, and keeps man
         activation_threshold: 2
       }
     };
-    const workspace = await createWorkspaceManagers(paths, config);
+    const workspace = await createWorkspaceManagers(paths, config, graph);
 
     const loop = new SubconsciousLoop({
       graph,
@@ -606,6 +621,7 @@ test("SubconsciousLoop records Hebbian updates, final graph stats, and keeps man
       emotionState: workspace.emotionState,
       predictionEngine: workspace.predictionEngine,
       attentionSchema: workspace.attentionSchema,
+      globalWorkspace: workspace.globalWorkspace,
       memory: {
         embedText: async () => [1, 0, 0],
         getProfile: async () => ({}) as never,

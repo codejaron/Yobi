@@ -22,6 +22,7 @@ import { selectTriggersWithOptions } from "./trigger-sources";
 import { EmotionStateManager } from "../workspace/emotion-state";
 import { PredictionEngine } from "../activation/prediction-coding";
 import { AttentionSchema } from "../workspace/attention-schema";
+import { GlobalWorkspace } from "../workspace/global-workspace";
 
 const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
@@ -87,6 +88,25 @@ function median(values: number[]): number {
   return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
 }
 
+function captureEdgeWeights(graph: MemoryGraphStore): Map<string, number> {
+  return new Map(graph.getAllEdges().map((edge) => [edge.id, edge.weight]));
+}
+
+function diffEdgeWeights(graph: MemoryGraphStore, before: ReadonlyMap<string, number>): Map<string, number> {
+  const deltas = new Map<string, number>();
+  for (const edge of graph.getAllEdges()) {
+    const previous = before.get(edge.id);
+    if (previous === undefined) {
+      continue;
+    }
+    const delta = edge.weight - previous;
+    if (delta !== 0) {
+      deltas.set(edge.id, delta);
+    }
+  }
+  return deltas;
+}
+
 function standardDeviation(values: number[]): number {
   if (values.length === 0) {
     return 0;
@@ -123,6 +143,7 @@ function emptyHealthMetrics(heartbeatStats: ReturnType<PoissonHeartbeat["getStat
     weight_mean_current: 0,
     weight_mean_trend: 0,
     path_diversity: 0,
+    broadcast_overlap_warnings_count: 0,
     alerts: [],
     heartbeat_stats: heartbeatStats
   };
@@ -134,6 +155,7 @@ interface SubconsciousLoopInput {
   emotionState: EmotionStateManager;
   predictionEngine: PredictionEngine;
   attentionSchema: AttentionSchema;
+  globalWorkspace: GlobalWorkspace;
   memory: Pick<YobiMemory, "embedText" | "getProfile" | "listHistoryByCursor">;
   modelFactory: ModelFactory;
   logger: AppLogger;
@@ -233,6 +255,7 @@ export class SubconsciousLoop {
       weight_mean_current: logs[logs.length - 1]?.graph_stats?.avg_weight ?? 0,
       weight_mean_trend: linearRegressionSlope(weightPoints),
       path_diversity: logs.length > 0 ? uniqueTop1 / logs.length : 0,
+      broadcast_overlap_warnings_count: logs.filter((entry) => entry.broadcast_result?.hebbian_report?.overlap_warning).length,
       alerts: [],
       heartbeat_stats: heartbeatStats
     };
@@ -254,6 +277,9 @@ export class SubconsciousLoop {
     }
     if (metrics.path_diversity < 0.08 && logs.length >= 20) {
       metrics.alerts.push({ level: "warning", msg: "路径多样性过低，扩散可能退化到固定路径" });
+    }
+    if (metrics.broadcast_overlap_warnings_count > 5) {
+      metrics.alerts.push({ level: "warning", msg: "广播 Hebbian 叠加告警过多，建议降低 broadcast_hebbian_rate" });
     }
 
     return metrics;
@@ -325,6 +351,7 @@ export class SubconsciousLoop {
     const config = this.input.getCognitionConfig();
     const nowMs = Date.now();
     this.tickCount += 1;
+    const currentTickId = this.tickCount;
     if (input.automatic) {
       this.automaticTickCount += 1;
     }
@@ -384,7 +411,9 @@ export class SubconsciousLoop {
           arousal: this.input.emotionState.getSnapshot().arousal,
           source: this.input.emotionState.getSnapshot().source
         },
-        attention_focus: this.input.attentionSchema.getWorkspaceState().focus_node_ids
+        attention_focus: this.input.attentionSchema.getWorkspaceState().focus_node_ids,
+        broadcast_result: null,
+        broadcast_summary: null
       };
       await this.finalizeTick(entry, input.automatic);
       return entry;
@@ -412,7 +441,9 @@ export class SubconsciousLoop {
     // Structural learning stays coupled to the raw diffusion result. Prediction coding
     // acts as an attentional/output bias only, so it must not rewrite graph weights.
     const rankedActivated = sortActivationEntries([...modulatedActivationResult.activated.entries()]);
+    const edgeWeightsBeforeRegularHebbian = captureEdgeWeights(this.input.graph);
     const hebbianLog = applyHebbianLearning(this.input.graph, rawActivationResult.activated, config.hebbian);
+    const regularDeltaByEdgeId = diffEdgeWeights(this.input.graph, edgeWeightsBeforeRegularHebbian);
     const decayLog = applyGlobalEdgeDecay(this.input.graph, {
       passive_decay_rate: config.hebbian.passive_decay_rate,
       weight_min: config.hebbian.weight_min
@@ -453,6 +484,8 @@ export class SubconsciousLoop {
     let bubbleSummary: string | null = newBubble?.summary?.trim() ? newBubble.summary : null;
     let evaluationScore: number | null = null;
     let evaluationDimensions: ActivationLogEntry["evaluation_dimensions"] = null;
+    let broadcastResult: ActivationLogEntry["broadcast_result"] = null;
+    let broadcastSummary: ActivationLogEntry["broadcast_summary"] = null;
 
     for (const candidate of candidates) {
       const evaluation = await evaluateAndExpress({
@@ -476,21 +509,40 @@ export class SubconsciousLoop {
         continue;
       }
 
+      try {
+        await this.input.onProactiveMessage({
+          message: evaluation.text,
+          metadata: {
+            proactive: true,
+            source: "yobi"
+          },
+          recordProactive: true
+        });
+      } catch (error) {
+        selectedReason = error instanceof Error ? `send-failed:${error.message}` : `send-failed:${String(error)}`;
+        continue;
+      }
+
       expressionText = evaluation.text;
       this.input.thoughtPool.markExpressed(candidate.id);
       this.input.setLastExpressionTime(Date.now());
-      this.input.emotionState.updateFromBubble(candidate);
-      await this.input.onProactiveMessage({
-        message: evaluation.text,
-        metadata: {
-          proactive: true,
-          source: "yobi"
-        },
-        recordProactive: true
-      });
+      if (config.workspace.broadcast_enabled) {
+        broadcastResult = this.input.globalWorkspace.broadcast({
+          selectedBubble: candidate,
+          rawActivationResult: rawActivationResult.activated,
+          allNodeIds,
+          currentTickId,
+          regularDeltaByEdgeId
+        });
+        broadcastSummary = this.input.globalWorkspace.getBroadcastHistory().slice(-1)[0] ?? null;
+      } else {
+        this.input.emotionState.updateFromBubble(candidate);
+      }
       break;
     }
-    this.input.predictionEngine.recordActivationFingerprint(rawActivationResult.activated, allNodeIds);
+    if (this.input.predictionEngine.lastRecordedTickId !== currentTickId) {
+      this.input.predictionEngine.recordActivationFingerprint(rawActivationResult.activated, allNodeIds, currentTickId);
+    }
     const emotionSnapshot = this.input.emotionState.getSnapshot();
 
     const entry: ActivationLogEntry = {
@@ -531,7 +583,9 @@ export class SubconsciousLoop {
         arousal: emotionSnapshot.arousal,
         source: emotionSnapshot.source
       },
-      attention_focus: this.input.attentionSchema.getWorkspaceState().focus_node_ids
+      attention_focus: this.input.attentionSchema.getWorkspaceState().focus_node_ids,
+      broadcast_result: broadcastResult,
+      broadcast_summary: broadcastSummary
     };
     await this.finalizeTick(entry, input.automatic);
     return entry;

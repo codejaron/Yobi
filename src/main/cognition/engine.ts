@@ -6,6 +6,7 @@ import {
   memoryEdgeRelationSchema,
   memoryNodeTypeSchema,
   type ActivationLogEntry,
+  type BroadcastSummary,
   type CognitionConfig,
   type CognitionConfigPatch,
   type CognitionDebugSnapshot,
@@ -27,6 +28,7 @@ import { SubconsciousLoop } from "./loop/subconscious-loop";
 import { EmotionStateManager } from "./workspace/emotion-state";
 import { PredictionEngine } from "./activation/prediction-coding";
 import { AttentionSchema } from "./workspace/attention-schema";
+import { GlobalWorkspace } from "./workspace/global-workspace";
 
 const dialogueExtractionSchema = z.object({
   nodes: z.array(
@@ -92,6 +94,7 @@ export class CognitionEngine {
   private emotionState: EmotionStateManager | null = null;
   private predictionEngine: PredictionEngine | null = null;
   private attentionSchema: AttentionSchema | null = null;
+  private globalWorkspace: GlobalWorkspace | null = null;
 
   constructor(private readonly input: CognitionEngineInput) {
     this.modelFactory = new ModelFactory(() => this.input.getConfig());
@@ -207,6 +210,7 @@ export class CognitionEngine {
       thoughts: this.requireThoughtPool().toJSON(),
       config: this.requireConfig(),
       lastLogs: await this.readRecentLogs(),
+      broadcastHistory: this.requireGlobalWorkspace().getBroadcastHistory(),
       workspace: {
         emotion: this.requireEmotionState().getSnapshot(),
         prediction: this.requirePredictionEngine().getWorkspaceState(),
@@ -246,6 +250,11 @@ export class CognitionEngine {
     return this.requireLoop().getHealthMetrics();
   }
 
+  async getBroadcastHistory(): Promise<BroadcastSummary[]> {
+    await this.ensureInitialized();
+    return this.requireGlobalWorkspace().getBroadcastHistory();
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -272,13 +281,23 @@ export class CognitionEngine {
     await this.emotionState.load();
     await this.predictionEngine.load();
     await this.attentionSchema.load();
+    this.globalWorkspace = new GlobalWorkspace({
+      graph: this.graph,
+      emotionState: this.emotionState,
+      predictionEngine: this.predictionEngine,
+      attentionSchema: this.attentionSchema,
+      logger: this.input.logger,
+      getCognitionConfig: () => this.requireConfig()
+    });
     this.lastExpressionTime = await this.loadLastExpressionTime();
+    this.globalWorkspace.hydrateHistory(await this.loadBroadcastHistory());
     this.loop = new SubconsciousLoop({
       graph: this.graph,
       thoughtPool: this.thoughtPool,
       emotionState: this.emotionState,
       predictionEngine: this.predictionEngine,
       attentionSchema: this.attentionSchema,
+      globalWorkspace: this.globalWorkspace,
       memory: this.input.memory,
       modelFactory: this.modelFactory,
       logger: this.input.logger,
@@ -320,6 +339,35 @@ export class CognitionEngine {
   private async readRecentLogs(): Promise<ActivationLogEntry[]> {
     const rows = await readJsonlFile<ActivationLogEntry>(this.input.paths.cognitionActivationLogPath);
     return rows.slice(-100);
+  }
+
+  private async loadBroadcastHistory(): Promise<BroadcastSummary[]> {
+    const rows = await this.readRecentLogs();
+    return rows
+      .map((entry) => {
+        if (entry.broadcast_summary) {
+          return entry.broadcast_summary;
+        }
+        if (!entry.broadcast_result) {
+          return null;
+        }
+        return {
+          broadcast_id: entry.broadcast_result.broadcast_id,
+          timestamp: entry.broadcast_result.packet.timestamp,
+          bubble_id: entry.broadcast_result.packet.selected_bubble.id,
+          bubble_summary: entry.broadcast_result.packet.selected_bubble.summary || entry.broadcast_result.packet.selected_bubble.id,
+          modules_updated: [
+            ...(entry.broadcast_result.hebbian_report ? ["hebbian"] : []),
+            ...(entry.broadcast_result.emotion_report ? ["emotion"] : []),
+            ...(entry.broadcast_result.prediction_report ? ["prediction"] : []),
+            ...(entry.broadcast_result.attention_report ? ["attention"] : [])
+          ],
+          has_errors: entry.broadcast_result.errors.length > 0,
+          overlap_warning: entry.broadcast_result.hebbian_report?.overlap_warning ?? false
+        } satisfies BroadcastSummary;
+      })
+      .filter((summary): summary is BroadcastSummary => summary !== null)
+      .slice(-this.requireConfig().workspace.broadcast_history_max);
   }
 
   private async repairGraphEmbeddingsIfNeeded(): Promise<void> {
@@ -425,6 +473,13 @@ export class CognitionEngine {
       throw new Error("attention schema not initialized");
     }
     return this.attentionSchema;
+  }
+
+  private requireGlobalWorkspace(): GlobalWorkspace {
+    if (!this.globalWorkspace) {
+      throw new Error("global workspace not initialized");
+    }
+    return this.globalWorkspace;
   }
 
   private requireConfig(): CognitionConfig {

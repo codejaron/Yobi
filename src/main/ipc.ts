@@ -314,6 +314,7 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
     runtime.updateCognitionConfig(payload as any)
   );
   ipcMain.handle("cognition:getHealthMetrics", () => runtime.getCognitionHealthMetrics());
+  ipcMain.handle("cognition:getBroadcastHistory", () => runtime.getCognitionBroadcastHistory());
 
   ipcMain.on("status:subscribe", (event) => {
     subscribeToStatus(runtime, event.sender);
