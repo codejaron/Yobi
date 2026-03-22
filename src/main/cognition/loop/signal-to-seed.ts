@@ -1,3 +1,4 @@
+import type { ActrConfig } from "@shared/cognition";
 import { MemoryGraphStore } from "../graph/memory-graph";
 
 const MANUAL_SEED_SIMILARITY_THRESHOLD = 0.55;
@@ -15,9 +16,30 @@ interface ManualSignalPayload {
   text: string;
 }
 
+interface DialogueResiduePayload {
+  text: string;
+}
+
+interface SilenceSignalPayload {
+  duration_minutes: number;
+}
+
+interface RandomWalkPayload {
+  node_id: string;
+  node_content?: string;
+}
+
+interface LowActivationRescuePayload {
+  node_ids: string[];
+}
+
 export type CognitionSignal =
   | { type: "time_signal"; payload: TimeSignalPayload }
-  | { type: "manual_signal"; payload: ManualSignalPayload };
+  | { type: "manual_signal"; payload: ManualSignalPayload }
+  | { type: "dialogue_residue"; payload: DialogueResiduePayload }
+  | { type: "silence"; payload: SilenceSignalPayload }
+  | { type: "random_walk"; payload: RandomWalkPayload }
+  | { type: "low_activation_rescue"; payload: LowActivationRescuePayload };
 
 function cosineSimilarity(left: number[], right: number[]): number {
   if (left.length === 0 || right.length === 0) {
@@ -80,7 +102,16 @@ function weekdayAliases(weekday: string): string[] {
 export async function signalToSeeds(
   signal: CognitionSignal,
   graph: MemoryGraphStore,
-  embedText: (text: string) => Promise<number[] | null>
+  embedText: (text: string) => Promise<number[] | null>,
+  options: {
+    actr: ActrConfig;
+    nowMs?: number;
+  } = {
+    actr: {
+      decay_d: 0.5,
+      base_level_scale: 0.1
+    }
+  }
 ): Promise<Array<{ nodeId: string; energy: number }>> {
   const nodes = graph.getAllNodes();
   if (nodes.length === 0) {
@@ -104,22 +135,92 @@ export async function signalToSeeds(
       }));
   }
 
-  const text = signal.payload.text.trim();
-  if (!text) {
-    return [];
-  }
+  let seeds: Array<{ nodeId: string; energy: number }> = [];
 
-  const queryEmbedding = await embedText(text);
-  if (!queryEmbedding || queryEmbedding.length === 0) {
-    return [];
-  }
+  if (signal.type === "manual_signal") {
+    const text = signal.payload.text.trim();
+    if (!text) {
+      return [];
+    }
 
-  return nodes
-    .map((node) => ({
+    const queryEmbedding = await embedText(text);
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      return [];
+    }
+
+    seeds = nodes
+      .map((node) => ({
+        nodeId: node.id,
+        energy: cosineSimilarity(queryEmbedding, node.embedding) * (MANUAL_SEED_TYPE_WEIGHT[node.type] ?? 1)
+      }))
+      .filter((item) => item.energy >= MANUAL_SEED_SIMILARITY_THRESHOLD)
+      .sort((left, right) => {
+        if (right.energy !== left.energy) {
+          return right.energy - left.energy;
+        }
+        return left.nodeId.localeCompare(right.nodeId);
+      })
+      .slice(0, 3);
+  } else if (signal.type === "dialogue_residue") {
+    const text = signal.payload.text.trim();
+    if (!text) {
+      return [];
+    }
+
+    const queryEmbedding = await embedText(text);
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      return [];
+    }
+
+    seeds = graph.findByEmbeddingSimilarity(queryEmbedding, 3).map((node) => ({
       nodeId: node.id,
-      energy: cosineSimilarity(queryEmbedding, node.embedding) * (MANUAL_SEED_TYPE_WEIGHT[node.type] ?? 1)
-    }))
-    .filter((item) => item.energy >= MANUAL_SEED_SIMILARITY_THRESHOLD)
-    .sort((left, right) => right.energy - left.energy)
-    .slice(0, 3);
+      energy: 0.8
+    }));
+  } else if (signal.type === "silence") {
+    const nowMs = options.nowMs ?? Date.now();
+    const candidateIds = nodes
+      .filter((node) => node.activation_level < 0.1)
+      .filter((node) => node.activation_history.some((timestamp) => nowMs - timestamp <= 30 * 24 * 60 * 60 * 1000))
+      .map((node) => node.id);
+    seeds = graph.getTopByBaseLevel({
+      limit: 3,
+      nowMs,
+      decayD: options.actr.decay_d,
+      candidateIds,
+      minHistoryLength: 1
+    }).map((node) => ({
+      nodeId: node.id,
+      energy: 0.6
+    }));
+  } else if (signal.type === "random_walk") {
+    seeds = [{
+      nodeId: signal.payload.node_id,
+      energy: 0.5
+    }];
+  } else if (signal.type === "low_activation_rescue") {
+    seeds = signal.payload.node_ids.map((nodeId) => ({
+      nodeId,
+      energy: 1
+    }));
+  }
+
+  const nowMs = options.nowMs ?? Date.now();
+  for (const seed of seeds) {
+    const node = graph.getNode(seed.nodeId);
+    if (!node) {
+      continue;
+    }
+    const baseLevel = graph.computeBaseLevelActivation(seed.nodeId, nowMs, options.actr.decay_d);
+    const baseBonus = Math.max(0, baseLevel * options.actr.base_level_scale);
+    seed.energy += baseBonus;
+  }
+
+  return seeds
+    .filter((seed) => graph.getNode(seed.nodeId))
+    .sort((left, right) => {
+      if (right.energy !== left.energy) {
+        return right.energy - left.energy;
+      }
+      return left.nodeId.localeCompare(right.nodeId);
+    });
 }

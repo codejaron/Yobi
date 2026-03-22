@@ -9,6 +9,7 @@ export function createCognitionIpcApi(ipcRenderer: IpcRenderer): Pick<
   | "getCognitionDebugSnapshot"
   | "triggerCognitionManualSpread"
   | "updateCognitionConfig"
+  | "getCognitionHealthMetrics"
   | "onCognitionTickCompleted"
 > {
   return {
@@ -20,6 +21,9 @@ export function createCognitionIpcApi(ipcRenderer: IpcRenderer): Pick<
     },
     updateCognitionConfig(input) {
       return ipcRenderer.invoke("cognition:updateConfig", input ?? {});
+    },
+    getCognitionHealthMetrics() {
+      return ipcRenderer.invoke("cognition:getHealthMetrics");
     },
     onCognitionTickCompleted(listener) {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {

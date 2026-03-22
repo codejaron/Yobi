@@ -53,11 +53,16 @@ export const cognitionConfigSchema = z.object({
     theta: z.number()
   }).strict(),
   actr: z.object({
-    decay_d: z.number()
+    decay_d: z.number(),
+    base_level_scale: z.number()
   }).strict(),
   hebbian: z.object({
     learning_rate: z.number(),
-    normalization_cap: z.number()
+    normalization_cap: z.number(),
+    decay_lambda: z.number(),
+    passive_decay_rate: z.number(),
+    weight_min: z.number(),
+    weight_max: z.number()
   }).strict(),
   retrieval_weights: z.object({
     lambda_semantic: z.number(),
@@ -75,7 +80,20 @@ export const cognitionConfigSchema = z.object({
     max_edges_per_node: z.number().int()
   }).strict(),
   loop: z.object({
-    heartbeat_lambda_minutes: z.number()
+    heartbeat_lambda_minutes: z.number(),
+    min_interval_minutes: z.number(),
+    max_interval_minutes: z.number(),
+    active_hours: z.object({
+      start: z.number().int(),
+      end: z.number().int()
+    }).strict(),
+    enabled: z.boolean()
+  }).strict(),
+  triggers: z.object({
+    dialogue_residue_window_minutes: z.number(),
+    silence_threshold_minutes: z.number(),
+    random_walk_probability: z.number(),
+    rescue_activation_floor: z.number()
   }).strict(),
   expression: z.object({
     activation_threshold: z.number(),
@@ -86,7 +104,10 @@ export const cognitionConfigSchema = z.object({
 export type CognitionConfig = z.infer<typeof cognitionConfigSchema>;
 export type SpreadingConfig = CognitionConfig["spreading"];
 export type ActrConfig = CognitionConfig["actr"];
+export type HebbianConfig = CognitionConfig["hebbian"];
 export type GraphMaintenanceConfig = CognitionConfig["graph_maintenance"];
+export type LoopConfig = CognitionConfig["loop"];
+export type TriggerConfig = CognitionConfig["triggers"];
 export type ExpressionConfig = CognitionConfig["expression"];
 export type CognitionConfigPatch = DeepPartial<CognitionConfig>;
 
@@ -107,11 +128,16 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     theta: 0.3
   },
   actr: {
-    decay_d: 0.5
+    decay_d: 0.5,
+    base_level_scale: 0.1
   },
   hebbian: {
     learning_rate: 0.05,
-    normalization_cap: 5
+    normalization_cap: 5,
+    decay_lambda: 0.01,
+    passive_decay_rate: 0.001,
+    weight_min: 0.01,
+    weight_max: 1
   },
   retrieval_weights: {
     lambda_semantic: 0.5,
@@ -129,7 +155,20 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     max_edges_per_node: 15
   },
   loop: {
-    heartbeat_lambda_minutes: 15
+    heartbeat_lambda_minutes: 15,
+    min_interval_minutes: 3,
+    max_interval_minutes: 60,
+    active_hours: {
+      start: 7,
+      end: 23
+    },
+    enabled: true
+  },
+  triggers: {
+    dialogue_residue_window_minutes: 30,
+    silence_threshold_minutes: 45,
+    random_walk_probability: 0.2,
+    rescue_activation_floor: 0.05
   },
   expression: {
     activation_threshold: 0.4,
@@ -201,6 +240,9 @@ export interface CognitionConfigSnapshot {
   temporal_decay_rho: number;
   diffusion_max_depth: number;
   spreading_size_limit: number;
+  hebbian_learning_rate: number;
+  passive_decay_rate: number;
+  random_walk_probability: number;
   expression_activation_threshold: number;
   expression_cooldown_minutes: number;
   heartbeat_lambda_minutes: number;
@@ -217,9 +259,80 @@ export interface BubbleEvaluationDimensions {
   relationship_fit: number;
 }
 
+export interface TriggerSourceSummary {
+  type: string;
+  source_description: string;
+}
+
+export interface EdgeChange {
+  edge_id?: string | null;
+  source_id?: string | null;
+  target_id?: string | null;
+  source_content: string;
+  target_content: string;
+  weight_before: number;
+  weight_after: number;
+  delta: number;
+}
+
+export interface HebbianUpdateLog {
+  edges_updated: number;
+  edges_strengthened: number;
+  edges_weakened: number;
+  normalization_triggered_nodes: number;
+  max_weight_after: number;
+  min_weight_after: number;
+  avg_weight_after: number;
+  top_strengthened: EdgeChange[];
+  top_weakened: EdgeChange[];
+}
+
+export interface EdgeDecayLog {
+  edges_decayed: number;
+  edges_at_minimum: number;
+}
+
+export interface GraphStatsSnapshot {
+  avg_weight: number;
+  median_weight: number;
+  std_weight: number;
+  min_weight: number;
+  max_weight: number;
+  node_count: number;
+  edge_count: number;
+  avg_activation: number;
+}
+
+export interface HeartbeatStats {
+  ticks_total: number;
+  avg_interval_actual_ms: number;
+  last_tick_time: number;
+  next_scheduled_time: number | null;
+}
+
+export interface HealthAlert {
+  level: "info" | "warning" | "error";
+  msg: string;
+}
+
+export interface HealthMetrics {
+  total_ticks: number;
+  uptime_hours: number;
+  empty_tick_ratio: number;
+  expression_ratio: number;
+  avg_top1_activation: number;
+  weight_mean_current: number;
+  weight_mean_trend: number;
+  path_diversity: number;
+  alerts: HealthAlert[];
+  heartbeat_stats: HeartbeatStats;
+}
+
 export interface ActivationLogEntry {
   timestamp: number;
   trigger_type: string;
+  trigger_sources?: TriggerSourceSummary[] | null;
+  duration_ms?: number | null;
   seeds: ActivationSeedLabel[];
   top_activated: ActivationTopNode[];
   path_log?: ActivationPathLogRound[] | null;
@@ -237,6 +350,9 @@ export interface ActivationLogEntry {
   evaluation_dimensions?: BubbleEvaluationDimensions | null;
   manual_text?: string | null;
   expression_reason?: string | null;
+  hebbian_log?: HebbianUpdateLog | null;
+  edge_decay_log?: EdgeDecayLog | null;
+  graph_stats?: GraphStatsSnapshot | null;
 }
 
 export interface MemoryGraphSnapshot {

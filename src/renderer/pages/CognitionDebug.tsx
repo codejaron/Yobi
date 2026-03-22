@@ -7,6 +7,7 @@ import {
   type CognitionConfig,
   type CognitionConfigPatch,
   type CognitionDebugSnapshot,
+  type HealthMetrics,
   type MemoryEdge,
   type MemoryNode
 } from "@shared/cognition";
@@ -361,6 +362,36 @@ const sliderDefinitions = [
     step: 1,
     state: (cfg: CognitionConfig) => cfg.loop.heartbeat_lambda_minutes,
     update: (value: number) => ({ loop: { heartbeat_lambda_minutes: value } })
+  },
+  {
+    id: "hebbian_learning_rate",
+    label: "Hebbian 学习率 η",
+    description: "共同激活时边权强化速度",
+    min: 0.001,
+    max: 0.2,
+    step: 0.005,
+    state: (cfg: CognitionConfig) => cfg.hebbian.learning_rate,
+    update: (value: number) => ({ hebbian: { learning_rate: value } })
+  },
+  {
+    id: "hebbian_passive_decay_rate",
+    label: "被动衰减率",
+    description: "每次心跳对全图边的自然遗忘",
+    min: 0,
+    max: 0.01,
+    step: 0.001,
+    state: (cfg: CognitionConfig) => cfg.hebbian.passive_decay_rate,
+    update: (value: number) => ({ hebbian: { passive_decay_rate: value } })
+  },
+  {
+    id: "random_walk_probability",
+    label: "随机游走概率",
+    description: "心跳附加随机种子的概率",
+    min: 0,
+    max: 0.5,
+    step: 0.05,
+    state: (cfg: CognitionConfig) => cfg.triggers.random_walk_probability,
+    update: (value: number) => ({ triggers: { random_walk_probability: value } })
   }
 ];
 
@@ -377,9 +408,92 @@ const formatTime = (value: number) => {
 const formatNumeric = (value: number | null | undefined, digits = 2) =>
   typeof value === "number" ? value.toFixed(digits) : "--";
 
+function computeWeightStats(edges: MemoryEdge[]) {
+  const weights = edges
+    .map((edge) => edge.weight)
+    .filter((weight) => Number.isFinite(weight))
+    .sort((left, right) => left - right);
+
+  if (weights.length === 0) {
+    return {
+      mean: 0,
+      median: 0,
+      std: 0,
+      min: 0,
+      max: 0
+    };
+  }
+
+  const mean = weights.reduce((sum, weight) => sum + weight, 0) / weights.length;
+  const variance =
+    weights.reduce((sum, weight) => sum + (weight - mean) * (weight - mean), 0) / weights.length;
+  const middle = Math.floor(weights.length / 2);
+  const median =
+    weights.length % 2 === 0 ? (weights[middle - 1] + weights[middle]) / 2 : weights[middle] ?? 0;
+
+  return {
+    mean,
+    median,
+    std: Math.sqrt(variance),
+    min: weights[0] ?? 0,
+    max: weights[weights.length - 1] ?? 0
+  };
+}
+
+function buildWeightHistogram(edges: MemoryEdge[], binCount = 20) {
+  const bins = Array.from({ length: binCount }, (_, index) => ({
+    index,
+    start: index / binCount,
+    end: (index + 1) / binCount,
+    count: 0
+  }));
+
+  for (const edge of edges) {
+    const weight = clamp(edge.weight, 0, 1);
+    const index = Math.min(binCount - 1, Math.floor(weight * binCount));
+    bins[index]!.count += 1;
+  }
+
+  return bins.map((bin) => ({
+    ...bin,
+    color: d3.interpolateRgbBasis(["#34D399", "#FBBF24", "#EF4444"])(
+      bin.index / Math.max(1, binCount - 1)
+    )
+  }));
+}
+
+function trendGlyph(value: number) {
+  if (value > 0.0005) {
+    return "↗";
+  }
+  if (value < -0.0005) {
+    return "↘";
+  }
+  return "→";
+}
+
+function healthTone(metrics: HealthMetrics | null) {
+  if (!metrics || metrics.alerts.length === 0) {
+    return "border-cyan-200 bg-cyan-50/70";
+  }
+
+  const hasError = metrics.alerts.some((alert) => alert.level === "error");
+  if (hasError) {
+    return "border-rose-300 bg-rose-50";
+  }
+
+  const hasWarning = metrics.alerts.some((alert) => alert.level === "warning");
+  if (hasWarning) {
+    return "border-amber-300 bg-amber-50";
+  }
+
+  return "border-sky-200 bg-sky-50/70";
+}
+
 export function CognitionDebugPage() {
   const [snapshot, setSnapshot] = useState<CognitionDebugSnapshot | null>(null);
   const [configState, setConfigState] = useState<CognitionConfig | null>(null);
+  const [healthMetrics, setHealthMetrics] = useState<HealthMetrics | null>(null);
   const [manualText, setManualText] = useState("中午吃什么");
   const [manualStatus, setManualStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -405,9 +519,19 @@ export function CognitionDebugPage() {
     }
   }, []);
 
+  const loadHealthMetrics = useCallback(async () => {
+    try {
+      const next = await window.companion.getCognitionHealthMetrics();
+      setHealthMetrics(next);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     loadSnapshot();
-  }, [loadSnapshot]);
+    void loadHealthMetrics();
+  }, [loadHealthMetrics, loadSnapshot]);
 
   const startPlaybackFromEntry = useCallback((entry: ActivationLogEntry | null) => {
     const pathLog = entry?.path_log ?? [];
@@ -444,9 +568,10 @@ export function CognitionDebugPage() {
       setSelectedLog(entry);
       startPlaybackFromEntry(entry);
       void loadSnapshot();
+      void loadHealthMetrics();
     });
     return () => unsubscribe();
-  }, [autoRefresh, loadSnapshot, startPlaybackFromEntry]);
+  }, [autoRefresh, loadHealthMetrics, loadSnapshot, startPlaybackFromEntry]);
 
   useEffect(() => {
     if (!snapshot || !canvasRef.current || size.width === 0 || size.height === 0) {
@@ -643,6 +768,7 @@ export function CognitionDebugPage() {
       setConfigState(result.snapshot.config);
       setSelectedLog(result.entry);
       startPlaybackFromEntry(result.entry);
+      await loadHealthMetrics();
     } catch (error) {
       setManualStatus("error");
     }
@@ -663,6 +789,14 @@ export function CognitionDebugPage() {
         ...base.inhibition,
         ...(partial.inhibition ?? {})
       },
+      actr: {
+        ...base.actr,
+        ...(partial.actr ?? {})
+      },
+      hebbian: {
+        ...base.hebbian,
+        ...(partial.hebbian ?? {})
+      },
       expression: {
         ...base.expression,
         ...(partial.expression ?? {})
@@ -673,7 +807,15 @@ export function CognitionDebugPage() {
       },
       loop: {
         ...base.loop,
-        ...(partial.loop ?? {})
+        ...(partial.loop ?? {}),
+        active_hours: {
+          ...base.loop.active_hours,
+          ...(partial.loop?.active_hours ?? {})
+        }
+      },
+      triggers: {
+        ...base.triggers,
+        ...(partial.triggers ?? {})
       }
     };
   };
@@ -687,6 +829,7 @@ export function CognitionDebugPage() {
     try {
       await window.companion.updateCognitionConfig(partial);
       await loadSnapshot();
+      await loadHealthMetrics();
     } catch {
       // ignore
     }
@@ -750,54 +893,183 @@ export function CognitionDebugPage() {
     }
     return labelById;
   }, [snapshot]);
+  const latestGraphLog = useMemo(
+    () => (snapshot?.lastLogs?.length ? snapshot.lastLogs[snapshot.lastLogs.length - 1] ?? null : null),
+    [snapshot]
+  );
+  const weightStats = useMemo(
+    () => computeWeightStats(snapshot?.graph.edges ?? []),
+    [snapshot]
+  );
+  const weightHistogram = useMemo(
+    () => buildWeightHistogram(snapshot?.graph.edges ?? []),
+    [snapshot]
+  );
+  const maxHistogramCount = useMemo(
+    () => Math.max(1, ...weightHistogram.map((bin) => bin.count)),
+    [weightHistogram]
+  );
+  const healthSummary = healthMetrics;
+  const selectedRoundRows = useMemo(
+    () =>
+      buildRoundStageRows({
+        pathLog: selectedLog?.path_log,
+        labelById: nodeLabelById
+      }),
+    [nodeLabelById, selectedLog]
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-3">
       <div className="grid flex-1 gap-4 lg:grid-cols-[3fr_2fr]">
-        <div className="relative flex flex-col rounded-3xl bg-gradient-to-br from-slate-100 to-white p-4 shadow-lg" ref={containerRef}>
-          <div className="absolute right-4 top-4 grid gap-1 rounded-2xl bg-white/80 px-4 py-2 text-xs shadow">
-            <div className="text-muted-foreground">总节点 / 边数</div>
-            <div className="text-base font-semibold text-foreground">
-              {stats.node_count ?? 0} nodes · {stats.edge_count ?? 0} edges
-            </div>
-            <div className="text-muted-foreground">平均激活 {(stats.avg_activation ?? 0).toFixed(2)}</div>
-            {topNodes.map((node) => (
-              <div key={node.id} className="text-xs text-foreground">
-                {node.content.slice(0, 24)} · {node.activation_level.toFixed(2)}
+        <div className="flex min-h-0 flex-col gap-4">
+          <div className="relative flex min-h-[420px] flex-1 flex-col rounded-3xl bg-gradient-to-br from-slate-100 to-white p-4 shadow-lg">
+            <div className="absolute right-4 top-4 z-10 grid gap-1 rounded-2xl bg-white/80 px-4 py-2 text-xs shadow">
+              <div className="text-muted-foreground">总节点 / 边数</div>
+              <div className="text-base font-semibold text-foreground">
+                {stats.node_count ?? 0} nodes · {stats.edge_count ?? 0} edges
               </div>
-            ))}
+              <div className="text-muted-foreground">平均激活 {(stats.avg_activation ?? 0).toFixed(2)}</div>
+              {topNodes.map((node) => (
+                <div key={node.id} className="text-xs text-foreground">
+                  {node.content.slice(0, 24)} · {node.activation_level.toFixed(2)}
+                </div>
+              ))}
+            </div>
+            {activeRoundLabel ? (
+              <div className="absolute bottom-4 left-4 z-10 rounded-full bg-slate-950/85 px-3 py-1 text-xs font-medium text-cyan-100 shadow">
+                {activeRoundLabel}
+              </div>
+            ) : null}
+            <div className="relative min-h-0 flex-1" ref={containerRef}>
+              <canvas
+                ref={canvasRef}
+                className="h-full w-full rounded-2xl bg-slate-900"
+                width={size.width}
+                height={size.height}
+                onMouseMove={handleMouseMove}
+                onMouseLeave={() => {
+                  setHoveredNode(null);
+                  setTooltipPosition(null);
+                }}
+              />
+              {hoveredNode && tooltipPosition ? (
+                <div
+                  className="pointer-events-none absolute z-20 max-w-xs rounded-lg bg-slate-900/90 px-3 py-2 text-xs text-white"
+                  style={{ left: tooltipPosition.x + 12, top: tooltipPosition.y + 12 }}
+                >
+                  <div className="font-semibold">{hoveredNode.content}</div>
+                  <div>类型：{hoveredNode.type}</div>
+                  <div>激活：{hoveredNode.activation_level.toFixed(3)}</div>
+                  <div>基础 B：{hoveredNode.base_level_activation.toFixed(3)}</div>
+                  <div>激活历史：{hoveredNode.activation_history.length}</div>
+                </div>
+              ) : null}
+            </div>
           </div>
-          {activeRoundLabel ? (
-            <div className="absolute bottom-4 left-4 rounded-full bg-slate-950/85 px-3 py-1 text-xs font-medium text-cyan-100 shadow">
-              {activeRoundLabel}
-            </div>
-          ) : null}
-          <canvas
-            ref={canvasRef}
-            className="h-full w-full rounded-2xl bg-slate-900"
-            width={size.width}
-            height={size.height}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={() => {
-              setHoveredNode(null);
-              setTooltipPosition(null);
-            }}
-          />
-          {hoveredNode && tooltipPosition ? (
-            <div
-              className="pointer-events-none absolute z-20 max-w-xs rounded-lg bg-slate-900/90 px-3 py-2 text-xs text-white"
-              style={{ left: tooltipPosition.x + 12, top: tooltipPosition.y + 12 }}
-            >
-              <div className="font-semibold">{hoveredNode.content}</div>
-              <div>类型：{hoveredNode.type}</div>
-              <div>激活：{hoveredNode.activation_level.toFixed(3)}</div>
-              <div>基础 B：{hoveredNode.base_level_activation.toFixed(3)}</div>
-              <div>激活历史：{hoveredNode.activation_history.length}</div>
-            </div>
-          ) : null}
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>边权重分布</CardTitle>
+              <CardDescription>观察 Hebbian 增长和被动衰减是否失衡</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 lg:grid-cols-[1.8fr_1fr]">
+              <div className="rounded-2xl border border-border/60 bg-slate-50/70 p-3">
+                <svg width="100%" height="150" viewBox="0 0 520 150" preserveAspectRatio="none">
+                  {weightHistogram.map((bin) => {
+                    const barWidth = 520 / Math.max(1, weightHistogram.length);
+                    const height = (bin.count / maxHistogramCount) * 112;
+                    return (
+                      <g key={`hist-${bin.index}`}>
+                        <rect
+                          x={bin.index * barWidth + 3}
+                          y={128 - height}
+                          width={Math.max(8, barWidth - 6)}
+                          height={Math.max(2, height)}
+                          rx={4}
+                          fill={bin.color}
+                          opacity={0.92}
+                        />
+                        {bin.index < weightHistogram.length - 1 ? null : (
+                          <text x={bin.index * barWidth + barWidth / 2} y={143} textAnchor="middle" fontSize="10" fill="#475569">
+                            1.00
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                  <line x1={0} x2={520} y1={128} y2={128} stroke="#CBD5E1" strokeWidth={1.5} />
+                  <text x={0} y={143} fontSize="10" fill="#475569">
+                    0.00
+                  </text>
+                  <text x={260} y={143} fontSize="10" fill="#475569" textAnchor="middle">
+                    权重 bins
+                  </text>
+                </svg>
+              </div>
+              <div className="space-y-2 rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
+                <div className="font-medium text-slate-900">统计</div>
+                <div className="text-slate-700">mean: {formatNumeric(latestGraphLog?.graph_stats?.avg_weight ?? weightStats.mean)}</div>
+                <div className="text-slate-700">median: {formatNumeric(latestGraphLog?.graph_stats?.median_weight ?? weightStats.median)}</div>
+                <div className="text-slate-700">std: {formatNumeric(latestGraphLog?.graph_stats?.std_weight ?? weightStats.std)}</div>
+                <div className="text-slate-700">min: {formatNumeric(latestGraphLog?.graph_stats?.min_weight ?? weightStats.min)}</div>
+                <div className="text-slate-700">max: {formatNumeric(latestGraphLog?.graph_stats?.max_weight ?? weightStats.max)}</div>
+                <Button variant="outline" size="sm" onClick={() => void loadSnapshot()}>
+                  刷新直方图
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="flex flex-col gap-4">
+          <Card className={`border ${healthTone(healthSummary)}`}>
+            <CardHeader className="pb-3">
+              <CardTitle>健康状态</CardTitle>
+              <CardDescription>观察心跳、空 tick、表达率和权重趋势</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-slate-800">
+                <span>运行 {formatNumeric(healthSummary?.uptime_hours)}h</span>
+                <span>心跳 {healthSummary?.total_ticks ?? 0} 次</span>
+                <span>空 tick {formatNumeric((healthSummary?.empty_tick_ratio ?? 0) * 100)}%</span>
+                <span>表达 {formatNumeric((healthSummary?.expression_ratio ?? 0) * 100)}%</span>
+                <span>
+                  权重 {formatNumeric(healthSummary?.weight_mean_current)} ({trendGlyph(healthSummary?.weight_mean_trend ?? 0)}
+                  {formatNumeric(healthSummary?.weight_mean_trend, 4)})
+                </span>
+                <span>多样性 {formatNumeric(healthSummary?.path_diversity)}</span>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-600">
+                <span>平均 Top1 激活 {formatNumeric(healthSummary?.avg_top1_activation)}</span>
+                <span>平均心跳间隔 {formatNumeric((healthSummary?.heartbeat_stats.avg_interval_actual_ms ?? 0) / 60000)} 分钟</span>
+                <span>
+                  下次心跳{" "}
+                  {healthSummary?.heartbeat_stats.next_scheduled_time
+                    ? formatTime(healthSummary.heartbeat_stats.next_scheduled_time)
+                    : "--"}
+                </span>
+              </div>
+              {(healthSummary?.alerts.length ?? 0) > 0 ? (
+                <details className="rounded-xl border border-border/60 bg-white/80 px-3 py-2">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-900">
+                    告警 {healthSummary?.alerts.length}
+                  </summary>
+                  <div className="mt-2 space-y-2 text-xs text-slate-700">
+                    {healthSummary?.alerts.map((alert, index) => (
+                      <div key={`alert-${index}`} className="rounded-lg border border-border/50 bg-slate-50/80 px-2 py-2">
+                        <div className="font-medium text-slate-900">{alert.level.toUpperCase()}</div>
+                        <div>{alert.msg}</div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : (
+                <div className="text-xs text-slate-600">当前没有健康告警。</div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card className="min-h-[260px]">
             <CardHeader>
               <CardTitle>心跳日志</CardTitle>
@@ -842,6 +1114,15 @@ export function CognitionDebugPage() {
                 <div className="space-y-1 rounded-lg border border-border/60 bg-white/80 p-2 text-xs">
                   <div>时间：{formatTime(selectedLog.timestamp)}</div>
                   <div>触发：{selectedLog.trigger_type}</div>
+                  {selectedLog.trigger_sources?.length ? (
+                    <div>
+                      触发源：
+                      {selectedLog.trigger_sources
+                        .map((source) => `${source.type} · ${source.source_description}`)
+                        .join(" | ")}
+                    </div>
+                  ) : null}
+                  {selectedLog.duration_ms != null ? <div>耗时：{selectedLog.duration_ms} ms</div> : null}
                   <div>种子：{selectedLog.seeds.map((seed) => seed.label).join(", ")}</div>
                   <div>
                     Top 节点：
@@ -855,16 +1136,13 @@ export function CognitionDebugPage() {
                   {selectedLog.evaluation_score != null ? (
                     <div>评分：{selectedLog.evaluation_score.toFixed(2)}</div>
                   ) : null}
-                  {(selectedLog.path_log ?? []).length > 0 ? (
+                  {selectedRoundRows.length > 0 ? (
                     <details className="mt-2 rounded-md border border-border/60 bg-white/70 px-2 py-1">
                       <summary className="cursor-pointer select-none font-medium text-slate-900">
                         三阶段详情（每轮 Top）
                       </summary>
                       <div className="mt-2 space-y-2">
-                        {buildRoundStageRows({
-                          pathLog: selectedLog.path_log,
-                          labelById: nodeLabelById
-                        }).map((round) => (
+                        {selectedRoundRows.map((round) => (
                           <div key={`selected-round-${selectedLog.timestamp}-${round.depth}`} className="rounded-md border border-border/50 bg-white/80 p-2">
                             <div className="font-medium text-slate-900">Round {round.depth}</div>
                             <div className="mt-1 text-slate-700">Propagation: {round.propagation}</div>
@@ -875,6 +1153,61 @@ export function CognitionDebugPage() {
                         ))}
                       </div>
                     </details>
+                  ) : null}
+                  {selectedLog.hebbian_log ? (
+                    <details className="mt-2 rounded-md border border-border/60 bg-white/70 px-2 py-1">
+                      <summary className="cursor-pointer select-none font-medium text-slate-900">
+                        Hebbian 更新
+                      </summary>
+                      <div className="mt-2 space-y-2 text-slate-700">
+                        <div>
+                          本轮更新 {selectedLog.hebbian_log.edges_updated} 条边 | 强化 {selectedLog.hebbian_log.edges_strengthened} |
+                          弱化 {selectedLog.hebbian_log.edges_weakened} | 归一化触发 {selectedLog.hebbian_log.normalization_triggered_nodes} 节点
+                        </div>
+                        <div>
+                          权重: avg={formatNumeric(selectedLog.hebbian_log.avg_weight_after)} max=
+                          {formatNumeric(selectedLog.hebbian_log.max_weight_after)} min=
+                          {formatNumeric(selectedLog.hebbian_log.min_weight_after)}
+                        </div>
+                        <div>
+                          <div className="font-medium text-slate-900">最大强化 Top 3</div>
+                          {selectedLog.hebbian_log.top_strengthened.length > 0 ? (
+                            selectedLog.hebbian_log.top_strengthened.map((change, index) => (
+                              <div key={`selected-strengthened-${index}`}>
+                                "{change.source_content}" → "{change.target_content}" {formatNumeric(change.weight_before)} →{" "}
+                                {formatNumeric(change.weight_after)} ({change.delta >= 0 ? "+" : ""}
+                                {formatNumeric(change.delta)})
+                              </div>
+                            ))
+                          ) : (
+                            <div>无</div>
+                          )}
+                        </div>
+                        <div>
+                          <div className="font-medium text-slate-900">最大弱化 Top 3</div>
+                          {selectedLog.hebbian_log.top_weakened.length > 0 ? (
+                            selectedLog.hebbian_log.top_weakened.map((change, index) => (
+                              <div key={`selected-weakened-${index}`}>
+                                "{change.source_content}" → "{change.target_content}" {formatNumeric(change.weight_before)} →{" "}
+                                {formatNumeric(change.weight_after)} ({change.delta >= 0 ? "+" : ""}
+                                {formatNumeric(change.delta)})
+                              </div>
+                            ))
+                          ) : (
+                            <div>无</div>
+                          )}
+                        </div>
+                      </div>
+                    </details>
+                  ) : null}
+                  {selectedLog.graph_stats ? (
+                    <div className="mt-2 rounded-md border border-border/60 bg-slate-50/80 px-2 py-2 text-slate-700">
+                      图统计：avg={formatNumeric(selectedLog.graph_stats.avg_weight)} median=
+                      {formatNumeric(selectedLog.graph_stats.median_weight)} std=
+                      {formatNumeric(selectedLog.graph_stats.std_weight)} min=
+                      {formatNumeric(selectedLog.graph_stats.min_weight)} max=
+                      {formatNumeric(selectedLog.graph_stats.max_weight)}
+                    </div>
                   ) : null}
                 </div>
               ) : (
@@ -982,6 +1315,15 @@ export function CognitionDebugPage() {
                     <span className="rounded-full bg-slate-100 px-2 py-1">
                       Expr {formatNumeric(entry.config_snapshot?.expression_activation_threshold)}
                     </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1">
+                      η {formatNumeric(entry.config_snapshot?.hebbian_learning_rate)}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1">
+                      Decay {formatNumeric(entry.config_snapshot?.passive_decay_rate, 3)}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1">
+                      RW {formatNumeric(entry.config_snapshot?.random_walk_probability)}
+                    </span>
                   </div>
 
                   <div className="mt-3 grid gap-2 text-xs text-slate-700 md:grid-cols-[1.2fr_1fr_1fr]">
@@ -1057,6 +1399,50 @@ export function CognitionDebugPage() {
                           ))}
                         </div>
                       ) : null}
+                    </div>
+                  ) : null}
+                  {entry.hebbian_log ? (
+                    <div className="mt-3 rounded-xl border border-border/60 bg-amber-50/60 px-3 py-2 text-xs text-slate-700">
+                      <div className="font-medium text-slate-900">
+                        Hebbian 更新 {entry.hebbian_log.edges_updated} 条 | 强化 {entry.hebbian_log.edges_strengthened} | 弱化{" "}
+                        {entry.hebbian_log.edges_weakened} | 归一化 {entry.hebbian_log.normalization_triggered_nodes}
+                      </div>
+                      <div className="mt-1">
+                        权重 avg={formatNumeric(entry.hebbian_log.avg_weight_after)} max=
+                        {formatNumeric(entry.hebbian_log.max_weight_after)} min=
+                        {formatNumeric(entry.hebbian_log.min_weight_after)}
+                      </div>
+                      {entry.hebbian_log.top_strengthened.length > 0 ? (
+                        <div className="mt-1">
+                          强化 Top：
+                          {entry.hebbian_log.top_strengthened
+                            .map(
+                              (change) =>
+                                `"${change.source_content}"→"${change.target_content}" (${change.delta >= 0 ? "+" : ""}${formatNumeric(change.delta)})`
+                            )
+                            .join(" · ")}
+                        </div>
+                      ) : null}
+                      {entry.hebbian_log.top_weakened.length > 0 ? (
+                        <div className="mt-1">
+                          弱化 Top：
+                          {entry.hebbian_log.top_weakened
+                            .map(
+                              (change) =>
+                                `"${change.source_content}"→"${change.target_content}" (${change.delta >= 0 ? "+" : ""}${formatNumeric(change.delta)})`
+                            )
+                            .join(" · ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {entry.graph_stats ? (
+                    <div className="mt-3 rounded-xl border border-border/60 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
+                      图统计：avg={formatNumeric(entry.graph_stats.avg_weight)} median=
+                      {formatNumeric(entry.graph_stats.median_weight)} std=
+                      {formatNumeric(entry.graph_stats.std_weight)} min=
+                      {formatNumeric(entry.graph_stats.min_weight)} max=
+                      {formatNumeric(entry.graph_stats.max_weight)}
                     </div>
                   ) : null}
 

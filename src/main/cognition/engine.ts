@@ -9,6 +9,7 @@ import {
   type CognitionConfig,
   type CognitionConfigPatch,
   type CognitionDebugSnapshot,
+  type HealthMetrics,
   type MemoryEdge,
   type MemoryNode
 } from "@shared/cognition";
@@ -49,6 +50,7 @@ interface CognitionEngineInput {
   conversation: ConversationEngine;
   logger: AppLogger;
   getUserOnline?: () => boolean;
+  getUserActivityState?: () => { online: boolean; last_active: number | null };
   onProactiveMessage?: (input: {
     message: string;
     metadata?: {
@@ -82,6 +84,8 @@ export class CognitionEngine {
   private lastExpressionTime = 0;
   private initialized = false;
   private embeddingRepairPromise: Promise<void> | null = null;
+  private recentDialogueResidue: string[] = [];
+  private lastDialogueTime: number | null = null;
 
   constructor(private readonly input: CognitionEngineInput) {
     this.modelFactory = new ModelFactory(() => this.input.getConfig());
@@ -172,6 +176,16 @@ export class CognitionEngine {
     }
 
     graph.serialize();
+    const residue = [normalizedUser, normalizedAssistant]
+      .filter((value) => value.length > 0)
+      .join("\n");
+    if (residue) {
+      this.recentDialogueResidue.push(residue);
+      if (this.recentDialogueResidue.length > 10) {
+        this.recentDialogueResidue.shift();
+      }
+      this.lastDialogueTime = now;
+    }
   }
 
   async getDebugSnapshot(): Promise<CognitionDebugSnapshot> {
@@ -203,7 +217,16 @@ export class CognitionEngine {
     const next = await patchCognitionConfig(this.input.paths, this.requireConfig(), partialConfig);
     this.cognitionConfig = next;
     this.requireGraph().setGraphMaintenanceConfig(next.graph_maintenance);
+    if (this.loop?.isRunning()) {
+      this.loop.stop();
+      this.loop.start();
+    }
     return next;
+  }
+
+  async getHealthMetrics(): Promise<HealthMetrics> {
+    await this.ensureInitialized();
+    return this.requireLoop().getHealthMetrics();
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -227,6 +250,12 @@ export class CognitionEngine {
       getAppConfig: () => this.input.getConfig(),
       getCognitionConfig: () => this.requireConfig(),
       getUserOnline: () => this.input.getUserOnline?.() ?? true,
+      getUserActivityState: () => this.input.getUserActivityState?.() ?? {
+        online: this.input.getUserOnline?.() ?? true,
+        last_active: null
+      },
+      getRecentDialogueResidue: () => [...this.recentDialogueResidue],
+      getLastDialogueTime: () => this.lastDialogueTime,
       getLastExpressionTime: () => this.lastExpressionTime,
       setLastExpressionTime: (value) => {
         this.lastExpressionTime = value;
@@ -235,7 +264,6 @@ export class CognitionEngine {
         await Promise.resolve(this.input.onProactiveMessage?.(payload));
       },
       onTickCompleted: async (entry) => {
-        this.graph?.serialize();
         await Promise.resolve(this.input.onTickCompleted?.(entry));
       }
     });

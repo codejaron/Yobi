@@ -187,6 +187,9 @@ const api = {
   updateCognitionConfig(input) {
     return ipcRenderer.invoke('cognition:updateConfig', input ?? {});
   },
+  getCognitionHealthMetrics() {
+    return ipcRenderer.invoke('cognition:getHealthMetrics');
+  },
   onCognitionTickCompleted(listener) {
     const channel = 'cognition:tick-completed';
     const wrapped = (_event, payload) => listener(payload);

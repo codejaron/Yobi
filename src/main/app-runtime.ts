@@ -131,6 +131,7 @@ export class CompanionRuntime {
       conversation: this.conversation,
       logger: this.logger,
       getUserOnline: () => this.isCognitionUserOnline(),
+      getUserActivityState: () => this.getCognitionUserActivityState(),
       onProactiveMessage: (input) => {
         void this.handleCognitionProactive(input);
       },
@@ -455,6 +456,10 @@ export class CompanionRuntime {
 
   async updateCognitionConfig(input: CognitionConfigPatch) {
     return this.cognitionEngine.updateConfig(input);
+  }
+
+  async getCognitionHealthMetrics() {
+    return this.cognitionEngine.getHealthMetrics();
   }
 
   async getScheduledTasks(): Promise<{ tasks: ReturnType<ScheduledTaskService["listTasks"]>; runs: ScheduledTaskRun[] }> {
@@ -1216,6 +1221,15 @@ export class CompanionRuntime {
       Boolean(activity.lastQQChatId?.trim());
 
     return telegramReachable || feishuReachable || qqReachable;
+  }
+
+  private getCognitionUserActivityState(): { online: boolean; last_active: number | null } {
+    const activity = this.activityCoordinator.getSnapshot();
+    const lastActive = activity.lastUserAt ? Date.parse(activity.lastUserAt) : Number.NaN;
+    return {
+      online: this.isCognitionUserOnline(),
+      last_active: Number.isFinite(lastActive) ? lastActive : null
+    };
   }
 
 

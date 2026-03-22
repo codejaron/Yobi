@@ -37,6 +37,17 @@ function cosineSimilarity(left: number[], right: number[]): number {
   return dot / Math.sqrt(leftNorm * rightNorm);
 }
 
+function sortScoredNodes(
+  values: Array<{ node: MemoryNode; score: number }>
+): Array<{ node: MemoryNode; score: number }> {
+  return values.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return left.node.id.localeCompare(right.node.id);
+  });
+}
+
 function normalizeNode(raw: MemoryNode): MemoryNode {
   return {
     ...raw,
@@ -169,8 +180,52 @@ export class MemoryGraphStore {
     return [...this.graph.nodes.values()];
   }
 
+  getAllEdges(): MemoryEdge[] {
+    return [...this.graph.edges];
+  }
+
+  getEdgeById(id: string): MemoryEdge | null {
+    return this.graph.edges.find((edge) => edge.id === id) ?? null;
+  }
+
   getEdgesBetween(source: string, target: string): MemoryEdge[] {
     return this.graph.edges.filter((edge) => edge.source === source && edge.target === target);
+  }
+
+  getOutgoingEdges(nodeId: string): MemoryEdge[] {
+    const adjacency = this.graph.adjacency.get(nodeId) ?? [];
+    return adjacency
+      .map((entry) => this.getEdgeById(entry.edge_id))
+      .filter((edge): edge is MemoryEdge => edge !== null);
+  }
+
+  getRandomNode(): MemoryNode | null {
+    const nodes = this.getAllNodes();
+    if (nodes.length === 0) {
+      return null;
+    }
+    return nodes[Math.floor(Math.random() * nodes.length)] ?? null;
+  }
+
+  getMaxActivation(): number {
+    let max = 0;
+    for (const node of this.graph.nodes.values()) {
+      if (node.activation_level > max) {
+        max = node.activation_level;
+      }
+    }
+    return max;
+  }
+
+  findByEmbeddingSimilarity(embedding: number[], topK: number): MemoryNode[] {
+    return sortScoredNodes(
+      this.getAllNodes().map((node) => ({
+        node,
+        score: cosineSimilarity(node.embedding, embedding)
+      }))
+    )
+      .slice(0, topK)
+      .map((item) => item.node);
   }
 
   updateActivation(nodeId: string, newLevel: number): void {
@@ -201,7 +256,7 @@ export class MemoryGraphStore {
     });
   }
 
-  computeBaseLevelActivation(nodeId: string, now: number): number {
+  computeBaseLevelActivation(nodeId: string, now: number, decayD = 0.5): number {
     const node = this.graph.nodes.get(nodeId);
     if (!node) {
       return Number.NEGATIVE_INFINITY;
@@ -218,7 +273,7 @@ export class MemoryGraphStore {
 
     const total = node.activation_history.reduce((sum, timestamp) => {
       const deltaSeconds = Math.max(1, (now - timestamp) / 1000);
-      return sum + Math.pow(deltaSeconds, -0.5);
+      return sum + Math.pow(deltaSeconds, -decayD);
     }, 0);
     const next = {
       ...node,
@@ -226,6 +281,43 @@ export class MemoryGraphStore {
     };
     this.graph.nodes.set(nodeId, next);
     return next.base_level_activation;
+  }
+
+  getTopByBaseLevel(input: {
+    limit: number;
+    nowMs: number;
+    decayD: number;
+    candidateIds?: string[];
+    minHistoryLength?: number;
+  }): MemoryNode[] {
+    const candidateSet = input.candidateIds ? new Set(input.candidateIds) : null;
+    const minHistoryLength = input.minHistoryLength ?? 0;
+    const scored: Array<{ node: MemoryNode; score: number }> = [];
+
+    for (const node of this.graph.nodes.values()) {
+      if (candidateSet && !candidateSet.has(node.id)) {
+        continue;
+      }
+      if (node.activation_history.length < minHistoryLength) {
+        continue;
+      }
+      const score = this.computeBaseLevelActivation(node.id, input.nowMs, input.decayD);
+      if (!Number.isFinite(score)) {
+        continue;
+      }
+      const refreshed = this.graph.nodes.get(node.id);
+      if (!refreshed) {
+        continue;
+      }
+      scored.push({
+        node: refreshed,
+        score
+      });
+    }
+
+    return sortScoredNodes(scored)
+      .slice(0, input.limit)
+      .map((item) => item.node);
   }
 
   serialize(): Uint8Array {
