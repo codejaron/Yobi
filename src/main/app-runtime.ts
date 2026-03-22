@@ -22,7 +22,12 @@ import {
   type VoiceTranscriptionResult
 } from "@shared/types";
 import type { ProviderModelListResult } from "@shared/provider-catalog";
-import type { ActivationLogEntry, CognitionConfigPatch } from "@shared/cognition";
+import type {
+  ActivationLogEntry,
+  CognitionConfigPatch,
+  ColdArchiveStats,
+  ConsolidationReport
+} from "@shared/cognition";
 import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
@@ -462,6 +467,22 @@ export class CompanionRuntime {
 
   async getCognitionBroadcastHistory() {
     return this.cognitionEngine.getBroadcastHistory();
+  }
+
+  async triggerCognitionConsolidation(): Promise<ConsolidationReport> {
+    return this.cognitionEngine.triggerConsolidation();
+  }
+
+  async getCognitionConsolidationReport(): Promise<ConsolidationReport | null> {
+    return this.cognitionEngine.getConsolidationReport();
+  }
+
+  async getCognitionConsolidationHistory(): Promise<ConsolidationReport[]> {
+    return this.cognitionEngine.getConsolidationHistory();
+  }
+
+  async getCognitionArchiveStats(): Promise<ColdArchiveStats> {
+    return this.cognitionEngine.getArchiveStats();
   }
 
   async getScheduledTasks(): Promise<{ tasks: ReturnType<ScheduledTaskService["listTasks"]>; runs: ScheduledTaskRun[] }> {
@@ -979,6 +1000,7 @@ export class CompanionRuntime {
     chatId?: string;
     text?: string;
   }): Promise<void> {
+    this.cognitionEngine.interruptConsolidation();
     await this.activityCoordinator.recordUserActivity(input);
   }
 

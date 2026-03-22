@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
 import {
@@ -7,8 +7,10 @@ import {
   memoryNodeTypeSchema,
   type ActivationLogEntry,
   type BroadcastSummary,
+  type ColdArchiveStats,
   type CognitionConfig,
   type CognitionConfigPatch,
+  type ConsolidationReport,
   type CognitionDebugSnapshot,
   type HealthMetrics,
   type MemoryEdge,
@@ -29,6 +31,10 @@ import { EmotionStateManager } from "./workspace/emotion-state";
 import { PredictionEngine } from "./activation/prediction-coding";
 import { AttentionSchema } from "./workspace/attention-schema";
 import { GlobalWorkspace } from "./workspace/global-workspace";
+import { ColdArchive } from "./consolidation/cold-archive";
+import { ConsolidationEngine } from "./consolidation/consolidation-engine";
+import { GistExtractor } from "./consolidation/gist-extraction";
+import { SleepReplay } from "./consolidation/sleep-replay";
 
 const dialogueExtractionSchema = z.object({
   nodes: z.array(
@@ -95,6 +101,8 @@ export class CognitionEngine {
   private predictionEngine: PredictionEngine | null = null;
   private attentionSchema: AttentionSchema | null = null;
   private globalWorkspace: GlobalWorkspace | null = null;
+  private coldArchive: ColdArchive | null = null;
+  private consolidationEngine: ConsolidationEngine | null = null;
 
   constructor(private readonly input: CognitionEngineInput) {
     this.modelFactory = new ModelFactory(() => this.input.getConfig());
@@ -106,6 +114,7 @@ export class CognitionEngine {
   }
 
   async stop(): Promise<void> {
+    this.consolidationEngine?.interrupt();
     this.loop?.stop();
     this.graph?.serialize();
     await Promise.all([
@@ -117,6 +126,9 @@ export class CognitionEngine {
 
   async ingestDialogue(input: DialogueIngestInput): Promise<void> {
     await this.ensureInitialized();
+    if (this.requireConfig().consolidation.interrupt_on_user_message) {
+      this.consolidationEngine?.interrupt();
+    }
     const normalizedAssistant = input.assistantText.trim();
     const normalizedUser = input.userText?.trim() ?? "";
     if (!normalizedAssistant && !normalizedUser) {
@@ -255,6 +267,30 @@ export class CognitionEngine {
     return this.requireGlobalWorkspace().getBroadcastHistory();
   }
 
+  async triggerConsolidation(): Promise<ConsolidationReport> {
+    await this.ensureInitialized();
+    return this.requireLoop().triggerConsolidation();
+  }
+
+  async getConsolidationReport(): Promise<ConsolidationReport | null> {
+    await this.ensureInitialized();
+    return this.requireConsolidationEngine().getLastReport();
+  }
+
+  async getConsolidationHistory(): Promise<ConsolidationReport[]> {
+    await this.ensureInitialized();
+    return this.requireConsolidationEngine().getHistory();
+  }
+
+  async getArchiveStats(): Promise<ColdArchiveStats> {
+    await this.ensureInitialized();
+    return this.requireColdArchive().getArchiveStats();
+  }
+
+  interruptConsolidation(): void {
+    this.consolidationEngine?.interrupt();
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -281,6 +317,11 @@ export class CognitionEngine {
     await this.emotionState.load();
     await this.predictionEngine.load();
     await this.attentionSchema.load();
+    this.coldArchive = new ColdArchive({
+      paths: this.input.paths,
+      logger: this.input.logger,
+      getCognitionConfig: () => this.requireConfig()
+    });
     this.globalWorkspace = new GlobalWorkspace({
       graph: this.graph,
       emotionState: this.emotionState,
@@ -289,6 +330,40 @@ export class CognitionEngine {
       logger: this.input.logger,
       getCognitionConfig: () => this.requireConfig()
     });
+    const sleepReplay = new SleepReplay({
+      graph: this.graph,
+      getCognitionConfig: () => this.requireConfig()
+    });
+    const gistExtractor = new GistExtractor({
+      graph: this.graph,
+      getCognitionConfig: () => this.requireConfig(),
+      summarizeCluster: async (nodes) => {
+        const result = await generateText({
+          model: this.modelFactory.getCognitionModel(),
+          providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
+          prompt: [
+            "请将以下一组事件概括成一句抽象总结，不要逐条罗列。",
+            nodes.map((node) => `- ${node.content}`).join("\n")
+          ].join("\n"),
+          maxOutputTokens: 120
+        });
+        return result.text.trim();
+      }
+    });
+    this.consolidationEngine = new ConsolidationEngine({
+      paths: this.input.paths,
+      graph: this.graph,
+      sleepReplay,
+      gistExtractor,
+      coldArchive: this.coldArchive,
+      logger: this.input.logger,
+      getCognitionConfig: () => this.requireConfig(),
+      getUserActivityState: () => this.input.getUserActivityState?.() ?? {
+        online: this.input.getUserOnline?.() ?? true,
+        last_active: null
+      }
+    });
+    await this.consolidationEngine.load();
     this.lastExpressionTime = await this.loadLastExpressionTime();
     this.globalWorkspace.hydrateHistory(await this.loadBroadcastHistory());
     this.loop = new SubconsciousLoop({
@@ -298,6 +373,8 @@ export class CognitionEngine {
       predictionEngine: this.predictionEngine,
       attentionSchema: this.attentionSchema,
       globalWorkspace: this.globalWorkspace,
+      coldArchive: this.coldArchive,
+      consolidationEngine: this.consolidationEngine,
       memory: this.input.memory,
       modelFactory: this.modelFactory,
       logger: this.input.logger,
@@ -480,6 +557,20 @@ export class CognitionEngine {
       throw new Error("global workspace not initialized");
     }
     return this.globalWorkspace;
+  }
+
+  private requireColdArchive(): ColdArchive {
+    if (!this.coldArchive) {
+      throw new Error("cold archive not initialized");
+    }
+    return this.coldArchive;
+  }
+
+  private requireConsolidationEngine(): ConsolidationEngine {
+    if (!this.consolidationEngine) {
+      throw new Error("consolidation engine not initialized");
+    }
+    return this.consolidationEngine;
   }
 
   private requireConfig(): CognitionConfig {

@@ -23,6 +23,8 @@ import { EmotionStateManager } from "../workspace/emotion-state";
 import { PredictionEngine } from "../activation/prediction-coding";
 import { AttentionSchema } from "../workspace/attention-schema";
 import { GlobalWorkspace } from "../workspace/global-workspace";
+import { ColdArchive } from "../consolidation/cold-archive";
+import { ConsolidationEngine } from "../consolidation/consolidation-engine";
 
 const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
@@ -156,6 +158,8 @@ interface SubconsciousLoopInput {
   predictionEngine: PredictionEngine;
   attentionSchema: AttentionSchema;
   globalWorkspace: GlobalWorkspace;
+  coldArchive?: ColdArchive | null;
+  consolidationEngine?: ConsolidationEngine | null;
   memory: Pick<YobiMemory, "embedText" | "getProfile" | "listHistoryByCursor">;
   modelFactory: ModelFactory;
   logger: AppLogger;
@@ -289,6 +293,10 @@ export class SubconsciousLoop {
     return this.runAutomaticTick();
   }
 
+  async triggerConsolidation(): Promise<import("@shared/cognition").ConsolidationReport> {
+    return this.runConsolidation("manual");
+  }
+
   async triggerManualSpread(text: string): Promise<ActivationLogEntry> {
     return this.runCycle({
       signals: [
@@ -329,7 +337,7 @@ export class SubconsciousLoop {
         decayD: config.actr.decay_d
       }
     );
-    return this.runCycle({
+    const entry = await this.runCycle({
       signals: triggers.map((trigger) => this.toCognitionSignal(trigger)),
       triggerType: triggers[0]?.type ?? "time_signal",
       triggerSources: triggers.map((trigger) => ({
@@ -338,6 +346,8 @@ export class SubconsciousLoop {
       })),
       automatic: true
     });
+    await this.maybeRunConsolidation();
+    return entry;
   }
 
   private async runCycle(input: {
@@ -365,7 +375,8 @@ export class SubconsciousLoop {
         (text) => this.input.memory.embedText(text),
         {
           actr: config.actr,
-          nowMs
+          nowMs,
+          coldArchive: this.input.coldArchive ?? undefined
         }
       ));
     }
@@ -606,6 +617,40 @@ export class SubconsciousLoop {
     }
     await appendJsonlLine(this.input.paths.cognitionActivationLogPath, entry);
     await Promise.resolve(this.input.onTickCompleted(entry));
+  }
+
+  private async maybeRunConsolidation(): Promise<void> {
+    if (!this.input.consolidationEngine) {
+      return;
+    }
+    const next = this.input.consolidationEngine.shouldTrigger();
+    if (!next.should || !next.trigger) {
+      return;
+    }
+    await this.runConsolidation(next.trigger);
+  }
+
+  private async runConsolidation(trigger: "scheduled" | "size_limit" | "manual"): Promise<import("@shared/cognition").ConsolidationReport> {
+    if (!this.input.consolidationEngine) {
+      throw new Error("consolidation engine not initialized");
+    }
+
+    if (this.input.consolidationEngine.isRunning()) {
+      const latest = await this.input.consolidationEngine.getLastReport();
+      if (latest) {
+        return latest;
+      }
+      throw new Error("consolidation already running");
+    }
+
+    this.heartbeat?.pause();
+    try {
+      const report = await this.input.consolidationEngine.runConsolidation(trigger);
+      this.input.graph.serialize();
+      return report;
+    } finally {
+      this.heartbeat?.resume();
+    }
   }
 
   private toCognitionSignal(trigger: {

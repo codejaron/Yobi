@@ -4,6 +4,7 @@ import { mean } from "../utils/math";
 export class PoissonHeartbeat {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private paused = false;
   private nextScheduledTime: number | null = null;
   private ticksTotal = 0;
   private lastTickTime = 0;
@@ -25,6 +26,7 @@ export class PoissonHeartbeat {
 
   stop(): void {
     this.running = false;
+    this.paused = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -34,6 +36,26 @@ export class PoissonHeartbeat {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  pause(): void {
+    if (!this.running || this.paused) {
+      return;
+    }
+    this.paused = true;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.nextScheduledTime = null;
+  }
+
+  resume(): void {
+    if (!this.running || !this.paused) {
+      return;
+    }
+    this.paused = false;
+    this.scheduleNext();
   }
 
   updateConfig(config: LoopConfig): void {
@@ -59,7 +81,7 @@ export class PoissonHeartbeat {
   }
 
   private scheduleNext(): void {
-    if (!this.running || !this.config.enabled) {
+    if (!this.running || this.paused || !this.config.enabled) {
       this.nextScheduledTime = null;
       return;
     }

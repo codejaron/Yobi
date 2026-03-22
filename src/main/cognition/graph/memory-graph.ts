@@ -81,6 +81,12 @@ export class MemoryGraphStore {
     const normalized = normalizeNode(node);
     const duplicate = this.findDuplicate(normalized);
     if (duplicate) {
+      const duplicateLastConsolidatedAt = duplicate.last_consolidated_at
+        ? Date.parse(duplicate.last_consolidated_at)
+        : Number.NEGATIVE_INFINITY;
+      const normalizedLastConsolidatedAt = normalized.last_consolidated_at
+        ? Date.parse(normalized.last_consolidated_at)
+        : Number.NEGATIVE_INFINITY;
       const merged: MemoryNode = {
         ...duplicate,
         content: normalized.created_at >= duplicate.created_at ? normalized.content : duplicate.content,
@@ -96,6 +102,15 @@ export class MemoryGraphStore {
           : duplicate.emotional_valence,
         created_at: Math.min(duplicate.created_at, normalized.created_at),
         last_activated_at: Math.max(duplicate.last_activated_at, normalized.last_activated_at),
+        source_time_range: normalized.source_time_range ?? duplicate.source_time_range,
+        source_node_count: normalized.source_node_count ?? duplicate.source_node_count,
+        consolidation_count: Math.max(
+          duplicate.consolidation_count ?? 0,
+          normalized.consolidation_count ?? 0
+        ) || undefined,
+        last_consolidated_at: normalizedLastConsolidatedAt >= duplicateLastConsolidatedAt
+          ? (normalized.last_consolidated_at ?? duplicate.last_consolidated_at)
+          : duplicate.last_consolidated_at,
         metadata: {
           ...duplicate.metadata,
           ...normalized.metadata
@@ -199,6 +214,10 @@ export class MemoryGraphStore {
       .filter((edge): edge is MemoryEdge => edge !== null);
   }
 
+  getIncomingEdges(nodeId: string): MemoryEdge[] {
+    return this.graph.edges.filter((edge) => edge.target === nodeId);
+  }
+
   getRandomNode(): MemoryNode | null {
     const nodes = this.getAllNodes();
     if (nodes.length === 0) {
@@ -226,6 +245,49 @@ export class MemoryGraphStore {
     )
       .slice(0, topK)
       .map((item) => item.node);
+  }
+
+  getNodesByTimeWindow(start: number, end: number): MemoryNode[] {
+    return this.getAllNodes().filter((node) => node.created_at >= start && node.created_at <= end);
+  }
+
+  removeNodes(nodeIds: string[]): void {
+    if (nodeIds.length === 0) {
+      return;
+    }
+
+    const idSet = new Set(nodeIds);
+    for (const nodeId of idSet) {
+      this.graph.nodes.delete(nodeId);
+      this.graph.adjacency.delete(nodeId);
+    }
+
+    this.graph.edges = this.graph.edges.filter((edge) => !idSet.has(edge.source) && !idSet.has(edge.target));
+    this.rebuildAdjacency();
+  }
+
+  getOrphanNodes(): MemoryNode[] {
+    return this.getAllNodes().filter((node) => this.getDegreeCentrality(node.id) === 0);
+  }
+
+  getDegreeCentrality(nodeId: string): number {
+    return this.getOutgoingEdges(nodeId).length + this.getIncomingEdges(nodeId).length;
+  }
+
+  getStatistics(): {
+    nodeCount: number;
+    edgeCount: number;
+    meanWeight: number;
+    maxWeight: number;
+  } {
+    const edges = this.getAllEdges();
+    const totalWeight = edges.reduce((sum, edge) => sum + edge.weight, 0);
+    return {
+      nodeCount: this.graph.nodes.size,
+      edgeCount: edges.length,
+      meanWeight: edges.length > 0 ? totalWeight / edges.length : 0,
+      maxWeight: edges.length > 0 ? Math.max(...edges.map((edge) => edge.weight)) : 0
+    };
   }
 
   updateActivation(nodeId: string, newLevel: number): void {
@@ -397,6 +459,11 @@ export class MemoryGraphStore {
 
     let best: { node: MemoryNode; score: number } | null = null;
     for (const candidate of this.graph.nodes.values()) {
+      // Abstract summaries must remain distinct nodes even when their mean embeddings
+      // are close to the events they summarize.
+      if (node.type === "abstract_summary" || candidate.type === "abstract_summary") {
+        continue;
+      }
       if (candidate.embedding.length === 0) {
         continue;
       }

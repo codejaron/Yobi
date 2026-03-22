@@ -8,6 +8,8 @@ import {
   type CognitionConfig,
   type CognitionConfigPatch,
   type CognitionDebugSnapshot,
+  type ColdArchiveStats,
+  type ConsolidationReport,
   type HealthMetrics,
   type MemoryEdge,
   type MemoryNode
@@ -24,7 +26,8 @@ const NODE_COLORS: Record<MemoryNode["type"], string> = {
   external_entity: "#9013FE",
   time_marker: "#9B9B9B",
   intent: "#50E3C2",
-  pattern: "#8B572A"
+  pattern: "#8B572A",
+  abstract_summary: "#C17C2F"
 };
 
 type GraphNode = MemoryNode & {
@@ -427,6 +430,36 @@ const sliderDefinitions = [
     update: (value: number) => ({ triggers: { random_walk_probability: value } })
   },
   {
+    id: "consolidation_forget_threshold_days",
+    label: "遗忘阈值（天）",
+    description: "超过阈值且低价值的节点才会迁移到冷区",
+    min: 1,
+    max: 30,
+    step: 1,
+    state: (cfg: CognitionConfig) => cfg.consolidation.forget_threshold_days,
+    update: (value: number) => ({ consolidation: { forget_threshold_days: value } })
+  },
+  {
+    id: "consolidation_cluster_similarity_threshold",
+    label: "抽象聚类阈值",
+    description: "事件语义相似度超过该值时聚为一个摘要簇",
+    min: 0.5,
+    max: 0.95,
+    step: 0.05,
+    state: (cfg: CognitionConfig) => cfg.consolidation.cluster_similarity_threshold,
+    update: (value: number) => ({ consolidation: { cluster_similarity_threshold: value } })
+  },
+  {
+    id: "consolidation_replay_hebbian_rate",
+    label: "回放 Hebbian 学习率",
+    description: "睡眠回放的温和强化速率",
+    min: 0,
+    max: 0.1,
+    step: 0.005,
+    state: (cfg: CognitionConfig) => cfg.consolidation.replay_hebbian_rate,
+    update: (value: number) => ({ consolidation: { replay_hebbian_rate: value } })
+  },
+  {
     id: "emotion_modulation_strength",
     label: "情绪调制强度",
     description: "控制情绪匹配对扩散边权的放大/抑制",
@@ -617,6 +650,10 @@ export function CognitionDebugPage() {
   const [configState, setConfigState] = useState<CognitionConfig | null>(null);
   const [healthMetrics, setHealthMetrics] = useState<HealthMetrics | null>(null);
   const [broadcastHistory, setBroadcastHistory] = useState<BroadcastSummary[]>([]);
+  const [consolidationReport, setConsolidationReport] = useState<ConsolidationReport | null>(null);
+  const [consolidationHistory, setConsolidationHistory] = useState<ConsolidationReport[]>([]);
+  const [archiveStats, setArchiveStats] = useState<ColdArchiveStats | null>(null);
+  const [consolidationStatus, setConsolidationStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [manualText, setManualText] = useState("中午吃什么");
   const [manualStatus, setManualStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -660,11 +697,41 @@ export function CognitionDebugPage() {
     }
   }, [snapshot]);
 
+  const loadConsolidationReport = useCallback(async () => {
+    try {
+      const next = await window.companion.getCognitionConsolidationReport();
+      setConsolidationReport(next);
+    } catch {
+      setConsolidationReport(null);
+    }
+  }, []);
+
+  const loadConsolidationHistory = useCallback(async () => {
+    try {
+      const next = await window.companion.getCognitionConsolidationHistory();
+      setConsolidationHistory(next);
+    } catch {
+      setConsolidationHistory([]);
+    }
+  }, []);
+
+  const loadArchiveStats = useCallback(async () => {
+    try {
+      const next = await window.companion.getCognitionArchiveStats();
+      setArchiveStats(next);
+    } catch {
+      setArchiveStats(null);
+    }
+  }, []);
+
   useEffect(() => {
     loadSnapshot();
     void loadHealthMetrics();
     void loadBroadcastHistory();
-  }, [loadBroadcastHistory, loadHealthMetrics, loadSnapshot]);
+    void loadConsolidationReport();
+    void loadConsolidationHistory();
+    void loadArchiveStats();
+  }, [loadArchiveStats, loadBroadcastHistory, loadConsolidationHistory, loadConsolidationReport, loadHealthMetrics, loadSnapshot]);
 
   const startPlaybackFromEntry = useCallback((entry: ActivationLogEntry | null) => {
     const pathLog = entry?.path_log ?? [];
@@ -703,9 +770,12 @@ export function CognitionDebugPage() {
       void loadSnapshot();
       void loadHealthMetrics();
       void loadBroadcastHistory();
+      void loadConsolidationReport();
+      void loadConsolidationHistory();
+      void loadArchiveStats();
     });
     return () => unsubscribe();
-  }, [autoRefresh, loadBroadcastHistory, loadHealthMetrics, loadSnapshot, startPlaybackFromEntry]);
+  }, [autoRefresh, loadArchiveStats, loadBroadcastHistory, loadConsolidationHistory, loadConsolidationReport, loadHealthMetrics, loadSnapshot, startPlaybackFromEntry]);
 
   useEffect(() => {
     if (!snapshot || !canvasRef.current || size.width === 0 || size.height === 0) {
@@ -904,8 +974,26 @@ export function CognitionDebugPage() {
       setSelectedLog(result.entry);
       startPlaybackFromEntry(result.entry);
       await loadHealthMetrics();
+      await loadConsolidationReport();
+      await loadConsolidationHistory();
+      await loadArchiveStats();
     } catch (error) {
       setManualStatus("error");
+    }
+  };
+
+  const handleManualConsolidation = async () => {
+    setConsolidationStatus("pending");
+    try {
+      const report = await window.companion.triggerCognitionConsolidation();
+      setConsolidationStatus("success");
+      setConsolidationReport(report);
+      await loadSnapshot();
+      await loadHealthMetrics();
+      await loadConsolidationHistory();
+      await loadArchiveStats();
+    } catch {
+      setConsolidationStatus("error");
     }
   };
 
@@ -955,6 +1043,10 @@ export function CognitionDebugPage() {
       workspace: {
         ...((base as unknown as { workspace?: CognitionConfig["workspace"] }).workspace ?? DEFAULT_COGNITION_CONFIG.workspace),
         ...((partial as unknown as { workspace?: Partial<CognitionConfig["workspace"]> }).workspace ?? {})
+      },
+      consolidation: {
+        ...base.consolidation,
+        ...(partial.consolidation ?? {})
       }
     };
     const asBase = base as unknown as Record<string, unknown>;
@@ -998,6 +1090,9 @@ export function CognitionDebugPage() {
       await loadSnapshot();
       await loadHealthMetrics();
       await loadBroadcastHistory();
+      await loadConsolidationReport();
+      await loadConsolidationHistory();
+      await loadArchiveStats();
     } catch {
       // ignore
     }
@@ -1017,6 +1112,12 @@ export function CognitionDebugPage() {
     () => (broadcastHistory.length > 0 ? broadcastHistory : broadcastHistoryOf(snapshot)),
     [broadcastHistory, snapshot]
   );
+  const hotZoneRatio = useMemo(() => {
+    if (!snapshot || !configState) {
+      return 0;
+    }
+    return snapshot.graph.stats.node_count / Math.max(1, configState.consolidation.hot_node_limit);
+  }, [configState, snapshot]);
 
   const timelineBounds = useMemo(() => {
     const logs = logDots.filter((log) => log.timestamp);
@@ -1261,6 +1362,32 @@ export function CognitionDebugPage() {
 
           <Card>
             <CardHeader className="pb-3">
+              <CardTitle>整合热区</CardTitle>
+              <CardDescription>观察热区规模是否逼近整合阈值</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center justify-between text-slate-800">
+                <span>热区节点</span>
+                <span>
+                  {snapshot?.graph.stats.node_count ?? 0} / {configState?.consolidation.hot_node_limit ?? DEFAULT_COGNITION_CONFIG.consolidation.hot_node_limit}
+                </span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    hotZoneRatio >= 0.95 ? "bg-rose-500" : hotZoneRatio >= 0.8 ? "bg-amber-500" : "bg-cyan-500"
+                  }`}
+                  style={{ width: `${Math.min(100, hotZoneRatio * 100)}%` }}
+                />
+              </div>
+              <div className="text-xs text-slate-600">
+                当前归档节点 {archiveStats?.totalNodes ?? 0}，归档大小 {formatNumeric((archiveStats?.totalSizeBytes ?? 0) / 1024, 1)} KB
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
               <CardTitle>情绪指示器</CardTitle>
               <CardDescription>Russell 环形图（Valence / Arousal）</CardDescription>
             </CardHeader>
@@ -1381,6 +1508,81 @@ export function CognitionDebugPage() {
               )}
             </CardContent>
           </Card>
+
+          {(configState?.consolidation.enabled ?? true) ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle>睡眠整合</CardTitle>
+                <CardDescription>最近一次整合报告与最近历史</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {consolidationReport ? (
+                  <div className="rounded-xl border border-cyan-200 bg-cyan-50/70 px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-medium text-slate-900">
+                        {consolidationReport.trigger} · {consolidationReport.interrupted ? "未完成" : "完成"}
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {toEpochMs(consolidationReport.completed_at) ? formatTime(toEpochMs(consolidationReport.completed_at)!) : "--"}
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-700">
+                      <span>耗时 {consolidationReport.duration_ms} ms</span>
+                      <span>回放 {consolidationReport.replay_report.replayedCount}</span>
+                      <span>抽象节点 {consolidationReport.gist_report.abstractNodesCreated}</span>
+                      <span>迁移冷区 {consolidationReport.archive_report.migratedCount}</span>
+                      <span>
+                        热区 {consolidationReport.before.nodeCount} → {consolidationReport.after.nodeCount}
+                      </span>
+                    </div>
+                    <details className="mt-2 rounded-md border border-border/60 bg-white/80 px-2 py-2">
+                      <summary className="cursor-pointer font-medium text-slate-900">展开整合详情</summary>
+                      <div className="mt-2 space-y-2 text-xs text-slate-700">
+                        <div>
+                          新关联：{consolidationReport.novel_associations.length > 0
+                            ? consolidationReport.novel_associations.map((item) => `${resolveNodeLabel({ nodeId: item.seedA_id, labelById: nodeLabelById })} ↔ ${resolveNodeLabel({ nodeId: item.seedB_id, labelById: nodeLabelById })}`).join(" · ")
+                            : "无"}
+                        </div>
+                        <div>
+                          健康校验：
+                          {` hot_limit=${consolidationReport.health_check.hot_node_limit_ok ? "ok" : "fail"}`}
+                          {` · orphans=${consolidationReport.health_check.no_orphans ? "ok" : "fail"}`}
+                          {` · self_loops=${consolidationReport.health_check.no_self_loops ? "ok" : "fail"}`}
+                          {` · mean=${consolidationReport.health_check.weight_mean_ok ? "ok" : "fail"}`}
+                          {` · max=${consolidationReport.health_check.weight_max_ok ? "ok" : "fail"}`}
+                        </div>
+                        <div>
+                          归档统计：排除抽象引用 {consolidationReport.archive_report.excludedByAbstraction} · 孤立迁移 {consolidationReport.archive_report.orphansMigrated}
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground">尚无整合报告。</div>
+                )}
+                {consolidationHistory.length > 0 ? (
+                  <div className="space-y-2">
+                    {consolidationHistory.slice(0, 5).map((item) => (
+                      <div key={`${item.started_at}-${item.trigger}`} className="rounded-xl border border-border/60 bg-white/80 px-3 py-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-medium text-slate-900">{item.trigger}</div>
+                          <div className="text-xs text-slate-600">
+                            {toEpochMs(item.completed_at) ? formatTime(toEpochMs(item.completed_at)!) : "--"}
+                          </div>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-700">
+                          回放 {item.replay_report.replayedCount} · 摘要 {item.gist_report.abstractNodesCreated} · 迁移 {item.archive_report.migratedCount}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="rounded-xl border border-border/60 bg-white/80 px-3 py-2 text-xs text-slate-700">
+                  冷区月份：{archiveStats?.oldestMonth ?? "--"} → {archiveStats?.newestMonth ?? "--"}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card className="min-h-[260px]">
             <CardHeader>
@@ -1629,6 +1831,25 @@ export function CognitionDebugPage() {
                 />
                 <span>启用全局广播</span>
               </label>
+              <label className="flex items-center gap-2 rounded-xl border border-border/60 bg-slate-50/70 px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={(configState?.consolidation.enabled ?? true) === true}
+                  onChange={(event) => {
+                    const partial = { consolidation: { enabled: event.target.checked } } as CognitionConfigPatch;
+                    if (configState) {
+                      setConfigState(mergeConfig(configState, partial));
+                    }
+                    void window.companion.updateCognitionConfig(partial).then(async () => {
+                      await loadSnapshot();
+                      await loadConsolidationReport();
+                      await loadConsolidationHistory();
+                      await loadArchiveStats();
+                    }).catch(() => {});
+                  }}
+                />
+                <span>启用睡眠整合</span>
+              </label>
               {sliderDefinitions.map((slider) => {
                 const value = configState ? slider.state(configState) : slider.state(DEFAULT_COGNITION_CONFIG);
                 return (
@@ -1668,12 +1889,19 @@ export function CognitionDebugPage() {
                 <Button onClick={handleManualSpread} disabled={manualStatus === "pending"}>
                   {manualStatus === "pending" ? "触发中…" : "手动触发扩散"}
                 </Button>
+                {(configState?.consolidation.enabled ?? true) ? (
+                  <Button variant="outline" onClick={handleManualConsolidation} disabled={consolidationStatus === "pending"}>
+                    {consolidationStatus === "pending" ? "整合中…" : "手动触发整合"}
+                  </Button>
+                ) : null}
                 <Button variant="outline" onClick={() => setAutoRefresh((current) => !current)}>
                   自动刷新 {autoRefresh ? "开启" : "关闭"}
                 </Button>
               </div>
               {manualStatus === "success" ? <p className="text-xs text-emerald-700">触发完成</p> : null}
               {manualStatus === "error" ? <p className="text-xs text-rose-700">触发失败</p> : null}
+              {consolidationStatus === "success" ? <p className="text-xs text-emerald-700">整合完成</p> : null}
+              {consolidationStatus === "error" ? <p className="text-xs text-rose-700">整合失败</p> : null}
             </CardContent>
           </Card>
         </div>

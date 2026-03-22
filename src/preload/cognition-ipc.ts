@@ -11,6 +11,10 @@ export function createCognitionIpcApi(ipcRenderer: IpcRenderer): Pick<
   | "updateCognitionConfig"
   | "getCognitionHealthMetrics"
   | "getCognitionBroadcastHistory"
+  | "triggerCognitionConsolidation"
+  | "getCognitionConsolidationReport"
+  | "getCognitionConsolidationHistory"
+  | "getCognitionArchiveStats"
   | "onCognitionTickCompleted"
 > {
   return {
@@ -28,6 +32,18 @@ export function createCognitionIpcApi(ipcRenderer: IpcRenderer): Pick<
     },
     getCognitionBroadcastHistory() {
       return ipcRenderer.invoke("cognition:getBroadcastHistory");
+    },
+    triggerCognitionConsolidation() {
+      return ipcRenderer.invoke("cognition:triggerConsolidation");
+    },
+    getCognitionConsolidationReport() {
+      return ipcRenderer.invoke("cognition:getConsolidationReport");
+    },
+    getCognitionConsolidationHistory() {
+      return ipcRenderer.invoke("cognition:getConsolidationHistory");
+    },
+    getCognitionArchiveStats() {
+      return ipcRenderer.invoke("cognition:getArchiveStats");
     },
     onCognitionTickCompleted(listener) {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {

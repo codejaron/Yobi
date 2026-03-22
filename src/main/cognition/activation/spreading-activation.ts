@@ -69,9 +69,14 @@ export function spread(
   options?: {
     emotionState?: EmotionStateManager | null;
     emotionConfig?: EmotionConfig;
+    overrideConfig?: Partial<SpreadingConfig>;
   }
 ): ActivationResult {
   const runtimeConfig = resolveSpreadConfig(config);
+  const spreadingConfig = {
+    ...runtimeConfig.spreading,
+    ...(options?.overrideConfig ?? {})
+  };
   const emotionConfig = options?.emotionConfig ?? DEFAULT_COGNITION_CONFIG.emotion;
   const activated = new Map<string, number>();
   const pathLog: ActivationPathLogRound[] = [];
@@ -85,7 +90,7 @@ export function spread(
 
   let frontier = initialFrontier;
 
-  for (let depth = 0; depth < runtimeConfig.spreading.diffusion_max_depth; depth += 1) {
+  for (let depth = 0; depth < spreadingConfig.diffusion_max_depth; depth += 1) {
     if (frontier.size === 0) {
       break;
     }
@@ -120,7 +125,7 @@ export function spread(
           sourceNode,
           targetNode,
           edge: neighbor.edge,
-          temporalDecayRho: runtimeConfig.spreading.temporal_decay_rho
+          temporalDecayRho: spreadingConfig.temporal_decay_rho
         });
         const modulatedWeight = options?.emotionState
           ? computeEmotionModulatedWeight(
@@ -130,7 +135,7 @@ export function spread(
               emotionConfig
             )
           : effectiveWeight;
-        const propagation = sourceActivation * runtimeConfig.spreading.spreading_factor * modulatedWeight / fanFactor;
+        const propagation = sourceActivation * spreadingConfig.spreading_factor * modulatedWeight / fanFactor;
         if (propagation <= 0) {
           continue;
         }
@@ -146,7 +151,7 @@ export function spread(
     }
 
     for (const sourceId of frontier) {
-      const nextValue = (activated.get(sourceId) ?? 0) * runtimeConfig.spreading.retention_delta;
+      const nextValue = (activated.get(sourceId) ?? 0) * spreadingConfig.retention_delta;
       activated.set(sourceId, nextValue);
       graph.setActivationLevel(sourceId, nextValue);
       retained.push({
@@ -157,8 +162,8 @@ export function spread(
 
     const inhibitionResult = applyLateralInhibition(propagationTotals, runtimeConfig.inhibition);
     const gatedTotals = applySigmoidGate(inhibitionResult.totals, runtimeConfig.sigmoid);
-    const trimmedTotals = gatedTotals.size > runtimeConfig.spreading.spreading_size_limit
-      ? trimActivationTotals(gatedTotals, runtimeConfig.spreading.spreading_size_limit)
+    const trimmedTotals = gatedTotals.size > spreadingConfig.spreading_size_limit
+      ? trimActivationTotals(gatedTotals, spreadingConfig.spreading_size_limit)
       : null;
     const finalRoundTotals = trimmedTotals ?? gatedTotals;
     const survivingTargets = new Set(finalRoundTotals.keys());

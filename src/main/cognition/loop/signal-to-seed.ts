@@ -1,5 +1,6 @@
 import type { ActrConfig } from "@shared/cognition";
 import { MemoryGraphStore } from "../graph/memory-graph";
+import type { ColdArchive } from "../consolidation/cold-archive";
 
 const MANUAL_SEED_SIMILARITY_THRESHOLD = 0.55;
 const MANUAL_SEED_TYPE_WEIGHT: Record<string, number> = {
@@ -106,6 +107,7 @@ export async function signalToSeeds(
   options: {
     actr: ActrConfig;
     nowMs?: number;
+    coldArchive?: ColdArchive;
   } = {
     actr: {
       decay_d: 0.5,
@@ -113,14 +115,29 @@ export async function signalToSeeds(
     }
   }
 ): Promise<Array<{ nodeId: string; energy: number }>> {
+  const recalled = options.coldArchive?.consumePendingRecall() ?? null;
+  const recalledSeeds: Array<{ nodeId: string; energy: number }> = [];
+  if (recalled) {
+    graph.addNode(recalled.node);
+    for (const edge of recalled.edges) {
+      if (graph.getNode(edge.source) && graph.getNode(edge.target)) {
+        graph.addEdge(edge);
+      }
+    }
+    recalledSeeds.push({
+      nodeId: recalled.node.id,
+      energy: 0.7
+    });
+  }
+
   const nodes = graph.getAllNodes();
   if (nodes.length === 0) {
-    return [];
+    return recalledSeeds;
   }
 
   if (signal.type === "time_signal") {
     const weekdayMatches = weekdayAliases(signal.payload.weekday);
-    return nodes
+    return [...recalledSeeds, ...nodes
       .filter((node) => node.type === "time_marker")
       .filter((node) => {
         const content = node.content.toLowerCase();
@@ -132,7 +149,7 @@ export async function signalToSeeds(
       .map((node) => ({
         nodeId: node.id,
         energy: 1
-      }));
+      }))];
   }
 
   let seeds: Array<{ nodeId: string; energy: number }> = [];
@@ -140,12 +157,12 @@ export async function signalToSeeds(
   if (signal.type === "manual_signal") {
     const text = signal.payload.text.trim();
     if (!text) {
-      return [];
+      return recalledSeeds;
     }
 
     const queryEmbedding = await embedText(text);
     if (!queryEmbedding || queryEmbedding.length === 0) {
-      return [];
+      return recalledSeeds;
     }
 
     seeds = nodes
@@ -161,21 +178,27 @@ export async function signalToSeeds(
         return left.nodeId.localeCompare(right.nodeId);
       })
       .slice(0, 3);
+    if (seeds.length < 3) {
+      options.coldArchive?.requestAsyncRecall(queryEmbedding);
+    }
   } else if (signal.type === "dialogue_residue") {
     const text = signal.payload.text.trim();
     if (!text) {
-      return [];
+      return recalledSeeds;
     }
 
     const queryEmbedding = await embedText(text);
     if (!queryEmbedding || queryEmbedding.length === 0) {
-      return [];
+      return recalledSeeds;
     }
 
     seeds = graph.findByEmbeddingSimilarity(queryEmbedding, 3).map((node) => ({
       nodeId: node.id,
       energy: 0.8
     }));
+    if (seeds.length < 3) {
+      options.coldArchive?.requestAsyncRecall(queryEmbedding);
+    }
   } else if (signal.type === "silence") {
     const nowMs = options.nowMs ?? Date.now();
     const candidateIds = nodes
@@ -215,7 +238,7 @@ export async function signalToSeeds(
     seed.energy += baseBonus;
   }
 
-  return seeds
+  return [...recalledSeeds, ...seeds]
     .filter((seed) => graph.getNode(seed.nodeId))
     .sort((left, right) => {
       if (right.energy !== left.energy) {

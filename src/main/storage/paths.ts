@@ -77,6 +77,22 @@ export class CompanionPaths {
     return path.join(this.cognitionDir, "attention-focus.json");
   }
 
+  get cognitionConsolidationLogPath(): string {
+    return path.join(this.cognitionDir, "consolidation-log.jsonl");
+  }
+
+  get cognitionConsolidationStatePath(): string {
+    return path.join(this.cognitionDir, "consolidation-state.json");
+  }
+
+  get cognitionColdArchiveDir(): string {
+    return path.join(this.cognitionDir, "cold-archive");
+  }
+
+  get cognitionColdArchiveIndexPath(): string {
+    return path.join(this.cognitionColdArchiveDir, "cold-index.jsonl");
+  }
+
   get factsPath(): string {
     return path.join(this.memoryDir, "facts.json");
   }
@@ -209,6 +225,7 @@ export class CompanionPaths {
     mkdirSync(this.baseDir, { recursive: true });
     mkdirSync(this.memoryDir, { recursive: true });
     mkdirSync(this.cognitionDir, { recursive: true });
+    mkdirSync(this.cognitionColdArchiveDir, { recursive: true });
     mkdirSync(this.episodesDir, { recursive: true });
     mkdirSync(this.sessionsDir, { recursive: true });
     mkdirSync(this.mainSessionDir, { recursive: true });

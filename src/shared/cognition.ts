@@ -16,7 +16,8 @@ export const memoryNodeTypeSchema = z.enum([
   "external_entity",
   "time_marker",
   "intent",
-  "pattern"
+  "pattern",
+  "abstract_summary"
 ]);
 
 export const memoryEdgeRelationSchema = z.enum([
@@ -26,7 +27,9 @@ export const memoryEdgeRelationSchema = z.enum([
   "emotional",
   "contrast",
   "conversation",
-  "sequential"
+  "sequential",
+  "abstracts",
+  "related_to"
 ]);
 
 export const thoughtBubbleStatusSchema = z.enum([
@@ -129,6 +132,25 @@ export const cognitionConfigSchema = z.object({
     broadcast_failure_policy: z.enum(["warn_and_skip"]),
     broadcast_history_max: z.number().int()
   }).strict(),
+  consolidation: z.object({
+    enabled: z.boolean(),
+    schedule_hour_start: z.number().int(),
+    schedule_hour_end: z.number().int(),
+    silence_threshold_hours: z.number(),
+    hot_node_limit: z.number().int(),
+    forget_threshold_days: z.number(),
+    replay_spreading_factor: z.number(),
+    replay_diffusion_depth: z.number().int(),
+    replay_hebbian_rate: z.number(),
+    cluster_similarity_threshold: z.number(),
+    min_cluster_size: z.number().int(),
+    abstraction_model: z.string(),
+    cold_recall_similarity_threshold: z.number(),
+    cold_recall_months_lookback: z.number().int(),
+    max_consolidation_duration_minutes: z.number(),
+    interrupt_on_user_message: z.boolean(),
+    checkpoint_interval_nodes: z.number().int()
+  }).strict(),
   expression: z.object({
     activation_threshold: z.number(),
     cooldown_minutes: z.number()
@@ -146,6 +168,7 @@ export type EmotionConfig = CognitionConfig["emotion"];
 export type PredictionConfig = CognitionConfig["prediction"];
 export type AttentionConfig = CognitionConfig["attention"];
 export type WorkspaceConfig = CognitionConfig["workspace"];
+export type ConsolidationConfig = CognitionConfig["consolidation"];
 export type ExpressionConfig = CognitionConfig["expression"];
 export type CognitionConfigPatch = DeepPartial<CognitionConfig>;
 
@@ -242,6 +265,25 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     broadcast_failure_policy: "warn_and_skip",
     broadcast_history_max: 20
   },
+  consolidation: {
+    enabled: true,
+    schedule_hour_start: 3,
+    schedule_hour_end: 5,
+    silence_threshold_hours: 2,
+    hot_node_limit: 8000,
+    forget_threshold_days: 7,
+    replay_spreading_factor: 0.5,
+    replay_diffusion_depth: 2,
+    replay_hebbian_rate: 0.03,
+    cluster_similarity_threshold: 0.75,
+    min_cluster_size: 3,
+    abstraction_model: "cheap",
+    cold_recall_similarity_threshold: 0.8,
+    cold_recall_months_lookback: 3,
+    max_consolidation_duration_minutes: 30,
+    interrupt_on_user_message: true,
+    checkpoint_interval_nodes: 50
+  },
   expression: {
     activation_threshold: 0.4,
     cooldown_minutes: 30
@@ -259,6 +301,13 @@ export interface MemoryNode {
   emotional_valence: number;
   created_at: number;
   last_activated_at: number;
+  source_time_range?: {
+    earliest: string;
+    latest: string;
+  };
+  source_node_count?: number;
+  consolidation_count?: number;
+  last_consolidated_at?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -399,6 +448,73 @@ export interface HealthMetrics {
   broadcast_overlap_warnings_count: number;
   alerts: HealthAlert[];
   heartbeat_stats: HeartbeatStats;
+}
+
+export interface ColdArchiveStats {
+  totalNodes: number;
+  totalSizeBytes: number;
+  oldestMonth: string | null;
+  newestMonth: string | null;
+}
+
+export interface NovelAssociation {
+  seedA_id: string;
+  seedB_id: string;
+  sharedActivatedNodes: string[];
+  activationPeak: number;
+}
+
+export interface ReplayReport {
+  replayedCount: number;
+  strengthenedEdges: number;
+  novelAssociationsCount: number;
+  lastProcessedIndex: number;
+}
+
+export interface GistReport {
+  clusterCount: number;
+  abstractNodesCreated: number;
+  skippedClusters: number;
+  newRelatedEdges: number;
+}
+
+export interface ArchiveReport {
+  migratedCount: number;
+  excludedByAbstraction: number;
+  orphansMigrated: number;
+  lastProcessedIndex: number;
+}
+
+export interface ConsolidationHealthCheck {
+  hot_node_limit_ok: boolean;
+  no_orphans: boolean;
+  no_self_loops: boolean;
+  weight_mean_ok: boolean;
+  weight_max_ok: boolean;
+  abstract_growth_ok: boolean;
+}
+
+export interface ConsolidationGraphStats {
+  nodeCount: number;
+  edgeCount: number;
+  meanWeight: number;
+  maxWeight: number;
+}
+
+export interface ConsolidationReport {
+  trigger: "scheduled" | "size_limit" | "manual";
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  replay_report: ReplayReport;
+  gist_report: GistReport;
+  archive_report: ArchiveReport;
+  novel_associations: NovelAssociation[];
+  health_check: ConsolidationHealthCheck;
+  before: ConsolidationGraphStats;
+  after: ConsolidationGraphStats;
+  interrupted: boolean;
+  last_completed_phase: "A" | "B" | "C" | "D" | "E";
 }
 
 export interface EmotionWorkspaceState {
