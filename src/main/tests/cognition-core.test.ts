@@ -17,6 +17,9 @@ import { ThoughtPool } from "../cognition/thoughts/thought-bubble.js";
 import { roughFilter } from "../cognition/evaluation/rough-filter.js";
 import { signalToSeeds } from "../cognition/loop/signal-to-seed.js";
 import { SubconsciousLoop } from "../cognition/loop/subconscious-loop.js";
+import { EmotionStateManager } from "../cognition/workspace/emotion-state.js";
+import { PredictionEngine } from "../cognition/activation/prediction-coding.js";
+import { AttentionSchema } from "../cognition/workspace/attention-schema.js";
 
 async function createTempPaths(prefix: string): Promise<CompanionPaths> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -55,6 +58,31 @@ function makeActivationResult(entries: Array<[string, number]>): ActivationResul
 
 function assertClose(actual: number, expected: number, epsilon = 1e-6): void {
   assert.ok(Math.abs(actual - expected) < epsilon, `expected ${actual} to be within ${epsilon} of ${expected}`);
+}
+
+async function createWorkspaceManagers(paths: CompanionPaths, config = DEFAULT_COGNITION_CONFIG) {
+  const emotionState = new EmotionStateManager({
+    paths,
+    logger: { warn() {} } as never,
+    getCognitionConfig: () => config,
+    analyzeEmotion: async () => config.emotion.neutral_state
+  });
+  await emotionState.load();
+  const predictionEngine = new PredictionEngine({
+    paths,
+    getCognitionConfig: () => config
+  });
+  await predictionEngine.load();
+  const attentionSchema = new AttentionSchema({
+    paths,
+    getCognitionConfig: () => config
+  });
+  await attentionSchema.load();
+  return {
+    emotionState,
+    predictionEngine,
+    attentionSchema
+  };
 }
 
 test("loadCognitionConfig bootstraps the default cognition config file", async () => {
@@ -817,10 +845,14 @@ test("SubconsciousLoop clears stale activation when a manual run produces no see
         activation_level: 0.42
       })
     );
+    const workspace = await createWorkspaceManagers(paths);
 
     const loop = new SubconsciousLoop({
       graph,
       thoughtPool: new ThoughtPool(paths),
+      emotionState: workspace.emotionState,
+      predictionEngine: workspace.predictionEngine,
+      attentionSchema: workspace.attentionSchema,
       memory: {
         embedText: async () => [1, 0, 0],
         getProfile: async () => ({}) as never,
@@ -890,10 +922,14 @@ test("SubconsciousLoop logs a fresh bubble peak without decaying it in the same 
         activation_threshold: 2
       }
     };
+    const workspace = await createWorkspaceManagers(paths, config);
 
     const loop = new SubconsciousLoop({
       graph,
       thoughtPool: new ThoughtPool(paths),
+      emotionState: workspace.emotionState,
+      predictionEngine: workspace.predictionEngine,
+      attentionSchema: workspace.attentionSchema,
       memory: {
         embedText: async () => [1, 0, 0],
         getProfile: async () => ({}) as never,
@@ -971,10 +1007,14 @@ test("SubconsciousLoop hop summaries use post-gate surviving activations instead
         activation_threshold: 2
       }
     };
+    const workspace = await createWorkspaceManagers(paths, config);
 
     const loop = new SubconsciousLoop({
       graph,
       thoughtPool: new ThoughtPool(paths),
+      emotionState: workspace.emotionState,
+      predictionEngine: workspace.predictionEngine,
+      attentionSchema: workspace.attentionSchema,
       memory: {
         embedText: async () => [1, 0, 0],
         getProfile: async () => ({}) as never,

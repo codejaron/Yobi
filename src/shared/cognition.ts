@@ -95,6 +95,28 @@ export const cognitionConfigSchema = z.object({
     random_walk_probability: z.number(),
     rescue_activation_floor: z.number()
   }).strict(),
+  emotion: z.object({
+    modulation_strength: z.number(),
+    valence_weight: z.number(),
+    arousal_weight: z.number(),
+    decay_rate: z.number(),
+    analysis_model: z.string(),
+    neutral_state: z.object({
+      valence: z.number(),
+      arousal: z.number()
+    }).strict()
+  }).strict(),
+  prediction: z.object({
+    history_window: z.number().int(),
+    surprise_bonus: z.number(),
+    familiarity_penalty: z.number(),
+    similarity_threshold: z.number()
+  }).strict(),
+  attention: z.object({
+    max_focus_nodes: z.number().int(),
+    focus_seed_energy: z.number(),
+    update_on: z.enum(["every_diffusion"])
+  }).strict(),
   expression: z.object({
     activation_threshold: z.number(),
     cooldown_minutes: z.number()
@@ -108,6 +130,9 @@ export type HebbianConfig = CognitionConfig["hebbian"];
 export type GraphMaintenanceConfig = CognitionConfig["graph_maintenance"];
 export type LoopConfig = CognitionConfig["loop"];
 export type TriggerConfig = CognitionConfig["triggers"];
+export type EmotionConfig = CognitionConfig["emotion"];
+export type PredictionConfig = CognitionConfig["prediction"];
+export type AttentionConfig = CognitionConfig["attention"];
 export type ExpressionConfig = CognitionConfig["expression"];
 export type CognitionConfigPatch = DeepPartial<CognitionConfig>;
 
@@ -169,6 +194,28 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     silence_threshold_minutes: 45,
     random_walk_probability: 0.2,
     rescue_activation_floor: 0.05
+  },
+  emotion: {
+    modulation_strength: 0.25,
+    valence_weight: 0.7,
+    arousal_weight: 0.3,
+    decay_rate: 0.05,
+    analysis_model: "cheap",
+    neutral_state: {
+      valence: 0.1,
+      arousal: 0.3
+    }
+  },
+  prediction: {
+    history_window: 5,
+    surprise_bonus: 0.15,
+    familiarity_penalty: 0.1,
+    similarity_threshold: 0.85
+  },
+  attention: {
+    max_focus_nodes: 5,
+    focus_seed_energy: 0.3,
+    update_on: "every_diffusion"
   },
   expression: {
     activation_threshold: 0.4,
@@ -328,6 +375,34 @@ export interface HealthMetrics {
   heartbeat_stats: HeartbeatStats;
 }
 
+export interface EmotionWorkspaceState {
+  valence: number;
+  arousal: number;
+  last_updated: string;
+  source: string;
+}
+
+export interface PredictionWorkspaceState {
+  warming_up: boolean;
+  progress: string;
+  history_window: number;
+  last_similarity?: number | null;
+  surprising_node_ids?: string[] | null;
+  familiar_node_ids?: string[] | null;
+}
+
+export interface AttentionWorkspaceState {
+  focus_node_ids: string[];
+  max_focus_nodes: number;
+  focus_seed_energy: number;
+}
+
+export interface CognitionWorkspaceSnapshot {
+  emotion: EmotionWorkspaceState;
+  prediction: PredictionWorkspaceState;
+  attention: AttentionWorkspaceState;
+}
+
 export interface ActivationLogEntry {
   timestamp: number;
   trigger_type: string;
@@ -353,6 +428,17 @@ export interface ActivationLogEntry {
   hebbian_log?: HebbianUpdateLog | null;
   edge_decay_log?: EdgeDecayLog | null;
   graph_stats?: GraphStatsSnapshot | null;
+  prediction_status?: "warming_up" | "active" | null;
+  prediction_progress?: string | null;
+  prediction_similarity?: number | null;
+  surprising_nodes?: Array<{ node_id: string; activation: number }> | null;
+  familiar_nodes?: Array<{ node_id: string; activation: number }> | null;
+  emotion_snapshot?: {
+    valence: number;
+    arousal: number;
+    source: string;
+  } | null;
+  attention_focus?: string[] | null;
 }
 
 export interface MemoryGraphSnapshot {
@@ -392,6 +478,7 @@ export interface CognitionDebugSnapshot {
   thoughts: ThoughtPoolSnapshot;
   config: CognitionConfig;
   lastLogs: ActivationLogEntry[];
+  workspace: CognitionWorkspaceSnapshot;
 }
 
 export interface DialogueExtractionDraft {

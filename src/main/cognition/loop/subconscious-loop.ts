@@ -19,6 +19,9 @@ import { mean, linearRegressionSlope } from "../utils/math";
 import { PoissonHeartbeat } from "./heartbeat";
 import { signalToSeeds, type CognitionSignal } from "./signal-to-seed";
 import { selectTriggersWithOptions } from "./trigger-sources";
+import { EmotionStateManager } from "../workspace/emotion-state";
+import { PredictionEngine } from "../activation/prediction-coding";
+import { AttentionSchema } from "../workspace/attention-schema";
 
 const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
@@ -128,6 +131,9 @@ function emptyHealthMetrics(heartbeatStats: ReturnType<PoissonHeartbeat["getStat
 interface SubconsciousLoopInput {
   graph: MemoryGraphStore;
   thoughtPool: ThoughtPool;
+  emotionState: EmotionStateManager;
+  predictionEngine: PredictionEngine;
+  attentionSchema: AttentionSchema;
   memory: Pick<YobiMemory, "embedText" | "getProfile" | "listHistoryByCursor">;
   modelFactory: ModelFactory;
   logger: AppLogger;
@@ -336,7 +342,7 @@ export class SubconsciousLoop {
         }
       ));
     }
-    const seeds = deduplicateSeeds(seedBatches.flat());
+    const seeds = this.input.attentionSchema.injectFocusSeeds(deduplicateSeeds(seedBatches.flat()));
     this.resetGraphActivationLevels(0);
 
     if (seeds.length === 0) {
@@ -345,6 +351,8 @@ export class SubconsciousLoop {
         weight_min: config.hebbian.weight_min
       });
       this.input.thoughtPool.decayAll(0.92);
+      this.input.emotionState.decay();
+      const predictionWorkspace = this.input.predictionEngine.getWorkspaceState();
       const entry: ActivationLogEntry = {
         timestamp: nowMs,
         trigger_type: input.triggerType,
@@ -365,19 +373,46 @@ export class SubconsciousLoop {
         expression_reason: "no-seeds",
         hebbian_log: null,
         edge_decay_log: decayLog,
-        graph_stats: computeGraphStats(this.input.graph)
+        graph_stats: computeGraphStats(this.input.graph),
+        prediction_status: predictionWorkspace.warming_up ? "warming_up" : "active",
+        prediction_progress: predictionWorkspace.progress,
+        prediction_similarity: predictionWorkspace.last_similarity ?? null,
+        surprising_nodes: [],
+        familiar_nodes: [],
+        emotion_snapshot: {
+          valence: this.input.emotionState.getSnapshot().valence,
+          arousal: this.input.emotionState.getSnapshot().arousal,
+          source: this.input.emotionState.getSnapshot().source
+        },
+        attention_focus: this.input.attentionSchema.getWorkspaceState().focus_node_ids
       };
       await this.finalizeTick(entry, input.automatic);
       return entry;
     }
 
-    const activationResult = spread(this.input.graph, seeds, {
+    const rawActivationResult = spread(this.input.graph, seeds, {
       spreading: config.spreading,
       inhibition: config.inhibition,
       sigmoid: config.sigmoid
+    }, {
+      emotionState: this.input.emotionState,
+      emotionConfig: config.emotion
     });
-    const rankedActivated = sortActivationEntries([...activationResult.activated.entries()]);
-    const hebbianLog = applyHebbianLearning(this.input.graph, activationResult.activated, config.hebbian);
+    const allNodeIds = this.input.graph.getAllNodes().map((node) => node.id);
+    const predictionResult = this.input.predictionEngine.applyPredictionCoding(
+      rawActivationResult.activated,
+      allNodeIds
+    );
+    const modulatedActivationResult = {
+      activated: predictionResult.activated,
+      path_log: rawActivationResult.path_log
+    };
+    this.input.attentionSchema.updateFromActivation(rawActivationResult);
+
+    // Structural learning stays coupled to the raw diffusion result. Prediction coding
+    // acts as an attentional/output bias only, so it must not rewrite graph weights.
+    const rankedActivated = sortActivationEntries([...modulatedActivationResult.activated.entries()]);
+    const hebbianLog = applyHebbianLearning(this.input.graph, rawActivationResult.activated, config.hebbian);
     const decayLog = applyGlobalEdgeDecay(this.input.graph, {
       passive_decay_rate: config.hebbian.passive_decay_rate,
       weight_min: config.hebbian.weight_min
@@ -397,10 +432,11 @@ export class SubconsciousLoop {
             activation,
             emotional_valence: this.input.graph.getNode(nodeId)?.emotional_valence ?? 0
           })),
-          activationResult
+          modulatedActivationResult
         )
       : null;
     this.input.thoughtPool.decayAll(0.92, newBubble ? [newBubble.id] : []);
+    this.input.emotionState.decay();
 
     const recentDialogue = await this.getRecentDialogue();
     const userProfile = await this.input.memory.getProfile();
@@ -443,6 +479,7 @@ export class SubconsciousLoop {
       expressionText = evaluation.text;
       this.input.thoughtPool.markExpressed(candidate.id);
       this.input.setLastExpressionTime(Date.now());
+      this.input.emotionState.updateFromBubble(candidate);
       await this.input.onProactiveMessage({
         message: evaluation.text,
         metadata: {
@@ -453,6 +490,8 @@ export class SubconsciousLoop {
       });
       break;
     }
+    this.input.predictionEngine.recordActivationFingerprint(rawActivationResult.activated, allNodeIds);
+    const emotionSnapshot = this.input.emotionState.getSnapshot();
 
     const entry: ActivationLogEntry = {
       timestamp: nowMs,
@@ -464,10 +503,10 @@ export class SubconsciousLoop {
         label: this.input.graph.getNode(seed.nodeId)?.content ?? seed.nodeId
       })),
       top_activated: topActivated,
-      path_log: activationResult.path_log,
-      hop_summaries: activationResult.path_log.map((round) => summarizeRound(round, this.input.graph)),
+      path_log: rawActivationResult.path_log,
+      hop_summaries: rawActivationResult.path_log.map((round) => summarizeRound(round, this.input.graph)),
       config_snapshot: this.buildConfigSnapshot(config),
-      activated_count: activationResult.activated.size,
+      activated_count: modulatedActivationResult.activated.size,
       activation_peak: topActivated[0]?.activation ?? 0,
       bubbles_generated: newBubble ? 1 : 0,
       bubble_passed_filter: bubblePassedFilter,
@@ -481,7 +520,18 @@ export class SubconsciousLoop {
       expression_reason: selectedReason,
       hebbian_log: hebbianLog,
       edge_decay_log: decayLog,
-      graph_stats: computeGraphStats(this.input.graph)
+      graph_stats: computeGraphStats(this.input.graph),
+      prediction_status: predictionResult.status,
+      prediction_progress: predictionResult.progress,
+      prediction_similarity: predictionResult.similarity,
+      surprising_nodes: predictionResult.surprisingNodes,
+      familiar_nodes: predictionResult.familiarNodes,
+      emotion_snapshot: {
+        valence: emotionSnapshot.valence,
+        arousal: emotionSnapshot.arousal,
+        source: emotionSnapshot.source
+      },
+      attention_focus: this.input.attentionSchema.getWorkspaceState().focus_node_ids
     };
     await this.finalizeTick(entry, input.automatic);
     return entry;
@@ -494,6 +544,11 @@ export class SubconsciousLoop {
     }
     if (!automatic || (automatic && this.automaticTickCount % 10 === 0)) {
       this.input.graph.serialize();
+      await Promise.all([
+        this.input.emotionState.persist(),
+        this.input.predictionEngine.persist(),
+        this.input.attentionSchema.persist()
+      ]);
     }
     await appendJsonlLine(this.input.paths.cognitionActivationLogPath, entry);
     await Promise.resolve(this.input.onTickCompleted(entry));

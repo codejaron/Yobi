@@ -65,6 +65,18 @@ export class CompanionPaths {
     return path.join(this.cognitionDir, "activation-log.jsonl");
   }
 
+  get cognitionEmotionStatePath(): string {
+    return path.join(this.cognitionDir, "emotion-state.json");
+  }
+
+  get cognitionPredictionVectorPath(): string {
+    return path.join(this.cognitionDir, "prediction-vector.json");
+  }
+
+  get cognitionAttentionFocusPath(): string {
+    return path.join(this.cognitionDir, "attention-focus.json");
+  }
+
   get factsPath(): string {
     return path.join(this.memoryDir, "facts.json");
   }

@@ -24,6 +24,9 @@ import { patchCognitionConfig, loadCognitionConfig } from "./config";
 import { MemoryGraphStore } from "./graph/memory-graph";
 import { ThoughtPool } from "./thoughts/thought-bubble";
 import { SubconsciousLoop } from "./loop/subconscious-loop";
+import { EmotionStateManager } from "./workspace/emotion-state";
+import { PredictionEngine } from "./activation/prediction-coding";
+import { AttentionSchema } from "./workspace/attention-schema";
 
 const dialogueExtractionSchema = z.object({
   nodes: z.array(
@@ -86,6 +89,9 @@ export class CognitionEngine {
   private embeddingRepairPromise: Promise<void> | null = null;
   private recentDialogueResidue: string[] = [];
   private lastDialogueTime: number | null = null;
+  private emotionState: EmotionStateManager | null = null;
+  private predictionEngine: PredictionEngine | null = null;
+  private attentionSchema: AttentionSchema | null = null;
 
   constructor(private readonly input: CognitionEngineInput) {
     this.modelFactory = new ModelFactory(() => this.input.getConfig());
@@ -99,6 +105,11 @@ export class CognitionEngine {
   async stop(): Promise<void> {
     this.loop?.stop();
     this.graph?.serialize();
+    await Promise.all([
+      this.emotionState?.persist(),
+      this.predictionEngine?.persist(),
+      this.attentionSchema?.persist()
+    ]);
   }
 
   async ingestDialogue(input: DialogueIngestInput): Promise<void> {
@@ -185,6 +196,7 @@ export class CognitionEngine {
         this.recentDialogueResidue.shift();
       }
       this.lastDialogueTime = now;
+      this.queueEmotionAnalysis(residue);
     }
   }
 
@@ -194,7 +206,12 @@ export class CognitionEngine {
       graph: this.requireGraph().toJSON(),
       thoughts: this.requireThoughtPool().toJSON(),
       config: this.requireConfig(),
-      lastLogs: await this.readRecentLogs()
+      lastLogs: await this.readRecentLogs(),
+      workspace: {
+        emotion: this.requireEmotionState().getSnapshot(),
+        prediction: this.requirePredictionEngine().getWorkspaceState(),
+        attention: this.requireAttentionSchema().getWorkspaceState()
+      }
     };
   }
 
@@ -237,10 +254,31 @@ export class CognitionEngine {
     this.cognitionConfig = await loadCognitionConfig(this.input.paths);
     this.graph = new MemoryGraphStore(this.input.paths, this.cognitionConfig.graph_maintenance);
     this.thoughtPool = new ThoughtPool(this.input.paths);
+    this.emotionState = new EmotionStateManager({
+      paths: this.input.paths,
+      logger: this.input.logger,
+      getCognitionConfig: () => this.requireConfig(),
+      modelFactory: this.modelFactory,
+      getAppConfig: () => this.input.getConfig()
+    });
+    this.predictionEngine = new PredictionEngine({
+      paths: this.input.paths,
+      getCognitionConfig: () => this.requireConfig()
+    });
+    this.attentionSchema = new AttentionSchema({
+      paths: this.input.paths,
+      getCognitionConfig: () => this.requireConfig()
+    });
+    await this.emotionState.load();
+    await this.predictionEngine.load();
+    await this.attentionSchema.load();
     this.lastExpressionTime = await this.loadLastExpressionTime();
     this.loop = new SubconsciousLoop({
       graph: this.graph,
       thoughtPool: this.thoughtPool,
+      emotionState: this.emotionState,
+      predictionEngine: this.predictionEngine,
+      attentionSchema: this.attentionSchema,
       memory: this.input.memory,
       modelFactory: this.modelFactory,
       logger: this.input.logger,
@@ -368,10 +406,48 @@ export class CognitionEngine {
     return this.loop;
   }
 
+  private requireEmotionState(): EmotionStateManager {
+    if (!this.emotionState) {
+      throw new Error("emotion state not initialized");
+    }
+    return this.emotionState;
+  }
+
+  private requirePredictionEngine(): PredictionEngine {
+    if (!this.predictionEngine) {
+      throw new Error("prediction engine not initialized");
+    }
+    return this.predictionEngine;
+  }
+
+  private requireAttentionSchema(): AttentionSchema {
+    if (!this.attentionSchema) {
+      throw new Error("attention schema not initialized");
+    }
+    return this.attentionSchema;
+  }
+
   private requireConfig(): CognitionConfig {
     if (!this.cognitionConfig) {
       throw new Error("cognition config not initialized");
     }
     return this.cognitionConfig;
+  }
+
+  private queueEmotionAnalysis(text: string): void {
+    if (!this.emotionState) {
+      return;
+    }
+
+    void this.emotionState.analyzeDialogue(text).catch((error: unknown) => {
+      this.input.logger.warn(
+        "cognition",
+        "emotion_analysis_skipped",
+        {
+          reason: error instanceof Error ? error.message : String(error)
+        },
+        error
+      );
+    });
   }
 }

@@ -64,6 +64,34 @@ type ExtendedPathRound = ActivationPathLogRound & {
   trimmed_totals?: StageNodeActivation[];
 };
 
+type WorkspaceEmotionSnapshot = {
+  valence: number;
+  arousal: number;
+  last_updated?: string | number | null;
+  source?: string | null;
+};
+
+type WorkspacePredictionSnapshot = {
+  warming_up?: boolean;
+  progress?: string | null;
+  history_window?: number;
+  last_similarity?: number | null;
+  surprising_node_ids?: string[] | null;
+  familiar_node_ids?: string[] | null;
+};
+
+type WorkspaceAttentionSnapshot = {
+  focus_node_ids?: string[] | null;
+  max_focus_nodes?: number;
+  focus_seed_energy?: number;
+};
+
+type CognitionWorkspaceSnapshot = {
+  emotion?: WorkspaceEmotionSnapshot | null;
+  prediction?: WorkspacePredictionSnapshot | null;
+  attention?: WorkspaceAttentionSnapshot | null;
+};
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -392,6 +420,36 @@ const sliderDefinitions = [
     step: 0.05,
     state: (cfg: CognitionConfig) => cfg.triggers.random_walk_probability,
     update: (value: number) => ({ triggers: { random_walk_probability: value } })
+  },
+  {
+    id: "emotion_modulation_strength",
+    label: "情绪调制强度",
+    description: "控制情绪匹配对扩散边权的放大/抑制",
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+    state: (cfg: CognitionConfig) => ((cfg as unknown as { emotion?: { modulation_strength?: number } }).emotion?.modulation_strength ?? 0.25),
+    update: (value: number) => ({ emotion: { modulation_strength: value } } as unknown as CognitionConfigPatch)
+  },
+  {
+    id: "prediction_surprise_bonus",
+    label: "预测惊喜加成",
+    description: "偏离预期的节点额外激活加成",
+    min: 0,
+    max: 0.3,
+    step: 0.01,
+    state: (cfg: CognitionConfig) => ((cfg as unknown as { prediction?: { surprise_bonus?: number } }).prediction?.surprise_bonus ?? 0.15),
+    update: (value: number) => ({ prediction: { surprise_bonus: value } } as unknown as CognitionConfigPatch)
+  },
+  {
+    id: "prediction_familiarity_penalty",
+    label: "预测熟悉惩罚",
+    description: "高度可预测节点的抑制系数",
+    min: 0,
+    max: 0.3,
+    step: 0.01,
+    state: (cfg: CognitionConfig) => ((cfg as unknown as { prediction?: { familiarity_penalty?: number } }).prediction?.familiarity_penalty ?? 0.1),
+    update: (value: number) => ({ prediction: { familiarity_penalty: value } } as unknown as CognitionConfigPatch)
   }
 ];
 
@@ -488,6 +546,35 @@ function healthTone(metrics: HealthMetrics | null) {
   }
 
   return "border-sky-200 bg-sky-50/70";
+}
+
+function workspaceOf(snapshot: CognitionDebugSnapshot | null): CognitionWorkspaceSnapshot {
+  return ((snapshot as unknown as { workspace?: CognitionWorkspaceSnapshot })?.workspace ?? {}) as CognitionWorkspaceSnapshot;
+}
+
+function formatSigned(value: number | null | undefined, digits = 2): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "--";
+  }
+  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+}
+
+function resolveNodeLabel(input: {
+  nodeId: string;
+  labelById: Map<string, string>;
+}): string {
+  return input.labelById.get(input.nodeId) ?? input.nodeId;
+}
+
+function toEpochMs(input: string | number | null | undefined): number | null {
+  if (typeof input === "number") {
+    return Number.isFinite(input) ? input : null;
+  }
+  if (typeof input === "string") {
+    const parsed = Date.parse(input);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 export function CognitionDebugPage() {
@@ -775,7 +862,7 @@ export function CognitionDebugPage() {
   };
 
   const mergeConfig = (base: CognitionConfig, partial: CognitionConfigPatch): CognitionConfig => {
-    return {
+    const merged = {
       ...base,
       spreading: {
         ...base.spreading,
@@ -818,6 +905,28 @@ export function CognitionDebugPage() {
         ...(partial.triggers ?? {})
       }
     };
+    const asBase = base as unknown as Record<string, unknown>;
+    const asPatch = partial as unknown as Record<string, unknown>;
+    const asMerged = merged as unknown as Record<string, unknown>;
+    if (typeof asPatch.emotion === "object" && asPatch.emotion !== null) {
+      asMerged.emotion = {
+        ...(typeof asBase.emotion === "object" && asBase.emotion !== null ? asBase.emotion : {}),
+        ...asPatch.emotion as Record<string, unknown>
+      };
+    }
+    if (typeof asPatch.prediction === "object" && asPatch.prediction !== null) {
+      asMerged.prediction = {
+        ...(typeof asBase.prediction === "object" && asBase.prediction !== null ? asBase.prediction : {}),
+        ...asPatch.prediction as Record<string, unknown>
+      };
+    }
+    if (typeof asPatch.attention === "object" && asPatch.attention !== null) {
+      asMerged.attention = {
+        ...(typeof asBase.attention === "object" && asBase.attention !== null ? asBase.attention : {}),
+        ...asPatch.attention as Record<string, unknown>
+      };
+    }
+    return merged;
   };
 
   const handleSlider = async (update: (value: number) => CognitionConfigPatch, value: number) => {
@@ -910,6 +1019,19 @@ export function CognitionDebugPage() {
     [weightHistogram]
   );
   const healthSummary = healthMetrics;
+  const workspace = useMemo(() => workspaceOf(snapshot), [snapshot]);
+  const emotionSnapshot = workspace.emotion ?? null;
+  const predictionSnapshot = workspace.prediction ?? null;
+  const attentionSnapshot = workspace.attention ?? null;
+  const predictionWarmupProgress = predictionSnapshot?.progress ?? null;
+  const focusNodeIds = attentionSnapshot?.focus_node_ids ?? [];
+  const emotionUpdatedAt = toEpochMs(emotionSnapshot?.last_updated ?? null);
+  const surprisingNodeLabels = (predictionSnapshot?.surprising_node_ids ?? [])
+    .slice(0, 5)
+    .map((nodeId) => resolveNodeLabel({ nodeId, labelById: nodeLabelById }));
+  const familiarNodeLabels = (predictionSnapshot?.familiar_node_ids ?? [])
+    .slice(0, 5)
+    .map((nodeId) => resolveNodeLabel({ nodeId, labelById: nodeLabelById }));
   const selectedRoundRows = useMemo(
     () =>
       buildRoundStageRows({
@@ -1066,6 +1188,101 @@ export function CognitionDebugPage() {
                 </details>
               ) : (
                 <div className="text-xs text-slate-600">当前没有健康告警。</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>情绪指示器</CardTitle>
+              <CardDescription>Russell 环形图（Valence / Arousal）</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 lg:grid-cols-[1.2fr_1fr]">
+              <div className="rounded-2xl border border-border/60 bg-slate-50/70 p-3">
+                <svg width="100%" height="170" viewBox="0 0 220 170">
+                  <defs>
+                    <radialGradient id="russellBg" cx="50%" cy="50%" r="50%">
+                      <stop offset="0%" stopColor="#e2e8f0" />
+                      <stop offset="100%" stopColor="#f8fafc" />
+                    </radialGradient>
+                  </defs>
+                  <circle cx="85" cy="85" r="68" fill="url(#russellBg)" stroke="#cbd5e1" strokeWidth="1.5" />
+                  <line x1="17" y1="85" x2="153" y2="85" stroke="#94a3b8" strokeDasharray="3 3" />
+                  <line x1="85" y1="17" x2="85" y2="153" stroke="#94a3b8" strokeDasharray="3 3" />
+                  <text x="156" y="89" fontSize="10" fill="#475569">+V</text>
+                  <text x="6" y="89" fontSize="10" fill="#475569">-V</text>
+                  <text x="86" y="12" fontSize="10" fill="#475569">+A</text>
+                  <text x="86" y="166" fontSize="10" fill="#475569">-A</text>
+                  <circle
+                    cx={85 + clamp((emotionSnapshot?.valence ?? 0.1), -1, 1) * 60}
+                    cy={85 - clamp(((emotionSnapshot?.arousal ?? 0.3) * 2) - 1, -1, 1) * 60}
+                    r={6}
+                    fill="#06b6d4"
+                    stroke="#0f172a"
+                    strokeWidth="1.2"
+                  />
+                </svg>
+              </div>
+              <div className="space-y-2 rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
+                <div className="font-medium text-slate-900">当前情绪</div>
+                <div className="text-slate-700">V: {formatSigned(emotionSnapshot?.valence)}</div>
+                <div className="text-slate-700">A: {formatNumeric(emotionSnapshot?.arousal)}</div>
+                <div className="text-slate-700">来源: {emotionSnapshot?.source ?? "--"}</div>
+                <div className="text-slate-700">
+                  更新时间: {emotionUpdatedAt ? formatTime(emotionUpdatedAt) : "--"}
+                </div>
+                {emotionSnapshot ? null : (
+                  <div className="text-xs text-muted-foreground">后端尚未暴露 workspace.emotion，已降级展示。</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>预测编码</CardTitle>
+              <CardDescription>预热状态、相似度与惊喜/熟悉节点</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {predictionSnapshot?.warming_up ? (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+                  预测编码预热中 ({predictionWarmupProgress ?? "--"})
+                </div>
+              ) : (
+                <div className="rounded-xl border border-cyan-300 bg-cyan-50 px-3 py-2 text-cyan-900">
+                  预测编码已启用
+                </div>
+              )}
+              <div className="text-slate-700">历史窗口: {predictionSnapshot?.history_window ?? "--"}</div>
+              <div className="text-slate-700">本轮相似度: {formatNumeric(predictionSnapshot?.last_similarity)}</div>
+              <div className="text-slate-700">
+                惊喜节点: {surprisingNodeLabels.length > 0 ? surprisingNodeLabels.join(" · ") : "无"}
+              </div>
+              <div className="text-slate-700">
+                熟悉节点: {familiarNodeLabels.length > 0 ? familiarNodeLabels.join(" · ") : "无"}
+              </div>
+              {predictionSnapshot ? null : (
+                <div className="text-xs text-muted-foreground">后端尚未暴露 workspace.prediction，已降级展示。</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>注意力焦点</CardTitle>
+              <CardDescription>focusNodeIds 注入种子</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="text-slate-700">max_focus_nodes: {attentionSnapshot?.max_focus_nodes ?? "--"}</div>
+              <div className="text-slate-700">focus_seed_energy: {formatNumeric(attentionSnapshot?.focus_seed_energy)}</div>
+              <div className="text-slate-700">
+                焦点节点:
+                {focusNodeIds.length > 0
+                  ? ` ${focusNodeIds.slice(0, 5).map((nodeId) => resolveNodeLabel({ nodeId, labelById: nodeLabelById })).join(" · ")}`
+                  : " 无"}
+              </div>
+              {attentionSnapshot ? null : (
+                <div className="text-xs text-muted-foreground">后端尚未暴露 workspace.attention，已降级展示。</div>
               )}
             </CardContent>
           </Card>

@@ -3,12 +3,15 @@ import {
   type ActivationPathLogRound,
   type ActivationResult,
   type CognitionConfig,
+  type EmotionConfig,
   type SpreadingConfig
 } from "@shared/cognition";
 import { computeEdgeWeight, computeFanFactor } from "./fan-effect";
 import { applyLateralInhibition } from "./lateral-inhibition";
 import { applySigmoidGate } from "./sigmoid-gate";
+import { computeEmotionModulatedWeight } from "./emotion-modulation";
 import { MemoryGraphStore } from "../graph/memory-graph";
+import { EmotionStateManager } from "../workspace/emotion-state";
 
 type SpreadRuntimeConfig =
   | SpreadingConfig
@@ -62,9 +65,14 @@ function resolveSpreadConfig(config: SpreadRuntimeConfig): Pick<CognitionConfig,
 export function spread(
   graph: MemoryGraphStore,
   seeds: Array<{ nodeId: string; energy: number }>,
-  config: SpreadRuntimeConfig
+  config: SpreadRuntimeConfig,
+  options?: {
+    emotionState?: EmotionStateManager | null;
+    emotionConfig?: EmotionConfig;
+  }
 ): ActivationResult {
   const runtimeConfig = resolveSpreadConfig(config);
+  const emotionConfig = options?.emotionConfig ?? DEFAULT_COGNITION_CONFIG.emotion;
   const activated = new Map<string, number>();
   const pathLog: ActivationPathLogRound[] = [];
   const initialFrontier = new Set<string>();
@@ -114,7 +122,15 @@ export function spread(
           edge: neighbor.edge,
           temporalDecayRho: runtimeConfig.spreading.temporal_decay_rho
         });
-        const propagation = sourceActivation * runtimeConfig.spreading.spreading_factor * effectiveWeight / fanFactor;
+        const modulatedWeight = options?.emotionState
+          ? computeEmotionModulatedWeight(
+              effectiveWeight,
+              targetNode.emotional_valence,
+              options.emotionState,
+              emotionConfig
+            )
+          : effectiveWeight;
+        const propagation = sourceActivation * runtimeConfig.spreading.spreading_factor * modulatedWeight / fanFactor;
         if (propagation <= 0) {
           continue;
         }
