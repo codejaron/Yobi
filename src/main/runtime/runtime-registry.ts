@@ -40,10 +40,7 @@ import { BackgroundTaskWorkerService } from "@main/services/background-task-work
 import { ProviderModelDiscoveryService } from "@main/services/provider-model-discovery";
 import { SkillManager } from "@main/skills/manager";
 import { appLogger, companionPaths } from "@main/runtime/singletons";
-import {
-  buildKernelQueueTaskHandlers,
-  WorkerProactiveRewriteHandler
-} from "@main/kernel/task-handlers";
+import { buildKernelQueueTaskHandlers } from "@main/kernel/task-handlers";
 
 export interface RuntimeRegistryBuildInput {
   resourceId: string;
@@ -54,7 +51,6 @@ export interface RuntimeRegistryBuildInput {
 export interface RuntimeRegistryCallbacks {
   emitStatus: () => Promise<void>;
   withTimeout: <T>(promise: Promise<T>, timeoutMs: number, label: string) => Promise<T>;
-  handleKernelProactive: (message: string) => Promise<void>;
   recordUserActivity: (input: {
     channel: RuntimeInboundChannel;
     chatId?: string;
@@ -133,7 +129,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   const callbackBridge: RuntimeRegistryCallbacks = {
     emitStatus: async () => undefined,
     withTimeout: async <T>(promise: Promise<T>) => promise,
-    handleKernelProactive: async () => undefined,
     recordUserActivity: async () => undefined,
     getConfig: () => configStore.getConfig()
   };
@@ -146,11 +141,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     resourceId: input.resourceId,
     threadId: input.threadId
   });
-  const proactiveRewriteHandler = new WorkerProactiveRewriteHandler({
-    getConfig: () => configStore.getConfig(),
-    backgroundWorker,
-    timeoutMs: 10_000
-  });
 
   const kernel = new KernelEngine({
     paths,
@@ -160,11 +150,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     resourceId: input.resourceId,
     threadId: input.threadId,
     backgroundWorker,
-    queueHandlers,
-    proactiveRewriteHandler,
-    onProactiveMessage: async ({ message }) => {
-      await callbackBridge.handleKernelProactive(message);
-    }
+    queueHandlers
   });
 
   const conversation = new ConversationEngine(
@@ -265,9 +251,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     logger,
     getConfig: () => configStore.getConfig(),
     onLastUserLoaded: (value) => kernel.setLastUserMessageAt(value),
-    onLastProactiveLoaded: (value) => kernel.setLastProactiveAt(value),
     onUserMessage: (messageInput) => kernel.onUserMessage(messageInput),
-    onProactiveMessage: (ts) => kernel.setLastProactiveAt(ts),
     sendTelegram: async (text, chatId) => {
       await telegram.send({ kind: "text", text, chatId });
     },
@@ -382,7 +366,6 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     bindCallbacks: (callbacks) => {
       callbackBridge.emitStatus = callbacks.emitStatus;
       callbackBridge.withTimeout = callbacks.withTimeout;
-      callbackBridge.handleKernelProactive = callbacks.handleKernelProactive;
       callbackBridge.recordUserActivity = callbacks.recordUserActivity;
       callbackBridge.getConfig = callbacks.getConfig;
     }

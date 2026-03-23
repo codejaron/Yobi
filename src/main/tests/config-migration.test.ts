@@ -176,3 +176,55 @@ test("ConfigStore: fills kernel OpenFeelz defaults for configs without personali
     await fs.rm(baseDir, { recursive: true, force: true });
   }
 });
+
+test("ConfigStore: prunes legacy proactive timing fields while preserving supported values", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-proactive-prune-"));
+
+  try {
+    const paths = new CompanionPaths(baseDir);
+    paths.ensureLayout();
+
+    const legacyConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Record<string, any>;
+    legacyConfig.proactive = {
+      enabled: true,
+      pushTargets: {
+        telegram: true,
+        feishu: false
+      },
+      quietHours: {
+        enabled: false,
+        startMinuteOfDay: 180,
+        endMinuteOfDay: 360
+      },
+      coldStartDelayMs: 123_000,
+      cooldownMs: 456_000,
+      silenceThresholdMs: 789_000
+    };
+
+    await fs.writeFile(paths.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, "utf8");
+
+    const store = new ConfigStore(paths);
+    await store.init();
+    const config = store.getConfig();
+    const persisted = JSON.parse(await fs.readFile(paths.configPath, "utf8")) as { proactive: Record<string, unknown> };
+
+    assert.deepEqual(config.proactive, {
+      enabled: true,
+      pushTargets: {
+        telegram: true,
+        feishu: false
+      },
+      quietHours: {
+        enabled: false,
+        startMinuteOfDay: 180,
+        endMinuteOfDay: 360
+      }
+    });
+    assert.deepEqual(persisted.proactive, config.proactive);
+    assert.equal("coldStartDelayMs" in persisted.proactive, false);
+    assert.equal("cooldownMs" in persisted.proactive, false);
+    assert.equal("silenceThresholdMs" in persisted.proactive, false);
+  } finally {
+    await fs.rm(baseDir, { recursive: true, force: true });
+  }
+});

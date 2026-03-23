@@ -48,6 +48,7 @@ import {
 import { SenseVoiceModelManager } from "@main/services/sensevoice-model-manager";
 import { CognitionEngine } from "@main/cognition/engine";
 import { buildRuntimeRegistry, type RuntimeRegistry } from "@main/runtime/runtime-registry";
+import { shouldDispatchAutomationMessage } from "@main/runtime/proactive-policy";
 import {
   completeConsoleReply,
   emitConsoleFinal as emitConsoleFinalEvent,
@@ -166,7 +167,6 @@ export class CompanionRuntime {
     registry.bindCallbacks({
       emitStatus: () => this.emitStatus(),
       withTimeout: (promise, timeoutMs, label) => this.withTimeout(promise, timeoutMs, label),
-      handleKernelProactive: (message) => this.handleKernelProactive(message),
       recordUserActivity: (input) => this.recordUserActivity(input),
       getConfig: () => this.getConfig()
     });
@@ -1066,12 +1066,12 @@ export class CompanionRuntime {
       feishu: boolean;
     };
     recordProactive?: boolean;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const normalized = input.message?.trim();
     if (!normalized) {
-      return;
+      return false;
     }
-    await this.dispatchAssistantAutomationMessage({
+    return this.dispatchAssistantAutomationMessage({
       message: normalized,
       metadata: {
         proactive: input.metadata?.proactive ?? true,
@@ -1079,18 +1079,6 @@ export class CompanionRuntime {
       },
       pushTargets: input.pushTargets ?? this.getConfig().proactive.pushTargets,
       recordProactive: input.recordProactive ?? true
-    });
-  }
-
-  private async handleKernelProactive(message: string): Promise<void> {
-    await this.dispatchAssistantAutomationMessage({
-      message,
-      metadata: {
-        proactive: true,
-        source: "yobi"
-      },
-      pushTargets: this.getConfig().proactive.pushTargets,
-      recordProactive: true
     });
   }
 
@@ -1176,11 +1164,18 @@ export class CompanionRuntime {
       feishu: boolean;
     };
     recordProactive: boolean;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const parsedMessage = extractEmotionTag(input.message);
     const normalizedMessage = parsedMessage.cleanedText.trim() || input.message.trim();
     if (!normalizedMessage) {
-      return;
+      return false;
+    }
+
+    if (!shouldDispatchAutomationMessage({
+      metadata: input.metadata,
+      proactiveConfig: this.getConfig().proactive
+    })) {
+      return false;
     }
 
     if (parsedMessage.emotion) {
@@ -1217,6 +1212,7 @@ export class CompanionRuntime {
       await this.recordProactiveActivity();
     }
     await this.emitStatus();
+    return true;
   }
 
   private async pushToConfiguredChannels(

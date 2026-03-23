@@ -80,7 +80,7 @@ export function ProactiveSettingsCard({ config, setConfig }: ProactiveSettingsCa
       <CardHeader>
         <CardTitle>主动聊天参数</CardTitle>
         <CardDescription>
-          关闭时只被动回复；开启后按冷却与沉默规则触发主动消息。
+          控制认知主动表达是否允许外发、发到哪里，以及哪些时段静默。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -140,63 +140,6 @@ export function ProactiveSettingsCard({ config, setConfig }: ProactiveSettingsCa
               />
             </div>
           </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>冷却时间（毫秒）</Label>
-          <Input
-            type="number"
-            min={10_000}
-            value={String(config.proactive.cooldownMs)}
-            onChange={(event) =>
-              setConfig({
-                ...config,
-                proactive: {
-                  ...config.proactive,
-                  cooldownMs: Number(event.target.value) || config.proactive.cooldownMs
-                }
-              })
-            }
-          />
-        </div>
-
-
-        <div className="space-y-1.5">
-          <Label>冷启动主动招呼延迟（毫秒）</Label>
-          <Input
-            type="number"
-            min={10_000}
-            value={String(config.proactive.coldStartDelayMs)}
-            onChange={(event) =>
-              setConfig({
-                ...config,
-                proactive: {
-                  ...config.proactive,
-                  coldStartDelayMs:
-                    Number(event.target.value) || config.proactive.coldStartDelayMs
-                }
-              })
-            }
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>沉默阈值（毫秒）</Label>
-          <Input
-            type="number"
-            min={60_000}
-            value={String(config.proactive.silenceThresholdMs)}
-            onChange={(event) =>
-              setConfig({
-                ...config,
-                proactive: {
-                  ...config.proactive,
-                  silenceThresholdMs:
-                    Number(event.target.value) || config.proactive.silenceThresholdMs
-                }
-              })
-            }
-          />
         </div>
 
         <div className="flex items-center justify-between rounded-md border border-border/70 bg-white/70 px-3 py-2">

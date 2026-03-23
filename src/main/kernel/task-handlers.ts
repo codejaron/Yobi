@@ -3,11 +3,9 @@ import { z } from "zod";
 import type {
   AppConfig,
   BufferMessage,
-  EmotionalState,
   PendingTask,
   PendingTaskType,
-  ReflectionProposal,
-  RelationshipStage
+  ReflectionProposal
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { YobiMemory } from "@main/memory/setup";
@@ -53,25 +51,6 @@ const dailyEpisodeSummarySchema = z.object({
 export interface KernelQueueTaskHandler {
   readonly type: PendingTaskType;
   handle(task: PendingTask): Promise<void>;
-}
-
-export interface ProactiveRewriteHandler {
-  rewrite(input: {
-    message: string;
-    stage: RelationshipStage;
-    emotional: EmotionalState;
-    recentHistory?: Array<{
-      role: string;
-      text: string;
-      timestamp: string;
-      proactive: boolean;
-    }>;
-    lastProactiveAt?: string | null;
-    lastUserMessageAt?: string | null;
-    now?: string;
-  }): Promise<string | null>;
-  getWorkerStatus(): { available: boolean; message: string };
-  getPauseReason(): string | null;
 }
 
 interface KernelTaskHandlerContext {
@@ -354,83 +333,6 @@ export class DailyReflectionTaskHandler implements KernelQueueTaskHandler {
   }
 }
 
-export class WorkerProactiveRewriteHandler implements ProactiveRewriteHandler {
-  constructor(
-    private readonly input: {
-      getConfig: () => AppConfig;
-      backgroundWorker: BackgroundTaskWorkerService;
-      timeoutMs?: number;
-    }
-  ) {}
-
-  getWorkerStatus(): { available: boolean; message: string } {
-    return this.input.backgroundWorker.getStatus();
-  }
-
-  getPauseReason(): string | null {
-    return this.getWorkerStatus().available ? null : "background-worker-unavailable";
-  }
-
-  async rewrite(input: {
-    message: string;
-    stage: RelationshipStage;
-    emotional: EmotionalState;
-    recentHistory?: Array<{
-      role: string;
-      text: string;
-      timestamp: string;
-      proactive: boolean;
-    }>;
-    lastProactiveAt?: string | null;
-    lastUserMessageAt?: string | null;
-    now?: string;
-  }): Promise<string | null> {
-    const trimmed = input.message.trim();
-    if (!trimmed) {
-      return "";
-    }
-    if (!this.getWorkerStatus().available) {
-      return null;
-    }
-
-    try {
-      const result = await withTimeout(
-        this.input.backgroundWorker.runProactiveRewrite({
-          message: trimmed,
-          stage: input.stage,
-          emotional: input.emotional,
-          recentHistory: input.recentHistory ?? [],
-          lastProactiveAt: input.lastProactiveAt ?? null,
-          lastUserMessageAt: input.lastUserMessageAt ?? null,
-          now: input.now ?? new Date().toISOString(),
-          config: this.input.getConfig()
-        }),
-        this.input.timeoutMs ?? 10_000,
-        "proactive-rewrite-timeout"
-      );
-      if (result.tokenUsage) {
-        reportTokenUsage({
-          source: "background:proactive-push",
-          usage: result.tokenUsage,
-          inputText: JSON.stringify({
-            message: trimmed,
-            stage: input.stage,
-            emotional: input.emotional
-          }),
-          outputText: JSON.stringify(result)
-        });
-      }
-      const rewrittenMessage = result.rewrittenMessage.trim();
-      if (!rewrittenMessage) {
-        return "";
-      }
-      return rewrittenMessage;
-    } catch {
-      return null;
-    }
-  }
-}
-
 export function buildKernelQueueTaskHandlers(context: KernelTaskHandlerContext): KernelQueueTaskHandler[] {
   return [
     new FactExtractionTaskHandler(context),
@@ -438,14 +340,4 @@ export function buildKernelQueueTaskHandlers(context: KernelTaskHandlerContext):
     new ProfileSemanticTaskHandler(context),
     new DailyReflectionTaskHandler(context)
   ];
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(label));
-    }, timeoutMs);
-    timer.unref?.();
-    promise.then(resolve).catch(reject).finally(() => clearTimeout(timer));
-  });
 }

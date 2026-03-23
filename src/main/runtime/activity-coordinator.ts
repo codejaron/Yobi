@@ -21,9 +21,7 @@ interface ActivityCoordinatorInput {
   logger: AppLogger;
   getConfig: () => AppConfig;
   onLastUserLoaded: (value: string | null) => void;
-  onLastProactiveLoaded: (value: string | null) => void;
   onUserMessage: (input: { ts: string; text?: string }) => Promise<void>;
-  onProactiveMessage: (ts: string) => void;
   sendTelegram: (text: string, chatId: string) => Promise<void>;
   sendFeishu: (text: string, chatId: string) => Promise<void>;
 }
@@ -53,7 +51,6 @@ export class RuntimeActivityCoordinator {
       lastQQChatId: context.lastQQChatId
     };
     this.input.onLastUserLoaded(this.state.lastUserAt);
-    this.input.onLastProactiveLoaded(this.state.lastProactiveAt);
   }
 
   getSnapshot(): ActivityCoordinatorState {
@@ -89,7 +86,6 @@ export class RuntimeActivityCoordinator {
   async recordProactiveActivity(): Promise<void> {
     this.state.lastProactiveAt = new Date().toISOString();
     await this.persist();
-    this.input.onProactiveMessage(this.state.lastProactiveAt);
   }
 
   async pushToConfiguredChannels(

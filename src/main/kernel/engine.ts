@@ -20,8 +20,8 @@ import {
   applyRealtimeEmotionalSignals,
   clampRange
 } from "./emotion-utils";
-import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, isWithinQuietHours, toDayKey } from "./relationship-utils";
-import type { KernelQueueTaskHandler, ProactiveRewriteHandler } from "./task-handlers";
+import { computeAverageEpisodeQuality, computeTargetStage, countMeaningfulDays, toDayKey } from "./relationship-utils";
+import type { KernelQueueTaskHandler } from "./task-handlers";
 
 export {
   advanceEmotionalRumination,
@@ -40,8 +40,6 @@ interface KernelEngineInput {
   threadId: string;
   backgroundWorker: BackgroundTaskWorkerService;
   queueHandlers: KernelQueueTaskHandler[];
-  proactiveRewriteHandler: ProactiveRewriteHandler;
-  onProactiveMessage?: (input: { message: string }) => Promise<void>;
 }
 
 export class KernelEngine {
@@ -51,11 +49,9 @@ export class KernelEngine {
   private running = false;
   private lastTickAt: string | null = null;
   private lastUserMessageAt: string | null = null;
-  private lastProactiveAt: string | null = null;
   private lastEngagement: number | null = null;
   private warmthIdleMinutesApplied = 0;
   private currentTickIntervalMs = 30_000;
-  private readonly startedAtMs = Date.now();
 
   constructor(private readonly input: KernelEngineInput) {
     const config = input.getConfig().kernel;
@@ -106,8 +102,7 @@ export class KernelEngine {
       lastTickAt: this.lastTickAt,
       stage: snapshot.relationship.stage,
       workerAvailable: worker.available,
-      workerMessage: worker.message,
-      proactivePausedReason: this.input.proactiveRewriteHandler.getPauseReason()
+      workerMessage: worker.message
     };
   }
 
@@ -122,14 +117,6 @@ export class KernelEngine {
       return;
     }
     this.lastUserMessageAt = new Date(value).toISOString();
-  }
-
-  setLastProactiveAt(value: string | null): void {
-    if (!value || !Number.isFinite(new Date(value).getTime())) {
-      this.lastProactiveAt = null;
-      return;
-    }
-    this.lastProactiveAt = new Date(value).toISOString();
   }
 
   async onUserMessage(input: { ts?: string; text?: string } = {}): Promise<void> {
@@ -248,7 +235,6 @@ export class KernelEngine {
     await this.taskQueue.processAvailable();
     await this.maybeFinalizeDailyTasks();
     await this.input.memory.backfillFactEmbeddings(10);
-    await this.maybeEmitProactiveMessage();
     await this.input.stateStore.flushIfDirty();
 
     this.lastTickAt = new Date().toISOString();
@@ -505,78 +491,6 @@ export class KernelEngine {
       }
     }
     return kernel.tick.quietIntervalMs;
-  }
-
-  private async maybeEmitProactiveMessage(): Promise<void> {
-    const callback = this.input.onProactiveMessage;
-    const config = this.input.getConfig();
-    if (!callback || !config.proactive.enabled) {
-      return;
-    }
-
-    if (this.input.proactiveRewriteHandler.getPauseReason()) {
-      return;
-    }
-
-    const now = Date.now();
-
-    if (now - this.startedAtMs < config.proactive.coldStartDelayMs) {
-      return;
-    }
-
-    if (this.lastProactiveAt) {
-      const elapsed = now - new Date(this.lastProactiveAt).getTime();
-      if (elapsed < config.proactive.cooldownMs) {
-        return;
-      }
-    }
-    if (isWithinQuietHours(new Date(now), config.proactive.quietHours)) {
-      return;
-    }
-
-    if (!this.lastUserMessageAt) {
-      return;
-    }
-
-    const snapshot = this.input.stateStore.getSnapshot();
-
-    const recentHistory = await this.input.memory.listHistory({
-      threadId: this.input.threadId,
-      resourceId: this.input.resourceId,
-      limit: 10
-    });
-
-    const tryEmit = async (message: string): Promise<boolean> => {
-      const rewritten = await this.input.proactiveRewriteHandler.rewrite({
-        message,
-        stage: snapshot.relationship.stage,
-        emotional: snapshot.emotional,
-        recentHistory: recentHistory.map((item) => ({
-          role: item.role,
-          text: item.text,
-          timestamp: item.timestamp,
-          proactive: item.meta?.proactive ?? false
-        })),
-        lastProactiveAt: this.lastProactiveAt,
-        lastUserMessageAt: this.lastUserMessageAt,
-        now: new Date(now).toISOString()
-      });
-      if (!rewritten || !rewritten.trim()) {
-        return false;
-      }
-      await callback({
-        message: rewritten.trim()
-      });
-      this.lastProactiveAt = new Date().toISOString();
-      return true;
-    };
-
-    const silenceMs = now - new Date(this.lastUserMessageAt).getTime();
-    if (silenceMs < config.proactive.silenceThresholdMs) {
-      return;
-    }
-
-    await tryEmit("想找你随便聊聊");
   }
 
   private async evaluateRelationshipTransition(): Promise<void> {

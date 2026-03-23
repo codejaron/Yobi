@@ -106,7 +106,7 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       {
         id: "proactive",
         label: "主动行为",
-        description: "冷启动、冷却和静默时段"
+        description: "主动表达开关、推送渠道与静默时段"
       }
     ]
   },
@@ -318,9 +318,9 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
         },
     proactive: proactiveEnabled
       ? {
-          badge: status?.kernel?.proactivePausedReason ? "已暂停" : "已启用",
-          tone: status?.kernel?.proactivePausedReason ? "warn" : "good",
-          detail: status?.kernel?.proactivePausedReason ?? "主动行为引擎已开启"
+          badge: "已启用",
+          tone: "good",
+          detail: "认知主动表达允许外发"
         }
       : {
           badge: "关闭",

@@ -191,7 +191,7 @@ interface SubconsciousLoopInput {
       feishu: boolean;
     };
     recordProactive?: boolean;
-  }) => Promise<void> | void;
+  }) => Promise<boolean | void> | boolean | void;
   onTickCompleted: (entry: ActivationLogEntry) => Promise<void> | void;
 }
 
@@ -548,7 +548,7 @@ export class SubconsciousLoop {
       }
 
       try {
-        await this.input.onProactiveMessage({
+        const deliveryResult = await this.input.onProactiveMessage({
           message: evaluation.text,
           metadata: {
             proactive: true,
@@ -556,6 +556,10 @@ export class SubconsciousLoop {
           },
           recordProactive: true
         });
+        if (deliveryResult === false) {
+          selectedReason = "delivery-blocked";
+          break;
+        }
       } catch (error) {
         selectedReason = error instanceof Error ? `send-failed:${error.message}` : `send-failed:${String(error)}`;
         continue;

@@ -414,9 +414,6 @@ export const appConfigSchema = z
           telegram: false,
           feishu: false
         }),
-        coldStartDelayMs: z.number().int().min(10_000).default(5 * 60 * 1000),
-        cooldownMs: z.number().int().min(10_000).default(25 * 60 * 1000),
-        silenceThresholdMs: z.number().int().min(60_000).default(40 * 60 * 1000),
         quietHours: proactiveQuietHoursSchema.default({
           enabled: true,
           startMinuteOfDay: 60,
@@ -1316,7 +1313,6 @@ export interface KernelStatus {
   stage: RelationshipStage;
   workerAvailable: boolean;
   workerMessage: string;
-  proactivePausedReason: string | null;
 }
 
 export const DEFAULT_TOKEN_STATS_STATUS: TokenStatsStatus = {
@@ -1612,9 +1608,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       telegram: false,
       feishu: false
     },
-    coldStartDelayMs: 5 * 60 * 1000,
-    cooldownMs: 25 * 60 * 1000,
-    silenceThresholdMs: 40 * 60 * 1000,
     quietHours: {
       enabled: true,
       startMinuteOfDay: 60,

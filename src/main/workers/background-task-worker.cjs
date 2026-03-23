@@ -37,11 +37,6 @@ const dailyEpisodeSummarySchema = zod.z.object({
   user_mood: zod.z.string().min(1).max(30).default('unknown'),
   yobi_mood: zod.z.string().min(1).max(30).default('neutral')
 });
-const proactiveRewriteSchema = zod.z.object({
-  shouldSend: zod.z.boolean(),
-  reason: zod.z.string().max(200).default(''),
-  rewrittenMessage: zod.z.string().max(160).default('')
-});
 
 function unwrapMessage(message) {
   if (message && typeof message === 'object' && 'data' in message) {
@@ -246,55 +241,6 @@ async function runDailyReflection(message) {
   return { result: reflectionSchema.parse(result.object), tokenUsage: result.usage };
 }
 
-async function runProactiveRewrite(message) {
-  const { generateObject } = await import('ai');
-  const model = await createModelForRoute(message.config, 'reflection');
-  const system = [
-    '你是 Yobi，一个有社交感知力的 AI 伙伴。',
-    '现在系统想向用户发一条主动消息，你需要根据上下文判断：',
-    '1. 现在是否适合发送主动消息？',
-    '2. 如果适合，用什么措辞？',
-    '',
-    '判断原则：',
-    '- 如果上次主动消息用户没有回复，且间隔较短（几小时内），不要再发',
-    '- 如果上次主动消息用户没有回复，但已经过了很久（比如隔天了），可以再试一次',
-    '- 不要连续发类似内容的消息',
-    '- 根据关系阶段调整语气：stranger 要礼貌克制，close/intimate 可以更自然亲近',
-    '- 参考最近的聊天内容，让消息衔接自然',
-    '',
-    '返回 shouldSend: false 表示不发送，shouldSend: true 时在 rewrittenMessage 里写消息内容。',
-    'reason 里简短写你的判断理由。'
-  ].join('\n');
-
-  const historyLines = (message.recentHistory || []).map((item) => {
-    const tag = item.proactive ? ' [主动消息]' : '';
-    return `[${item.timestamp}] ${item.role}${tag}: ${item.text}`;
-  });
-
-  const prompt = JSON.stringify({
-    candidate_message: message.message,
-    stage: message.stage,
-    emotional: message.emotional,
-    recent_history: historyLines,
-    last_proactive_at: message.lastProactiveAt,
-    last_user_message_at: message.lastUserMessageAt,
-    now: message.now
-  });
-  const result = await generateObject({
-    model,
-    providerOptions: resolveProviderOptions(message.config, 'reflection'),
-    schema: proactiveRewriteSchema,
-    system,
-    prompt,
-    maxOutputTokens: 200
-  });
-  const parsed = proactiveRewriteSchema.parse(result.object ?? {});
-  return {
-    rewrittenMessage: parsed.shouldSend ? parsed.rewrittenMessage : '',
-    tokenUsage: result.usage
-  };
-}
-
 process.parentPort.on('message', async (message) => {
   const payload = unwrapMessage(message);
   const id = payload?.id;
@@ -304,7 +250,6 @@ process.parentPort.on('message', async (message) => {
     else if (payload?.type === 'daily-episode') result = await runDailyEpisode(payload);
     else if (payload?.type === 'profile-semantic-update') result = await runProfileSemantic(payload);
     else if (payload?.type === 'daily-reflection') result = await runDailyReflection(payload);
-    else if (payload?.type === 'proactive-rewrite') result = await runProactiveRewrite(payload);
     else throw new Error(`unknown-background-task:${String(payload?.type || '')}`);
     process.parentPort.postMessage({ id, ok: true, result });
   } catch (error) {

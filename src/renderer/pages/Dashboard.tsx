@@ -42,16 +42,6 @@ function formatPermission(value: PermissionState | undefined): string {
   return "未知";
 }
 
-function formatProactivePauseReason(value: string | null | undefined): string {
-  if (!value) {
-    return "主动消息可用";
-  }
-  if (value === "background-worker-unavailable") {
-    return "主动消息已暂停：后台 Worker 不可用";
-  }
-  return `主动消息已暂停：${value}`;
-}
-
 function formatTokenCount(value: number): string {
   return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
 }
@@ -415,9 +405,6 @@ export function DashboardPage({ status, refreshStatus }: Pick<PageProps, "status
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{status?.backgroundWorker.message || "未上报状态"}</p>
-            <p className="text-xs text-muted-foreground">
-              {formatProactivePauseReason(status?.kernel?.proactivePausedReason)}
-            </p>
           </CardContent>
         </Card>
       </div>

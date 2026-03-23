@@ -120,7 +120,7 @@ interface CognitionEngineInput {
       feishu: boolean;
     };
     recordProactive?: boolean;
-  }) => Promise<void> | void;
+  }) => Promise<boolean | void> | boolean | void;
   onTickCompleted?: (entry: ActivationLogEntry) => Promise<void> | void;
 }
 
@@ -509,7 +509,7 @@ export class CognitionEngine {
         this.lastExpressionTime = value;
       },
       onProactiveMessage: async (payload) => {
-        await Promise.resolve(this.input.onProactiveMessage?.(payload));
+        return await Promise.resolve(this.input.onProactiveMessage?.(payload));
       },
       onTickCompleted: async (entry) => {
         await Promise.resolve(this.input.onTickCompleted?.(entry));

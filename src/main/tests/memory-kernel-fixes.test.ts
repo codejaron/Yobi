@@ -1342,12 +1342,7 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
         init: async () => undefined,
         getStatus: () => ({ available: false, message: "stub" })
       } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async () => null,
-        getWorkerStatus: () => ({ available: false, message: "stub" }),
-        getPauseReason: () => "stub"
-      }
+      queueHandlers: []
     });
     await engine.init();
 
@@ -1404,12 +1399,7 @@ test("KernelEngine.onUserMessage: does not enqueue legacy fact-extraction tasks 
         init: async () => undefined,
         getStatus: () => ({ available: false, message: "stub" })
       } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async () => null,
-        getWorkerStatus: () => ({ available: false, message: "stub" }),
-        getPauseReason: () => "stub"
-      }
+      queueHandlers: []
     });
     await engine.init();
 
@@ -1471,12 +1461,7 @@ test("KernelEngine.onUserMessage: updates session reentry and resets sessionWarm
         init: async () => undefined,
         getStatus: () => ({ available: false, message: "stub" })
       } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async () => null,
-        getWorkerStatus: () => ({ available: false, message: "stub" }),
-        getPauseReason: () => "stub"
-      }
+      queueHandlers: []
     });
     await engine.init();
 
@@ -1535,12 +1520,7 @@ test("KernelEngine.onUserMessage: raises sessionWarmth using the latest engageme
         init: async () => undefined,
         getStatus: () => ({ available: false, message: "stub" })
       } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async () => null,
-        getWorkerStatus: () => ({ available: false, message: "stub" }),
-        getPauseReason: () => "stub"
-      }
+      queueHandlers: []
     });
     await engine.init();
 
@@ -1557,53 +1537,6 @@ test("KernelEngine.onUserMessage: raises sessionWarmth using the latest engageme
 
     const snapshot = stateStore.getSnapshot();
     assert.ok(Math.abs(snapshot.emotional.sessionWarmth - 0.24) < 1e-9);
-  } finally {
-    await cleanupMemoryPaths(paths, memory);
-  }
-});
-
-test("KernelEngine.maybeEmitProactiveMessage: does not send cold-start greeting when user history is empty", async () => {
-  const paths = await createTempPaths("yobi-no-cold-start-greeting-");
-  let memory: YobiMemory | null = null;
-  try {
-    const config = cloneConfig();
-    config.proactive.enabled = true;
-    config.proactive.coldStartDelayMs = 0;
-    config.proactive.cooldownMs = 0;
-    config.proactive.silenceThresholdMs = 1;
-    config.proactive.quietHours.enabled = false;
-    memory = new YobiMemory(paths, () => config);
-    const stateStore = new StateStore(paths);
-    await memory.init();
-    await stateStore.init();
-
-    const emitted: string[] = [];
-    const engine = new KernelEngine({
-      paths,
-      memory,
-      stateStore,
-      getConfig: () => config,
-      resourceId: "main",
-      threadId: "main",
-      backgroundWorker: {
-        init: async () => undefined,
-        getStatus: () => ({ available: false, message: "stub" })
-      } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async ({ message }: { message: string }) => message,
-        getWorkerStatus: () => ({ available: true, message: "stub" }),
-        getPauseReason: () => null
-      },
-      onProactiveMessage: async ({ message }) => {
-        emitted.push(message);
-      }
-    });
-    await engine.init();
-
-    await (engine as any).maybeEmitProactiveMessage();
-
-    assert.deepEqual(emitted, []);
   } finally {
     await cleanupMemoryPaths(paths, memory);
   }
@@ -1630,12 +1563,7 @@ test("KernelEngine.tick: reschedules the next heartbeat when a tick step fails",
         init: async () => undefined,
         getStatus: () => ({ available: false, message: "stub" })
       } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async () => null,
-        getWorkerStatus: () => ({ available: false, message: "stub" }),
-        getPauseReason: () => "stub"
-      }
+      queueHandlers: []
     });
     await engine.init();
 
@@ -1679,12 +1607,7 @@ test("KernelEngine.runTickNow: still surfaces tick failures to the caller", asyn
         init: async () => undefined,
         getStatus: () => ({ available: false, message: "stub" })
       } as any,
-      queueHandlers: [],
-      proactiveRewriteHandler: {
-        rewrite: async () => null,
-        getWorkerStatus: () => ({ available: false, message: "stub" }),
-        getPauseReason: () => "stub"
-      }
+      queueHandlers: []
     });
     await engine.init();
 

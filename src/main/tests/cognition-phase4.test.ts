@@ -406,6 +406,42 @@ test("CognitionEngine.start prunes stale attention focus ids that do not exist i
   }
 });
 
+test("CognitionEngine forwards proactive delivery results from the runtime callback", async () => {
+  const paths = await createTempPaths("yobi-cognition-proactive-delivery-");
+  try {
+    await ensureKernelBootstrap(paths);
+
+    const engine = new CognitionEngine({
+      paths,
+      getConfig: () => ({}) as AppConfig,
+      memory: {
+        embedText: async () => [],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      conversation: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never,
+      onProactiveMessage: async () => false
+    });
+
+    await engine.start();
+
+    const delivered = await (engine as any).loop.input.onProactiveMessage({
+      message: "test proactive"
+    });
+
+    assert.equal(delivered, false);
+
+    await engine.stop();
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
 test("CognitionEngine.regenerateGraphFromSoul reuses the bundled default graph when soul is still default", async () => {
   const paths = await createTempPaths("yobi-cognition-default-regenerate-");
   try {
