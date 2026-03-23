@@ -290,6 +290,12 @@ export class MemoryGraphStore {
     };
   }
 
+  reset(): void {
+    this.graph.nodes.clear();
+    this.graph.edges = [];
+    this.graph.adjacency.clear();
+  }
+
   updateActivation(nodeId: string, newLevel: number): void {
     const node = this.graph.nodes.get(nodeId);
     if (!node) {

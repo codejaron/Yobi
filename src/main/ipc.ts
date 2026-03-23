@@ -83,6 +83,7 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("mind:snapshot:get", () => runtime.getMindSnapshot());
   ipcMain.handle("mind:soul:get", () => runtime.getSoul());
   ipcMain.handle("mind:soul:save", (_, input: { markdown: string }) => runtime.saveSoul(input));
+  ipcMain.handle("mind:soul:regenerate-cognition-graph", () => runtime.regenerateCognitionGraphFromSoul());
   ipcMain.handle("mind:relationship:get", () => runtime.getRelationship());
   ipcMain.handle("mind:relationship:save", (_, input: { guide: Record<string, unknown> }) =>
     runtime.saveRelationship({

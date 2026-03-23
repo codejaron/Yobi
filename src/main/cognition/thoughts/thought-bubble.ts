@@ -137,6 +137,15 @@ export class ThoughtPool {
     return this.getBubbles().filter((bubble) => bubble.status === "mature");
   }
 
+  reset(): void {
+    this.bubbles = [];
+    this.history = [];
+    this.persistState({
+      action: "reset",
+      active_count: 0
+    });
+  }
+
   toJSON(): ThoughtPoolSnapshot {
     return {
       bubbles: this.getBubbles(),

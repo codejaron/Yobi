@@ -21,6 +21,7 @@ import { ThoughtPool } from "../cognition/thoughts/thought-bubble.js";
 import { SubconsciousLoop } from "../cognition/loop/subconscious-loop.js";
 import { CognitionEngine } from "../cognition/engine.js";
 import { GlobalWorkspace } from "../cognition/workspace/global-workspace.js";
+import { ensureKernelBootstrap } from "../kernel/init.js";
 
 async function createTempPaths(prefix: string): Promise<CompanionPaths> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -301,6 +302,63 @@ test("CognitionEngine swallows emotion analysis failures and logs emotion_analys
 
     assert.equal(warnings[0]?.event, "emotion_analysis_skipped");
     assert.equal(warnings[0]?.reason, "boom");
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("CognitionEngine.start loads the bundled default graph without requiring a cognition model route", async () => {
+  const paths = await createTempPaths("yobi-cognition-bundled-graph-");
+  try {
+    await ensureKernelBootstrap(paths);
+
+    const engine = new CognitionEngine({
+      paths,
+      getConfig: () => ({}) as AppConfig,
+      memory: {
+        embedText: async () => [],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      conversation: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never
+    });
+
+    await assert.doesNotReject(() => engine.start());
+    await engine.stop();
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("CognitionEngine.regenerateGraphFromSoul reuses the bundled default graph when soul is still default", async () => {
+  const paths = await createTempPaths("yobi-cognition-default-regenerate-");
+  try {
+    await ensureKernelBootstrap(paths);
+
+    const engine = new CognitionEngine({
+      paths,
+      getConfig: () => ({}) as AppConfig,
+      memory: {
+        embedText: async () => [],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      conversation: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never
+    });
+
+    await assert.doesNotReject(() => engine.start());
+    await assert.doesNotReject(() => engine.regenerateGraphFromSoul());
+    await engine.stop();
   } finally {
     await cleanupPaths(paths);
   }

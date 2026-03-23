@@ -388,7 +388,7 @@ function mergeNodeIds(input: {
 
 export async function ensureFixedPersonNodes(input: {
   graph: MemoryGraphStore;
-  embedText: (text: string) => Promise<number[] | null>;
+  embedText?: (text: string) => Promise<number[] | null>;
   nowMs?: number;
 }): Promise<void> {
   const nowMs = input.nowMs ?? Date.now();
@@ -398,7 +398,7 @@ export async function ensureFixedPersonNodes(input: {
         id: FIXED_USER_PERSON_ID,
         content: "用户",
         type: "person",
-        embedding: (await input.embedText("用户")) ?? [],
+        embedding: input.embedText ? ((await input.embedText("用户")) ?? []) : [],
         emotionalValence: 0,
         nowMs,
         metadata: {
@@ -417,7 +417,7 @@ export async function ensureFixedPersonNodes(input: {
         id: FIXED_YOBI_PERSON_ID,
         content: "Yobi",
         type: "person",
-        embedding: (await input.embedText("Yobi")) ?? [],
+        embedding: input.embedText ? ((await input.embedText("Yobi")) ?? []) : [],
         emotionalValence: 0,
         nowMs,
         metadata: {
@@ -578,4 +578,3 @@ export async function applyCombinedExtraction(input: {
     });
   }
 }
-

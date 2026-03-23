@@ -20,6 +20,7 @@ export function MemoryPage({
   snapshot,
   onRefresh,
   onSaveSoul,
+  onRegenerateCognitionGraph,
   onSaveRelationship,
   onTriggerKernelTask,
   onResetMindSection
@@ -27,6 +28,7 @@ export function MemoryPage({
   snapshot: MindSnapshot | null;
   onRefresh: () => Promise<void>;
   onSaveSoul: (markdown: string) => Promise<void>;
+  onRegenerateCognitionGraph: () => Promise<{ accepted: boolean; message: string }>;
   onSaveRelationship: (guide: RelationshipGuide) => Promise<void>;
   onTriggerKernelTask: (taskType: "tick-now" | "daily-now") => Promise<{ accepted: boolean; message: string }>;
   onResetMindSection: (input: {
@@ -38,6 +40,7 @@ export function MemoryPage({
     cloneRelationshipGuide(snapshot?.relationship ?? DEFAULT_RELATIONSHIP_GUIDE)
   );
   const [saving, setSaving] = useState<"soul" | "relationship" | null>(null);
+  const [regeneratingGraph, setRegeneratingGraph] = useState(false);
   const [resetting, setResetting] = useState<
     "soul" | "relationship" | "state" | "profile" | "facts" | "episodes" | null
   >(null);
@@ -133,12 +136,15 @@ export function MemoryPage({
       <Card>
         <CardHeader>
           <CardTitle>SOUL (可编辑)</CardTitle>
+          <CardDescription>
+            默认安装已经附带一份认知图。保存 SOUL 不会自动重建，改完后如果要让认知图跟着更新，请手动点重建按钮。
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           <Textarea rows={18} value={soulDraft} onChange={(event) => setSoulDraft(event.target.value)} />
           <div className="flex flex-wrap items-center gap-2">
             <Button
-              disabled={saving !== null || resetting !== null}
+              disabled={saving !== null || resetting !== null || regeneratingGraph}
               onClick={async () => {
                 setSaving("soul");
                 try {
@@ -154,10 +160,30 @@ export function MemoryPage({
             </Button>
             <Button
               variant="outline"
-              disabled={saving !== null || resetting !== null}
+              disabled={saving !== null || resetting !== null || regeneratingGraph}
               onClick={() => void resetSection("soul", "恢复 SOUL 默认内容")}
             >
               {resetting === "soul" ? "处理中..." : "恢复默认"}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={saving !== null || resetting !== null || regeneratingGraph}
+              onClick={async () => {
+                const ok = window.confirm("这会清空当前认知图并按现在的 SOUL 重新构建，是否继续？");
+                if (!ok) {
+                  return;
+                }
+                setRegeneratingGraph(true);
+                try {
+                  const result = await onRegenerateCognitionGraph();
+                  setNotice(result.message);
+                  await onRefresh();
+                } finally {
+                  setRegeneratingGraph(false);
+                }
+              }}
+            >
+              {regeneratingGraph ? "重建中..." : "按当前 SOUL 重建认知图"}
             </Button>
           </div>
         </CardContent>

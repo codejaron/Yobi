@@ -19,6 +19,7 @@ import type { ConversationEngine } from "@main/core/conversation";
 import { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { AppLogger } from "@main/services/logger";
+import { DEFAULT_SOUL_TEXT } from "@main/kernel/init";
 import { patchCognitionConfig, loadCognitionConfig } from "./config";
 import { MemoryGraphStore } from "./graph/memory-graph";
 import { ThoughtPool } from "./thoughts/thought-bubble";
@@ -32,6 +33,7 @@ import { ConsolidationEngine } from "./consolidation/consolidation-engine";
 import { GistExtractor } from "./consolidation/gist-extraction";
 import { SleepReplay } from "./consolidation/sleep-replay";
 import { applyCombinedExtraction } from "./ingestion/graph-adapter";
+import { populateBundledDefaultGraph } from "./ingestion/default-graph";
 import { runColdStart } from "./ingestion/cold-start";
 import { buildReplyMemoryBlock as buildReplyMemoryPrompt } from "./retrieval/memory-retrieval";
 
@@ -332,6 +334,55 @@ export class CognitionEngine {
     return this.requireColdArchive().getArchiveStats();
   }
 
+  async regenerateGraphFromSoul(): Promise<{ accepted: boolean; message: string }> {
+    await this.ensureInitialized();
+
+    const nextGraph = new MemoryGraphStore(this.input.paths, this.requireConfig().graph_maintenance);
+    nextGraph.reset();
+
+    const soulMarkdown = await readTextFile(this.input.paths.soulPath, "");
+    let result: { created: boolean; nodeCount: number; edgeCount: number };
+    if (soulMarkdown.trim() === DEFAULT_SOUL_TEXT.trim()) {
+      result = await populateBundledDefaultGraph({
+        graph: nextGraph,
+        cognitionConfig: this.requireConfig()
+      });
+    } else {
+      result = await runColdStart({
+        paths: this.input.paths,
+        graph: nextGraph,
+        cognitionConfig: this.requireConfig(),
+        soulMarkdown,
+        embedText: (text) => this.input.memory.embedText(text),
+        generateSeeds: ({ soulMarkdown, targetNodeCount }) =>
+          this.generateColdStartSeeds({
+            soulMarkdown,
+            targetNodeCount
+          })
+      });
+    }
+
+    const serialized = nextGraph.serialize();
+    const wasRunning = this.loop?.isRunning() ?? false;
+    if (wasRunning) {
+      this.loop?.stop();
+    }
+
+    try {
+      this.consolidationEngine?.interrupt();
+      this.requireGraph().deserialize(serialized);
+      this.thoughtPool?.reset();
+      return {
+        accepted: true,
+        message: `认知图已按当前 SOUL 重建（${result.nodeCount} 个节点，${result.edgeCount} 条边）。`
+      };
+    } finally {
+      if (wasRunning) {
+        this.loop?.start();
+      }
+    }
+  }
+
   interruptConsolidation(): void {
     this.consolidationEngine?.interrupt();
   }
@@ -343,32 +394,13 @@ export class CognitionEngine {
 
     this.cognitionConfig = await loadCognitionConfig(this.input.paths);
     this.graph = new MemoryGraphStore(this.input.paths, this.cognitionConfig.graph_maintenance);
-    await runColdStart({
-      paths: this.input.paths,
-      graph: this.graph,
-      cognitionConfig: this.cognitionConfig,
-      soulMarkdown: await readTextFile(this.input.paths.soulPath, ""),
-      embedText: (text) => this.input.memory.embedText(text),
-      generateSeeds: async ({ soulMarkdown, targetNodeCount }) => {
-        const result = await generateObject({
-          model: this.modelFactory.getCognitionModel(),
-          providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
-          schema: coldStartSeedSchema,
-          prompt: [
-            "请根据以下 soul 文本，输出一个 JSON，包含用于认知图冷启动的种子 nodes 和建议 edges。",
-            `目标节点数约 ${targetNodeCount} 个，覆盖五个维度：性格特征、兴趣领域、情感锚点、时间节点、交互意图。`,
-            "节点字段必须包含 content、type、emotional_valence；边字段必须包含 source_content、target_content、type。",
-            "只返回 JSON，不要解释。",
-            soulMarkdown
-          ].join("\n")
-        });
-        return coldStartSeedSchema.parse(result.object ?? {
-          nodes: [],
-          edges: []
-        });
-      }
-    });
-    this.graph.serialize();
+    if (this.graph.getStatistics().nodeCount === 0) {
+      await populateBundledDefaultGraph({
+        graph: this.graph,
+        cognitionConfig: this.cognitionConfig
+      });
+      this.graph.serialize();
+    }
     this.thoughtPool = new ThoughtPool(this.input.paths);
     this.emotionState = new EmotionStateManager({
       paths: this.input.paths,
@@ -473,7 +505,28 @@ export class CognitionEngine {
       }
     });
     this.initialized = true;
-    await this.repairGraphEmbeddingsIfNeeded();
+  }
+
+  private async generateColdStartSeeds(input: {
+    soulMarkdown: string;
+    targetNodeCount: number;
+  }): Promise<z.infer<typeof coldStartSeedSchema>> {
+    const result = await generateObject({
+      model: this.modelFactory.getCognitionModel(),
+      providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
+      schema: coldStartSeedSchema,
+      prompt: [
+        "请根据以下 soul 文本，输出一个 JSON，包含用于认知图冷启动的种子 nodes 和建议 edges。",
+        `目标节点数约 ${input.targetNodeCount} 个，覆盖五个维度：性格特征、兴趣领域、情感锚点、时间节点、交互意图。`,
+        "节点字段必须包含 content、type、emotional_valence；边字段必须包含 source_content、target_content、type。",
+        "只返回 JSON，不要解释。",
+        input.soulMarkdown
+      ].join("\n")
+    });
+    return coldStartSeedSchema.parse(result.object ?? {
+      nodes: [],
+      edges: []
+    });
   }
 
   private async loadLastExpressionTime(): Promise<number> {

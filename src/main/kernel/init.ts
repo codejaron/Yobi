@@ -6,6 +6,7 @@ import {
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { ensureRelationshipGuideFile } from "@main/relationship/guide-store";
+import { ensureBundledDefaultGraph } from "@main/cognition/ingestion/default-graph";
 import {
   fileExists,
   writeJsonFileAtomic,
@@ -107,6 +108,9 @@ export async function ensureKernelBootstrap(paths: CompanionPaths): Promise<void
 
   await ensureTextFile(paths.soulPath, DEFAULT_SOUL_TEXT);
   await ensureRelationshipGuideFile(paths);
+  await ensureBundledDefaultGraph({
+    paths
+  });
 
   await ensureJsonFile(paths.statePath, DEFAULT_KERNEL_STATE);
   await ensureJsonFile(paths.profilePath, DEFAULT_USER_PROFILE);

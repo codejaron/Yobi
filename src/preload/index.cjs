@@ -40,6 +40,9 @@ const api = {
   saveSoul(input) {
     return ipcRenderer.invoke('mind:soul:save', input);
   },
+  regenerateCognitionGraphFromSoul() {
+    return ipcRenderer.invoke('mind:soul:regenerate-cognition-graph');
+  },
   getRelationship() {
     return ipcRenderer.invoke('mind:relationship:get');
   },

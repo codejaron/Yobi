@@ -142,6 +142,7 @@ export class CompanionRuntime {
         this.emitCognitionTick(entry);
       }
     });
+    this.dataCoordinator.setRegenerateCognitionGraphFromSoul(() => this.cognitionEngine.regenerateGraphFromSoul());
     this.conversation.setCognitionMemoryProvider(({ userText }) => this.cognitionEngine.buildReplyMemoryBlock(userText));
     this.channelCoordinator.setPostReplyHook((input) => this.ingestDialogue(input));
     this.realtimeVoice.setAssistantReplyHook((input) => this.ingestDialogue(input));
@@ -418,6 +419,10 @@ export class CompanionRuntime {
 
   async saveSoul(input: { markdown: string }): Promise<{ markdown: string; updatedAt: string }> {
     return this.dataCoordinator.saveSoul(input);
+  }
+
+  async regenerateCognitionGraphFromSoul(): Promise<{ accepted: boolean; message: string }> {
+    return this.dataCoordinator.regenerateCognitionGraphFromSoul();
   }
 
   async getRelationship(): Promise<{ guide: RelationshipGuide; updatedAt: string }> {

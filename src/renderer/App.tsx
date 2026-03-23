@@ -439,6 +439,12 @@ export default function App() {
               await refreshMindSnapshot();
               setNotice("SOUL 已更新");
             }}
+            onRegenerateCognitionGraph={async () => {
+              const result = await window.companion.regenerateCognitionGraphFromSoul();
+              await refreshMindSnapshot();
+              setNotice(result.message);
+              return result;
+            }}
             onSaveRelationship={async (guide) => {
               await window.companion.saveRelationship({ guide });
               await refreshMindSnapshot();

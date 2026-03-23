@@ -11,6 +11,7 @@ import { DailyEpisodeTaskHandler } from "../kernel/task-handlers.js";
 import { assembleContext } from "../memory-v2/context-assembler.js";
 import { RuntimeDataCoordinator } from "../runtime/data-coordinator.js";
 import { ensureKernelBootstrap } from "../kernel/init.js";
+import { MemoryGraphStore } from "../cognition/graph/memory-graph.js";
 import {
   createDefaultEmotionalState,
   DEFAULT_CONFIG,
@@ -20,6 +21,7 @@ import {
   type AppConfig,
   type PendingTask
 } from "@shared/types";
+import { DEFAULT_COGNITION_CONFIG } from "@shared/cognition";
 
 function cloneConfig(): AppConfig {
   return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -1089,14 +1091,20 @@ test("assembleContext: external fixed tokens reduce available recent message bud
   assert.ok(withExternalFixed.maxRecentMessages < withoutExternalFixed.maxRecentMessages);
 });
 
-test("ensureKernelBootstrap: creates soul.md and relationship.json without persona.md", async () => {
+test("ensureKernelBootstrap: creates soul.md, relationship.json, and a bundled default cognition graph without persona.md", async () => {
   const paths = await createTempPaths("yobi-soul-bootstrap-");
   try {
     await ensureKernelBootstrap(paths);
 
     await fs.access(paths.soulPath);
     await fs.access(paths.relationshipPath);
+    await fs.access(paths.cognitionGraphHotPath);
     await assert.rejects(() => fs.access(path.join(paths.baseDir, "persona.md")));
+
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    const stats = graph.getStatistics();
+    assert.ok(stats.nodeCount >= 25);
+    assert.ok(stats.edgeCount >= 40);
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }
@@ -1162,6 +1170,52 @@ test("RuntimeDataCoordinator.getMindSnapshot: returns soul and relationship snap
       }
     });
     assert.equal("persona" in snapshot, false);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("RuntimeDataCoordinator.regenerateCognitionGraphFromSoul delegates to the explicit rebuild callback", async () => {
+  const paths = await createTempPaths("yobi-soul-regenerate-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    const stateStore = new StateStore(paths);
+    await stateStore.init();
+
+    let calls = 0;
+    const coordinator = new RuntimeDataCoordinator({
+      paths,
+      memory,
+      stateStore,
+      kernel: {
+        runDailyNow: async () => undefined,
+        runTickNow: async () => undefined
+      } as unknown as KernelEngine,
+      bilibiliBrowse: {} as any,
+      bilibiliSyncCoordinator: {} as any,
+      systemPermissionsService: {} as any,
+      resourceId: "resource",
+      threadId: "thread",
+      emitStatus: async () => undefined,
+      regenerateCognitionGraphFromSoul: async () => {
+        calls += 1;
+        return {
+          accepted: true,
+          message: "认知图已按当前 SOUL 重建。"
+        };
+      }
+    });
+
+    const result = await coordinator.regenerateCognitionGraphFromSoul();
+    assert.equal(calls, 1);
+    assert.deepEqual(result, {
+      accepted: true,
+      message: "认知图已按当前 SOUL 重建。"
+    });
   } finally {
     await cleanupMemoryPaths(paths, memory);
   }

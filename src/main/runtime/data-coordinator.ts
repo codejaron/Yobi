@@ -41,10 +41,21 @@ interface RuntimeDataCoordinatorInput {
   resourceId: string;
   threadId: string;
   emitStatus: () => Promise<void>;
+  regenerateCognitionGraphFromSoul?: () => Promise<{ accepted: boolean; message: string }>;
 }
 
 export class RuntimeDataCoordinator {
-  constructor(private readonly input: RuntimeDataCoordinatorInput) {}
+  private regenerateCognitionGraphFromSoulHandler: (() => Promise<{ accepted: boolean; message: string }>) | null;
+
+  constructor(private readonly input: RuntimeDataCoordinatorInput) {
+    this.regenerateCognitionGraphFromSoulHandler = input.regenerateCognitionGraphFromSoul ?? null;
+  }
+
+  setRegenerateCognitionGraphFromSoul(
+    handler: (() => Promise<{ accepted: boolean; message: string }>) | null
+  ): void {
+    this.regenerateCognitionGraphFromSoulHandler = handler;
+  }
 
   async getHistory(options: HistoryQuery): Promise<HistoryMessage[]> {
     return this.input.memory.listHistory({
@@ -100,6 +111,16 @@ export class RuntimeDataCoordinator {
       markdown,
       updatedAt: new Date().toISOString()
     };
+  }
+
+  async regenerateCognitionGraphFromSoul(): Promise<{ accepted: boolean; message: string }> {
+    if (!this.regenerateCognitionGraphFromSoulHandler) {
+      return {
+        accepted: false,
+        message: "认知图重建当前不可用。"
+      };
+    }
+    return this.regenerateCognitionGraphFromSoulHandler();
   }
 
   async getRelationship(): Promise<{ guide: RelationshipGuide; updatedAt: string }> {
