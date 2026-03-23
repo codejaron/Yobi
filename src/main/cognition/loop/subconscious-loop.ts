@@ -2,11 +2,13 @@ import type { AppConfig, HistoryMessage } from "@shared/types";
 import type {
   ActivationLogEntry,
   CognitionConfig,
+  CognitionLogScope,
   GraphStatsSnapshot,
   HealthMetrics
 } from "@shared/cognition";
+import { isManualActivationLogEntry } from "@shared/cognition";
 import type { AppLogger } from "@main/services/logger";
-import { appendJsonlLine } from "@main/storage/fs";
+import { appendJsonlLine, readJsonlFile, writeJsonlFileAtomic } from "@main/storage/fs";
 import type { ModelFactory } from "@main/core/model-factory";
 import type { YobiMemory } from "@main/memory/setup";
 import { spread } from "../activation/spreading-activation";
@@ -230,6 +232,24 @@ export class SubconsciousLoop {
 
   getRecentLogs(count: number): ActivationLogEntry[] {
     return this.recentLogsBuffer.slice(-Math.max(0, count)).map((entry) => ({ ...entry }));
+  }
+
+  async clearActivationLogs(scope: CognitionLogScope): Promise<{ removed: number; remaining: number }> {
+    const keepEntry = (entry: ActivationLogEntry) => {
+      const isManual = isManualActivationLogEntry(entry);
+      return scope === "timeline" ? isManual : !isManual;
+    };
+
+    const rows = await readJsonlFile<ActivationLogEntry>(this.input.paths.cognitionActivationLogPath);
+    const filteredRows = rows.filter(keepEntry);
+    await writeJsonlFileAtomic(this.input.paths.cognitionActivationLogPath, filteredRows);
+
+    this.recentLogsBuffer = this.recentLogsBuffer.filter(keepEntry).slice(-200);
+
+    return {
+      removed: rows.length - filteredRows.length,
+      remaining: filteredRows.length
+    };
   }
 
   getHealthMetrics(): HealthMetrics {

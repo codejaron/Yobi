@@ -25,6 +25,7 @@ import type { ProviderModelListResult } from "@shared/provider-catalog";
 import type {
   ActivationLogEntry,
   CognitionConfigPatch,
+  CognitionLogScope,
   ColdArchiveStats,
   ConsolidationReport
 } from "@shared/cognition";
@@ -473,6 +474,10 @@ export class CompanionRuntime {
 
   async getCognitionBroadcastHistory() {
     return this.cognitionEngine.getBroadcastHistory();
+  }
+
+  async clearCognitionLogs(input: { scope: CognitionLogScope }) {
+    return this.cognitionEngine.clearLogs(input.scope);
   }
 
   async triggerCognitionConsolidation(): Promise<ConsolidationReport> {

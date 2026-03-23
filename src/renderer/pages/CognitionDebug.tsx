@@ -8,11 +8,13 @@ import {
   type CognitionConfig,
   type CognitionConfigPatch,
   type CognitionDebugSnapshot,
+  type CognitionLogScope,
   type ColdArchiveStats,
   type ConsolidationReport,
   type DebugMemoryNode,
   type HealthMetrics,
   type MemoryEdge,
+  isManualActivationLogEntry,
 } from "@shared/cognition";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -1002,6 +1004,7 @@ export function CognitionDebugPage() {
   const [snapshot, setSnapshot] = useState<CognitionDebugSnapshot | null>(null);
   const [configState, setConfigState] = useState<CognitionConfig | null>(null);
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTabId>("timeline");
+  const [clearLogsStatus, setClearLogsStatus] = useState<"idle" | "pending" | "error">("idle");
   const [isDetailsDrawerOpen, setIsDetailsDrawerOpen] = useState(false);
   const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
   const [expandedParameterGroup, setExpandedParameterGroup] = useState<ParameterGroupId | null>(null);
@@ -1385,6 +1388,7 @@ export function CognitionDebugPage() {
       setConfigState(result.snapshot.config);
       setBroadcastHistory(broadcastHistoryOf(result.snapshot));
       setSelectedLog(result.entry);
+      setActiveBottomTab("experiments");
       startPlaybackFromEntry(result.entry);
       await loadHealthMetrics();
       await loadConsolidationReport();
@@ -1724,7 +1728,10 @@ export function CognitionDebugPage() {
     };
   }, [isGraphPanning]);
 
-  const logDots = useMemo(() => snapshot?.lastLogs ?? [], [snapshot]);
+  const logDots = useMemo(
+    () => (snapshot?.lastLogs ?? []).filter((entry) => !isManualActivationLogEntry(entry)),
+    [snapshot]
+  );
   const effectiveBroadcastHistory = useMemo(
     () => (broadcastHistory.length > 0 ? broadcastHistory : broadcastHistoryOf(snapshot)),
     [broadcastHistory, snapshot]
@@ -1775,7 +1782,7 @@ export function CognitionDebugPage() {
   const experimentLogs = useMemo(
     () =>
       [...(snapshot?.lastLogs ?? [])]
-        .filter((entry) => entry.trigger_type === "manual_signal" || Boolean(entry.manual_text))
+        .filter((entry) => isManualActivationLogEntry(entry))
         .sort((left, right) => right.timestamp - left.timestamp),
     [snapshot]
   );
@@ -1875,6 +1882,37 @@ export function CognitionDebugPage() {
       helper: "手动扩散记录与参数对比"
     }
   ];
+  const activeLogScope: CognitionLogScope = activeBottomTab;
+  const activeLogCount = activeBottomTab === "timeline" ? logDots.length : experimentLogs.length;
+  const clearLogsLabel =
+    clearLogsStatus === "pending"
+      ? "清除中…"
+      : activeBottomTab === "timeline"
+        ? "清除心跳日志"
+        : "清除扩散评估";
+  const handleClearCurrentLogs = useCallback(async () => {
+    if (clearLogsStatus === "pending" || activeLogCount === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      activeBottomTab === "timeline" ? "确认清除当前心跳日志？" : "确认清除当前扩散评估记录？"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setClearLogsStatus("pending");
+    try {
+      await window.companion.clearCognitionLogs({ scope: activeLogScope });
+      setSelectedLog(null);
+      startPlaybackFromEntry(null);
+      await refreshCognitionPanels();
+      setClearLogsStatus("idle");
+    } catch {
+      setClearLogsStatus("error");
+    }
+  }, [activeBottomTab, activeLogCount, activeLogScope, clearLogsStatus, refreshCognitionPanels, startPlaybackFromEntry]);
   const selectedLogDetails = selectedLog ? (
     <div className="space-y-2 text-xs text-slate-700">
       <div className="grid gap-2 sm:grid-cols-2">
@@ -2134,7 +2172,6 @@ export function CognitionDebugPage() {
               onClick={() => {
                 setSelectedLog(entry);
                 startPlaybackFromEntry(entry);
-                setActiveBottomTab("timeline");
               }}
               className="w-full rounded-2xl border border-border/70 bg-white/70 p-3 text-left transition hover:border-cyan-300 hover:bg-cyan-50/40"
             >
@@ -2551,8 +2588,19 @@ export function CognitionDebugPage() {
                         </button>
                       ))}
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      {bottomTabMeta.find((tab) => tab.id === activeBottomTab)?.helper}
+                    <div className="flex items-center gap-3">
+                      <div className="text-xs text-muted-foreground">
+                        {bottomTabMeta.find((tab) => tab.id === activeBottomTab)?.helper}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleClearCurrentLogs()}
+                        disabled={clearLogsStatus === "pending" || activeLogCount === 0}
+                      >
+                        {clearLogsLabel}
+                      </Button>
                     </div>
                   </div>
                   <div className="p-4">

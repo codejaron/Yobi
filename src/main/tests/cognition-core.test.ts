@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { encode } from "@msgpack/msgpack";
 import { CompanionPaths } from "../storage/paths.js";
-import { DEFAULT_COGNITION_CONFIG, type ActivationResult, type MemoryNode } from "@shared/cognition";
+import { DEFAULT_COGNITION_CONFIG, type ActivationLogEntry, type ActivationResult, type MemoryNode } from "@shared/cognition";
 import { loadCognitionConfig, patchCognitionConfig } from "../cognition/config.js";
 import { computeEdgeWeight, computeFanFactor } from "../cognition/activation/fan-effect.js";
 import { applyLateralInhibition } from "../cognition/activation/lateral-inhibition.js";
@@ -21,6 +21,7 @@ import { EmotionStateManager } from "../cognition/workspace/emotion-state.js";
 import { PredictionEngine } from "../cognition/activation/prediction-coding.js";
 import { AttentionSchema } from "../cognition/workspace/attention-schema.js";
 import { GlobalWorkspace } from "../cognition/workspace/global-workspace.js";
+import { readJsonlFile, writeJsonlFileAtomic } from "../storage/fs.js";
 
 async function createTempPaths(prefix: string): Promise<CompanionPaths> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -923,6 +924,88 @@ test("SubconsciousLoop clears stale activation when a manual run produces no see
 
     assert.deepEqual(entry.seeds, []);
     assert.equal(graph.getNode("lunch")?.activation_level, 0);
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("SubconsciousLoop clears timeline and experiment logs independently", async () => {
+  const paths = await createTempPaths("yobi-cognition-loop-clear-logs-");
+  try {
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    const workspace = await createWorkspaceManagers(paths, DEFAULT_COGNITION_CONFIG, graph);
+
+    const loop = new SubconsciousLoop({
+      graph,
+      thoughtPool: new ThoughtPool(paths),
+      emotionState: workspace.emotionState,
+      predictionEngine: workspace.predictionEngine,
+      attentionSchema: workspace.attentionSchema,
+      globalWorkspace: workspace.globalWorkspace,
+      memory: {
+        embedText: async () => [1, 0, 0],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      modelFactory: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never,
+      paths: {
+        cognitionActivationLogPath: paths.cognitionActivationLogPath
+      },
+      getAppConfig: () => ({}) as never,
+      getCognitionConfig: () => DEFAULT_COGNITION_CONFIG,
+      getUserOnline: () => true,
+      getLastExpressionTime: () => 0,
+      setLastExpressionTime: () => {},
+      onProactiveMessage: async () => {},
+      onTickCompleted: async () => {}
+    });
+
+    const automaticEntry: ActivationLogEntry = {
+      timestamp: 1,
+      trigger_type: "time_signal",
+      seeds: [],
+      top_activated: [],
+      bubbles_generated: 0,
+      bubble_passed_filter: false,
+      expression_produced: false,
+      expression_text: null,
+      manual_text: null
+    };
+    const manualEntry: ActivationLogEntry = {
+      timestamp: 2,
+      trigger_type: "manual_signal",
+      seeds: [],
+      top_activated: [],
+      bubbles_generated: 0,
+      bubble_passed_filter: false,
+      expression_produced: false,
+      expression_text: null,
+      manual_text: "中午吃什么"
+    };
+    const bufferState = loop as unknown as { recentLogsBuffer: ActivationLogEntry[] };
+
+    await writeJsonlFileAtomic(paths.cognitionActivationLogPath, [automaticEntry, manualEntry]);
+    bufferState.recentLogsBuffer = [automaticEntry, manualEntry];
+
+    const clearedTimeline = await loop.clearActivationLogs("timeline");
+
+    assert.deepEqual(clearedTimeline, { removed: 1, remaining: 1 });
+    assert.deepEqual(await readJsonlFile(paths.cognitionActivationLogPath), [manualEntry]);
+    assert.deepEqual(loop.getRecentLogs(10), [manualEntry]);
+
+    await writeJsonlFileAtomic(paths.cognitionActivationLogPath, [automaticEntry, manualEntry]);
+    bufferState.recentLogsBuffer = [automaticEntry, manualEntry];
+
+    const clearedExperiments = await loop.clearActivationLogs("experiments");
+
+    assert.deepEqual(clearedExperiments, { removed: 1, remaining: 1 });
+    assert.deepEqual(await readJsonlFile(paths.cognitionActivationLogPath), [automaticEntry]);
+    assert.deepEqual(loop.getRecentLogs(10), [automaticEntry]);
   } finally {
     await cleanupPaths(paths);
   }

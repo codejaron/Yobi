@@ -196,6 +196,9 @@ const api = {
   getCognitionBroadcastHistory() {
     return ipcRenderer.invoke('cognition:getBroadcastHistory');
   },
+  clearCognitionLogs(input) {
+    return ipcRenderer.invoke('cognition:clearLogs', input ?? {});
+  },
   triggerCognitionConsolidation() {
     return ipcRenderer.invoke('cognition:triggerConsolidation');
   },

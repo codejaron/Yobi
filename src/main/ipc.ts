@@ -316,6 +316,11 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   );
   ipcMain.handle("cognition:getHealthMetrics", () => runtime.getCognitionHealthMetrics());
   ipcMain.handle("cognition:getBroadcastHistory", () => runtime.getCognitionBroadcastHistory());
+  ipcMain.handle("cognition:clearLogs", (_, payload: { scope?: "timeline" | "experiments" }) =>
+    runtime.clearCognitionLogs({
+      scope: payload?.scope === "experiments" ? "experiments" : "timeline"
+    })
+  );
   ipcMain.handle("cognition:triggerConsolidation", () => runtime.triggerCognitionConsolidation());
   ipcMain.handle("cognition:getConsolidationReport", () => runtime.getCognitionConsolidationReport());
   ipcMain.handle("cognition:getConsolidationHistory", () => runtime.getCognitionConsolidationHistory());

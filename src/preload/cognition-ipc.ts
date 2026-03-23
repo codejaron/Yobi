@@ -11,6 +11,7 @@ export function createCognitionIpcApi(ipcRenderer: IpcRenderer): Pick<
   | "updateCognitionConfig"
   | "getCognitionHealthMetrics"
   | "getCognitionBroadcastHistory"
+  | "clearCognitionLogs"
   | "triggerCognitionConsolidation"
   | "getCognitionConsolidationReport"
   | "getCognitionConsolidationHistory"
@@ -32,6 +33,9 @@ export function createCognitionIpcApi(ipcRenderer: IpcRenderer): Pick<
     },
     getCognitionBroadcastHistory() {
       return ipcRenderer.invoke("cognition:getBroadcastHistory");
+    },
+    clearCognitionLogs(input) {
+      return ipcRenderer.invoke("cognition:clearLogs", input ?? {});
     },
     triggerCognitionConsolidation() {
       return ipcRenderer.invoke("cognition:triggerConsolidation");

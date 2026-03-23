@@ -27,6 +27,7 @@ import type {
   CognitionConfig,
   CognitionConfigPatch,
   CognitionDebugSnapshot,
+  CognitionLogScope,
   ColdArchiveStats,
   ConsolidationReport,
   HealthMetrics
@@ -173,6 +174,7 @@ export interface CompanionApi {
   updateCognitionConfig(input: CognitionConfigPatch): Promise<CognitionConfig>;
   getCognitionHealthMetrics(): Promise<HealthMetrics>;
   getCognitionBroadcastHistory(): Promise<BroadcastSummary[]>;
+  clearCognitionLogs(input: { scope: CognitionLogScope }): Promise<{ removed: number; remaining: number }>;
   triggerCognitionConsolidation(): Promise<ConsolidationReport>;
   getCognitionConsolidationReport(): Promise<ConsolidationReport | null>;
   getCognitionConsolidationHistory(): Promise<ConsolidationReport[]>;

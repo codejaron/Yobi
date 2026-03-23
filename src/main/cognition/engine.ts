@@ -10,6 +10,7 @@ import {
   type CognitionConfigPatch,
   type ConsolidationReport,
   type CognitionDebugSnapshot,
+  type CognitionLogScope,
   type HealthMetrics,
 } from "@shared/cognition";
 import { readJsonlFile, readTextFile } from "@main/storage/fs";
@@ -312,6 +313,11 @@ export class CognitionEngine {
   async getBroadcastHistory(): Promise<BroadcastSummary[]> {
     await this.ensureInitialized();
     return this.requireGlobalWorkspace().getBroadcastHistory();
+  }
+
+  async clearLogs(scope: CognitionLogScope): Promise<{ removed: number; remaining: number }> {
+    await this.ensureInitialized();
+    return this.requireLoop().clearActivationLogs(scope);
   }
 
   async triggerConsolidation(): Promise<ConsolidationReport> {

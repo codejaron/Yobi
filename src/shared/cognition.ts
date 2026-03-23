@@ -696,6 +696,14 @@ export interface ActivationLogEntry {
   broadcast_summary?: BroadcastSummary | null;
 }
 
+export type CognitionLogScope = "timeline" | "experiments";
+
+export function isManualActivationLogEntry(
+  entry: Pick<ActivationLogEntry, "trigger_type" | "manual_text">
+): boolean {
+  return entry.trigger_type === "manual_signal" || Boolean(entry.manual_text);
+}
+
 export interface MemoryGraphSnapshot {
   nodes: DebugMemoryNode[];
   edges: MemoryEdge[];
