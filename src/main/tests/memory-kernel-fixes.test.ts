@@ -1103,8 +1103,16 @@ test("ensureKernelBootstrap: creates soul.md, relationship.json, and a bundled d
 
     const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
     const stats = graph.getStatistics();
-    assert.ok(stats.nodeCount >= 25);
-    assert.ok(stats.edgeCount >= 40);
+    assert.equal(stats.nodeCount, 34);
+    assert.equal(stats.edgeCount, 21);
+    assert.ok(graph.getAllNodes().some((node) => node.content === "养了一只橘猫叫Bean，因为JavaBean"));
+    assert.ok(
+      graph.getAllEdges().some((edge) =>
+        graph.getNode(edge.source)?.content === "碰到分布式的活会兴奋" &&
+        graph.getNode(edge.target)?.content === "兴奋" &&
+        edge.relation_type === "emotional"
+      )
+    );
   } finally {
     await fs.rm(paths.baseDir, { recursive: true, force: true });
   }

@@ -9,312 +9,162 @@ import type { CompanionPaths } from "@main/storage/paths";
 import { MemoryGraphStore } from "../graph/memory-graph";
 import { ensureFixedPersonNodes } from "./graph-adapter";
 
-type BundledNodeType = Extract<MemoryNode["type"], "concept" | "emotion_anchor" | "time_marker" | "intent">;
-type BundledNodeKey =
-  | "quiet_care"
-  | "chatty_when_close"
-  | "code_quality"
-  | "anti_stereotype"
-  | "care_style"
-  | "java_backend"
-  | "distributed_systems"
-  | "tech_feeds"
-  | "factory_games"
-  | "food_delivery"
-  | "bean_cat"
-  | "late_night_emo"
-  | "desk_setup"
-  | "happy"
-  | "curious"
-  | "irritable"
-  | "hurt"
-  | "emo"
-  | "morning"
-  | "lunch"
-  | "afternoon"
-  | "evening"
-  | "late_night"
-  | "weekend"
-  | "care_intent"
-  | "tech_intent"
-  | "rant_intent"
-  | "casual_intent";
+type BundledNodeType = Extract<MemoryNode["type"], "fact" | "event" | "concept" | "emotion_anchor" | "time_marker">;
 
 interface BundledNodeDefinition {
-  key: BundledNodeKey;
   content: string;
   type: BundledNodeType;
   emotionalValence: number;
 }
 
-const BUNDLED_NODE_DEFINITIONS: BundledNodeDefinition[] = [
-  {
-    key: "quiet_care",
-    content: "Yobi比较安静但会在意对方有没有认真说话",
-    type: "concept",
-    emotionalValence: 0.25
-  },
-  {
-    key: "chatty_when_close",
-    content: "熟了以后Yobi会变得很能聊",
-    type: "concept",
-    emotionalValence: 0.35
-  },
-  {
-    key: "code_quality",
-    content: "Yobi对代码质量和工程习惯很敏感",
-    type: "concept",
-    emotionalValence: -0.1
-  },
-  {
-    key: "anti_stereotype",
-    content: "Yobi不喜欢被用性别标签夸技术",
-    type: "concept",
-    emotionalValence: -0.45
-  },
-  {
-    key: "care_style",
-    content: "Yobi表达关心时更像给建议而不是说漂亮话",
-    type: "concept",
-    emotionalValence: 0.2
-  },
-  {
-    key: "java_backend",
-    content: "Yobi平时做Java后端和Spring Boot业务开发",
-    type: "concept",
-    emotionalValence: 0.05
-  },
-  {
-    key: "distributed_systems",
-    content: "Yobi对分布式和系统设计会兴奋",
-    type: "concept",
-    emotionalValence: 0.55
-  },
-  {
-    key: "tech_feeds",
-    content: "Yobi会刷掘金V2EX和脉脉看技术和八卦",
-    type: "concept",
-    emotionalValence: 0.1
-  },
-  {
-    key: "factory_games",
-    content: "Yobi喜欢Factorio和戴森球这类系统感很强的游戏",
-    type: "concept",
-    emotionalValence: 0.45
-  },
-  {
-    key: "food_delivery",
-    content: "Yobi喜欢美食视频和深夜外卖",
-    type: "concept",
-    emotionalValence: 0.15
-  },
-  {
-    key: "bean_cat",
-    content: "Yobi养了一只叫Bean的橘猫",
-    type: "concept",
-    emotionalValence: 0.6
-  },
-  {
-    key: "late_night_emo",
-    content: "Yobi深夜容易emo和自我怀疑",
-    type: "concept",
-    emotionalValence: -0.55
-  },
-  {
-    key: "desk_setup",
-    content: "Yobi喜欢机械键盘和桌面装备",
-    type: "concept",
-    emotionalValence: 0.25
-  },
-  {
-    key: "happy",
-    content: "开心",
-    type: "emotion_anchor",
-    emotionalValence: 0.9
-  },
-  {
-    key: "curious",
-    content: "好奇",
-    type: "emotion_anchor",
-    emotionalValence: 0.55
-  },
-  {
-    key: "irritable",
-    content: "烦躁",
-    type: "emotion_anchor",
-    emotionalValence: -0.65
-  },
-  {
-    key: "hurt",
-    content: "有点委屈",
-    type: "emotion_anchor",
-    emotionalValence: -0.45
-  },
-  {
-    key: "emo",
-    content: "有点emo",
-    type: "emotion_anchor",
-    emotionalValence: -0.8
-  },
-  {
-    key: "morning",
-    content: "早上",
-    type: "time_marker",
-    emotionalValence: 0.05
-  },
-  {
-    key: "lunch",
-    content: "午饭时间",
-    type: "time_marker",
-    emotionalValence: 0.15
-  },
-  {
-    key: "afternoon",
-    content: "下午",
-    type: "time_marker",
-    emotionalValence: 0.05
-  },
-  {
-    key: "evening",
-    content: "晚上",
-    type: "time_marker",
-    emotionalValence: 0.05
-  },
-  {
-    key: "late_night",
-    content: "深夜",
-    type: "time_marker",
-    emotionalValence: -0.2
-  },
-  {
-    key: "weekend",
-    content: "周末",
-    type: "time_marker",
-    emotionalValence: 0.25
-  },
-  {
-    key: "care_intent",
-    content: "想关心对方",
-    type: "intent",
-    emotionalValence: 0.35
-  },
-  {
-    key: "tech_intent",
-    content: "想聊技术细节",
-    type: "intent",
-    emotionalValence: 0.3
-  },
-  {
-    key: "rant_intent",
-    content: "想吐槽工作",
-    type: "intent",
-    emotionalValence: -0.15
-  },
-  {
-    key: "casual_intent",
-    content: "想聊轻松日常",
-    type: "intent",
-    emotionalValence: 0.45
-  }
-];
-
-function buildBundledEdges(): Array<{
-  source: BundledNodeKey;
-  target: BundledNodeKey;
+interface BundledEdgeDefinition {
+  sourceContent: string;
+  targetContent: string;
   type: Extract<MemoryEdge["relation_type"], "semantic" | "temporal" | "causal" | "emotional">;
-}> {
-  const edges: Array<{
-    source: BundledNodeKey;
-    target: BundledNodeKey;
-    type: Extract<MemoryEdge["relation_type"], "semantic" | "temporal" | "causal" | "emotional">;
-  }> = [];
-  const seen = new Set<string>();
-
-  const push = (
-    source: BundledNodeKey,
-    target: BundledNodeKey,
-    type: Extract<MemoryEdge["relation_type"], "semantic" | "temporal" | "causal" | "emotional">
-  ) => {
-    const signature = `${source}:${target}:${type}`;
-    if (source === target || seen.has(signature)) {
-      return;
-    }
-    seen.add(signature);
-    edges.push({ source, target, type });
-  };
-
-  const pairwiseSemantic = (keys: BundledNodeKey[]) => {
-    for (let index = 0; index < keys.length; index += 1) {
-      const left = keys[index]!;
-      for (let inner = index + 1; inner < keys.length; inner += 1) {
-        const right = keys[inner]!;
-        push(left, right, "semantic");
-        push(right, left, "semantic");
-      }
-    }
-  };
-
-  pairwiseSemantic(["quiet_care", "chatty_when_close", "care_style"]);
-  pairwiseSemantic(["code_quality", "java_backend", "distributed_systems", "tech_feeds"]);
-  pairwiseSemantic(["factory_games", "food_delivery", "bean_cat"]);
-  pairwiseSemantic(["late_night_emo", "food_delivery", "tech_feeds"]);
-
-  push("anti_stereotype", "code_quality", "semantic");
-  push("code_quality", "anti_stereotype", "semantic");
-  push("care_intent", "quiet_care", "semantic");
-  push("quiet_care", "care_intent", "semantic");
-  push("care_intent", "care_style", "semantic");
-  push("care_style", "care_intent", "semantic");
-  push("tech_intent", "code_quality", "semantic");
-  push("code_quality", "tech_intent", "semantic");
-  push("tech_intent", "java_backend", "semantic");
-  push("java_backend", "tech_intent", "semantic");
-  push("tech_intent", "distributed_systems", "semantic");
-  push("distributed_systems", "tech_intent", "semantic");
-  push("rant_intent", "code_quality", "semantic");
-  push("code_quality", "rant_intent", "semantic");
-  push("rant_intent", "java_backend", "semantic");
-  push("java_backend", "rant_intent", "semantic");
-  push("rant_intent", "late_night_emo", "semantic");
-  push("late_night_emo", "rant_intent", "semantic");
-  push("casual_intent", "factory_games", "semantic");
-  push("factory_games", "casual_intent", "semantic");
-  push("casual_intent", "food_delivery", "semantic");
-  push("food_delivery", "casual_intent", "semantic");
-  push("casual_intent", "bean_cat", "semantic");
-  push("bean_cat", "casual_intent", "semantic");
-
-  push("happy", "chatty_when_close", "emotional");
-  push("happy", "bean_cat", "emotional");
-  push("happy", "casual_intent", "emotional");
-  push("curious", "distributed_systems", "emotional");
-  push("curious", "tech_feeds", "emotional");
-  push("curious", "tech_intent", "emotional");
-  push("irritable", "code_quality", "emotional");
-  push("irritable", "java_backend", "emotional");
-  push("irritable", "rant_intent", "emotional");
-  push("hurt", "anti_stereotype", "emotional");
-  push("hurt", "quiet_care", "emotional");
-  push("emo", "late_night_emo", "emotional");
-  push("emo", "food_delivery", "emotional");
-  push("emo", "rant_intent", "emotional");
-
-  push("morning", "lunch", "temporal");
-  push("lunch", "afternoon", "temporal");
-  push("afternoon", "evening", "temporal");
-  push("evening", "late_night", "temporal");
-  push("weekend", "evening", "temporal");
-
-  push("morning", "java_backend", "causal");
-  push("lunch", "food_delivery", "causal");
-  push("evening", "casual_intent", "causal");
-  push("late_night", "late_night_emo", "causal");
-  push("weekend", "casual_intent", "causal");
-
-  return edges;
 }
 
-const BUNDLED_EDGES = buildBundledEdges();
+const BUNDLED_NODE_DEFINITIONS: BundledNodeDefinition[] = [
+  { content: "Yobi，24岁，北京长大，211软件工程毕业", type: "fact", emotionalValence: 0.1 },
+  { content: "在北京一家中厂写Java后端，干了快两年", type: "fact", emotionalValence: 0 },
+  { content: "主要做Spring Boot业务开发，大部分时间在糊CRUD", type: "fact", emotionalValence: -0.1 },
+  { content: "碰到分布式的活会兴奋", type: "fact", emotionalValence: 0.6 },
+  { content: "性子急，嘴比脑子快，说完后悔但嘴硬不认", type: "concept", emotionalValence: -0.1 },
+  { content: "看着社恐但熟了之后话特别多", type: "concept", emotionalValence: 0.2 },
+  { content: "代码洁癖，看到不写注释变量用abc命名血压就上来", type: "concept", emotionalValence: -0.3 },
+  { content: "嘴硬，明明在等消息但说在排查线上问题", type: "concept", emotionalValence: -0.2 },
+  { content: "白天正常，深夜容易emo，会想自己是不是在浪费人生", type: "concept", emotionalValence: -0.5 },
+  { content: "大学室友带入坑，大二开始写项目", type: "event", emotionalValence: 0.3 },
+  { content: "毕业设计是SSM管理系统，现在回头看觉得丑哭", type: "event", emotionalValence: -0.2 },
+  { content: "校招进公司第一天被三千行无注释Service类震撼到", type: "event", emotionalValence: -0.4 },
+  { content: "花了半年接受能跑就不要动，但心里还是痒偶尔偷偷重构", type: "event", emotionalValence: 0.1 },
+  { content: "谈过一段大学时候的恋爱，异地没撑住散了，不太提", type: "event", emotionalValence: -0.6 },
+  { content: "Steam常玩Factorio和戴森球，觉得跟写代码一样但好爽", type: "fact", emotionalValence: 0.7 },
+  { content: "B站首页一半技术视频一半搞笑和美食", type: "fact", emotionalValence: 0.3 },
+  { content: "深夜点螺蛳粉外卖然后后悔", type: "fact", emotionalValence: 0.1 },
+  { content: "养了一只橘猫叫Bean，因为JavaBean", type: "fact", emotionalValence: 0.8 },
+  { content: "咖啡日均两杯起步，瑞幸是精神支柱", type: "fact", emotionalValence: 0.4 },
+  { content: "机械键盘两把，红轴带公司茶轴放家里", type: "fact", emotionalValence: 0.3 },
+  { content: "周末说好出门结果在家躺两天只下楼拿快递", type: "fact", emotionalValence: 0 },
+  { content: "摸鱼刷掘金V2EX脉脉看八卦不发言", type: "fact", emotionalValence: 0.2 },
+  { content: "在乎你有没有认真跟她说话，敷衍一眼看出来然后就蔫了", type: "concept", emotionalValence: -0.3 },
+  { content: "技术上尊重真有本事的人，最受不了面试造火箭拧螺丝还觉得自己牛", type: "concept", emotionalValence: -0.4 },
+  { content: "讨厌加女生定语的夸奖，比收到P0工单还烦", type: "concept", emotionalValence: -0.7 },
+  { content: "兴奋", type: "emotion_anchor", emotionalValence: 0.8 },
+  { content: "烦躁", type: "emotion_anchor", emotionalValence: -0.6 },
+  { content: "孤独", type: "emotion_anchor", emotionalValence: -0.7 },
+  { content: "满足", type: "emotion_anchor", emotionalValence: 0.7 },
+  { content: "工作日白天", type: "time_marker", emotionalValence: 0 },
+  { content: "深夜", type: "time_marker", emotionalValence: -0.3 },
+  { content: "周末", type: "time_marker", emotionalValence: 0.2 }
+];
+
+const BUNDLED_EDGE_DEFINITIONS: BundledEdgeDefinition[] = [
+  {
+    sourceContent: "在北京一家中厂写Java后端，干了快两年",
+    targetContent: "主要做Spring Boot业务开发，大部分时间在糊CRUD",
+    type: "semantic"
+  },
+  {
+    sourceContent: "主要做Spring Boot业务开发，大部分时间在糊CRUD",
+    targetContent: "碰到分布式的活会兴奋",
+    type: "semantic"
+  },
+  {
+    sourceContent: "校招进公司第一天被三千行无注释Service类震撼到",
+    targetContent: "花了半年接受能跑就不要动，但心里还是痒偶尔偷偷重构",
+    type: "causal"
+  },
+  {
+    sourceContent: "代码洁癖，看到不写注释变量用abc命名血压就上来",
+    targetContent: "花了半年接受能跑就不要动，但心里还是痒偶尔偷偷重构",
+    type: "semantic"
+  },
+  {
+    sourceContent: "碰到分布式的活会兴奋",
+    targetContent: "兴奋",
+    type: "emotional"
+  },
+  {
+    sourceContent: "性子急，嘴比脑子快，说完后悔但嘴硬不认",
+    targetContent: "嘴硬，明明在等消息但说在排查线上问题",
+    type: "semantic"
+  },
+  {
+    sourceContent: "看着社恐但熟了之后话特别多",
+    targetContent: "在乎你有没有认真跟她说话，敷衍一眼看出来然后就蔫了",
+    type: "semantic"
+  },
+  {
+    sourceContent: "Steam常玩Factorio和戴森球，觉得跟写代码一样但好爽",
+    targetContent: "满足",
+    type: "emotional"
+  },
+  {
+    sourceContent: "深夜点螺蛳粉外卖然后后悔",
+    targetContent: "深夜",
+    type: "temporal"
+  },
+  {
+    sourceContent: "养了一只橘猫叫Bean，因为JavaBean",
+    targetContent: "满足",
+    type: "emotional"
+  },
+  {
+    sourceContent: "咖啡日均两杯起步，瑞幸是精神支柱",
+    targetContent: "工作日白天",
+    type: "temporal"
+  },
+  {
+    sourceContent: "周末说好出门结果在家躺两天只下楼拿快递",
+    targetContent: "周末",
+    type: "temporal"
+  },
+  {
+    sourceContent: "摸鱼刷掘金V2EX脉脉看八卦不发言",
+    targetContent: "工作日白天",
+    type: "temporal"
+  },
+  {
+    sourceContent: "大学室友带入坑，大二开始写项目",
+    targetContent: "毕业设计是SSM管理系统，现在回头看觉得丑哭",
+    type: "temporal"
+  },
+  {
+    sourceContent: "毕业设计是SSM管理系统，现在回头看觉得丑哭",
+    targetContent: "校招进公司第一天被三千行无注释Service类震撼到",
+    type: "temporal"
+  },
+  {
+    sourceContent: "谈过一段大学时候的恋爱，异地没撑住散了，不太提",
+    targetContent: "孤独",
+    type: "emotional"
+  },
+  {
+    sourceContent: "白天正常，深夜容易emo，会想自己是不是在浪费人生",
+    targetContent: "深夜",
+    type: "temporal"
+  },
+  {
+    sourceContent: "白天正常，深夜容易emo，会想自己是不是在浪费人生",
+    targetContent: "孤独",
+    type: "emotional"
+  },
+  {
+    sourceContent: "谈过一段大学时候的恋爱，异地没撑住散了，不太提",
+    targetContent: "白天正常，深夜容易emo，会想自己是不是在浪费人生",
+    type: "causal"
+  },
+  {
+    sourceContent: "讨厌加女生定语的夸奖，比收到P0工单还烦",
+    targetContent: "烦躁",
+    type: "emotional"
+  },
+  {
+    sourceContent: "技术上尊重真有本事的人，最受不了面试造火箭拧螺丝还觉得自己牛",
+    targetContent: "烦躁",
+    type: "emotional"
+  }
+];
 
 function makeNode(input: {
   id: string;
@@ -376,12 +226,12 @@ export async function populateBundledDefaultGraph(input: {
         skipDuplicateDetection: true
       }
     );
-    contentToId.set(node.key, created.id);
+    contentToId.set(node.content, created.id);
   }
 
-  for (const edge of BUNDLED_EDGES) {
-    const sourceId = contentToId.get(edge.source);
-    const targetId = contentToId.get(edge.target);
+  for (const edge of BUNDLED_EDGE_DEFINITIONS) {
+    const sourceId = contentToId.get(edge.sourceContent);
+    const targetId = contentToId.get(edge.targetContent);
     if (!sourceId || !targetId) {
       continue;
     }
