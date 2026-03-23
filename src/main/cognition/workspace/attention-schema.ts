@@ -64,7 +64,24 @@ export class AttentionSchema {
     return this.getWorkspaceState();
   }
 
-  injectFocusSeeds(currentSeeds: Array<{ nodeId: string; energy: number }>): Array<{ nodeId: string; energy: number }> {
+  pruneInvalidFocusNodes(isValidNode: (nodeId: string) => boolean): number {
+    const nextFocusNodeIds = this.focusNodeIds.filter((nodeId) => isValidNode(nodeId));
+    const removed = this.focusNodeIds.length - nextFocusNodeIds.length;
+    this.focusNodeIds = nextFocusNodeIds;
+    return removed;
+  }
+
+  reset(): void {
+    this.focusNodeIds = [];
+  }
+
+  injectFocusSeeds(
+    currentSeeds: Array<{ nodeId: string; energy: number }>,
+    options?: { isValidNode?: (nodeId: string) => boolean }
+  ): Array<{ nodeId: string; energy: number }> {
+    if (options?.isValidNode) {
+      this.pruneInvalidFocusNodes(options.isValidNode);
+    }
     const energy = this.input.getCognitionConfig().attention.focus_seed_energy;
     const byId = new Map<string, { nodeId: string; energy: number }>();
     for (const seed of currentSeeds) {

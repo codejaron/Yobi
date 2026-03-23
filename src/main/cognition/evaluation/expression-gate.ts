@@ -3,7 +3,13 @@ import { z } from "zod";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { ModelFactory } from "@main/core/model-factory";
 import type { AppConfig, HistoryMessage, UserProfile } from "@shared/types";
-import type { BubbleEvaluationDimensions, CognitionConfig, ThoughtBubble } from "@shared/cognition";
+import type {
+  BubbleEvaluationDimensions,
+  CognitionConfig,
+  MemoryEdge,
+  MemoryNode,
+  ThoughtBubble
+} from "@shared/cognition";
 import { ThoughtPool } from "../thoughts/thought-bubble";
 import { roughFilter } from "./rough-filter";
 
@@ -16,9 +22,15 @@ const evaluationSchema = z.object({
   relationship_fit: z.number().min(1).max(5)
 }).strict();
 
+interface SummaryGraphLookup {
+  getNode(id: string): MemoryNode | undefined;
+  getEdgesBetween(source: string, target: string): MemoryEdge[];
+}
+
 export interface ExpressionEvaluationInput {
   bubble: ThoughtBubble;
   thoughtPool: ThoughtPool;
+  graph: SummaryGraphLookup;
   recentDialogue: HistoryMessage[];
   userProfile: UserProfile;
   modelFactory: ModelFactory;
@@ -55,6 +67,98 @@ function formatRecentDialogue(messages: HistoryMessage[]): string {
     .join("\n");
 }
 
+function compareActivatedNodes(
+  left: { node_id: string; activation: number },
+  right: { node_id: string; activation: number }
+): number {
+  if (right.activation !== left.activation) {
+    return right.activation - left.activation;
+  }
+  return left.node_id.localeCompare(right.node_id);
+}
+
+function formatActivation(value: number): string {
+  return value.toFixed(2);
+}
+
+export function buildBubbleSummaryContext(bubble: ThoughtBubble, graph: SummaryGraphLookup): string {
+  const topActivated = [...bubble.activated_nodes]
+    .sort(compareActivatedNodes)
+    .slice(0, 6)
+    .map((item) => {
+      const node = graph.getNode(item.node_id);
+      return {
+        id: item.node_id,
+        content: node?.content?.trim() || "未知记忆",
+        type: node?.type ?? "concept",
+        activation: item.activation
+      };
+    });
+  const sourceSeeds = bubble.source_seeds
+    .map((seedId) => graph.getNode(seedId)?.content?.trim())
+    .filter((seed): seed is string => Boolean(seed));
+  const topNodeIds = new Set(topActivated.map((node) => node.id));
+  const edgeSeen = new Set<string>();
+  const relatedPaths: Array<{ source: string; target: string; relation: MemoryEdge["relation_type"]; score: number }> =
+    [];
+
+  for (const sourceNode of topActivated) {
+    for (const targetNode of topActivated) {
+      if (sourceNode.id === targetNode.id || !topNodeIds.has(sourceNode.id) || !topNodeIds.has(targetNode.id)) {
+        continue;
+      }
+
+      for (const edge of graph.getEdgesBetween(sourceNode.id, targetNode.id)) {
+        const key = `${edge.source}:${edge.relation_type}:${edge.target}`;
+        if (edgeSeen.has(key)) {
+          continue;
+        }
+        edgeSeen.add(key);
+        relatedPaths.push({
+          source: sourceNode.content,
+          target: targetNode.content,
+          relation: edge.relation_type,
+          score: sourceNode.activation + targetNode.activation
+        });
+      }
+    }
+  }
+
+  relatedPaths.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    const leftKey = `${left.source}:${left.relation}:${left.target}`;
+    const rightKey = `${right.source}:${right.relation}:${right.target}`;
+    return leftKey.localeCompare(rightKey);
+  });
+
+  const sections: string[] = [];
+  if (sourceSeeds.length > 0) {
+    sections.push(["种子记忆：", ...sourceSeeds.slice(0, 4).map((seed) => `- ${seed}`)].join("\n"));
+  }
+  if (topActivated.length > 0) {
+    sections.push([
+      "高激活记忆：",
+      ...topActivated.map(
+        (node) => `- ${node.content}（${node.type}，激活 ${formatActivation(node.activation)}）`
+      )
+    ].join("\n"));
+  }
+  if (relatedPaths.length > 0) {
+    sections.push([
+      "关联路径：",
+      ...relatedPaths.slice(0, 6).map((path) => `- ${path.source} --${path.relation}--> ${path.target}`)
+    ].join("\n"));
+  }
+
+  if (sections.length === 0) {
+    return "没有可读的联想内容。";
+  }
+
+  return sections.join("\n\n");
+}
+
 export async function evaluateAndExpress(input: ExpressionEvaluationInput): Promise<ExpressionEvaluationResult> {
   if (!roughFilter(input.bubble, input.lastExpressionTime, input.userOnline, input.config)) {
     return {
@@ -68,14 +172,15 @@ export async function evaluateAndExpress(input: ExpressionEvaluationInput): Prom
   }
 
   const cognitionModel = input.modelFactory.getCognitionModel();
+  const bubbleSummaryContext = buildBubbleSummaryContext(input.bubble, input.graph);
   const summaryTextResult = await generateText({
     model: cognitionModel,
     providerOptions: resolveOpenAIStoreOption(input.appConfig, "cognition"),
-    prompt: `以下是一组被激活的记忆节点及其关联路径，请用一句话概括这次联想的核心主题：${JSON.stringify(
-      input.bubble.activated_nodes,
-      null,
-      2
-    )}`,
+    prompt: [
+      "以下是一次联想气泡的可读上下文，请用一句中文概括这次联想的核心主题。",
+      "要求：不要提 node_id、UUID、激活值、路径、图谱、节点这些词，直接总结 Yobi 此刻在想什么。",
+      bubbleSummaryContext
+    ].join("\n\n"),
     maxOutputTokens: 120
   });
 

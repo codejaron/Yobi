@@ -233,7 +233,7 @@ function formatStageEntries(input: {
     return "无";
   }
   return ranked
-    .map((entry) => `${input.labelById.get(entry.node_id) ?? entry.node_id} (${entry.activation.toFixed(2)})`)
+    .map((entry) => `${displayNodeLabel(input.labelById.get(entry.node_id) ?? entry.node_id)} (${entry.activation.toFixed(2)})`)
     .join(" · ");
 }
 
@@ -982,11 +982,21 @@ function formatSigned(value: number | null | undefined, digits = 2): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
 
+const UUID_LIKE_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
+
+function displayNodeLabel(value: string | null | undefined): string {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized || UUID_LIKE_PATTERN.test(normalized)) {
+    return "失效节点";
+  }
+  return normalized;
+}
+
 function resolveNodeLabel(input: {
   nodeId: string;
   labelById: Map<string, string>;
 }): string {
-  return input.labelById.get(input.nodeId) ?? input.nodeId;
+  return displayNodeLabel(input.labelById.get(input.nodeId) ?? input.nodeId);
 }
 
 function toEpochMs(input: string | number | null | undefined): number | null {
@@ -1929,12 +1939,12 @@ export function CognitionDebugPage() {
             .join(" | ")}
         </div>
       ) : null}
-      <div>种子：{selectedLog.seeds.map((seed) => seed.label).join(", ")}</div>
+      <div>种子：{selectedLog.seeds.map((seed) => displayNodeLabel(seed.label)).join(", ")}</div>
       <div>
         Top 节点：
         {selectedLog.top_activated
           .slice(0, 5)
-          .map((node) => `${node.label} (${node.activation.toFixed(2)})`)
+          .map((node) => `${displayNodeLabel(node.label)} (${node.activation.toFixed(2)})`)
           .join(" · ")}
       </div>
       {selectedLog.bubble_summary ? <div>泡：{selectedLog.bubble_summary}</div> : null}
@@ -2069,7 +2079,7 @@ export function CognitionDebugPage() {
       ) : null}
     </div>
   ) : (
-    <p className="text-xs text-muted-foreground">悬浮看详情，点击圆点回放某一轮扩散。</p>
+    <p className="text-xs text-muted-foreground">悬浮后会保留最近一次详情，点击圆点回放某一轮扩散。</p>
   );
   const timelinePanel = (
     <div className="space-y-4">
@@ -2100,7 +2110,6 @@ export function CognitionDebugPage() {
                 : ((time - timelineBounds.min) / Math.max(1, timelineBounds.max - timelineBounds.min)) * timelineWidth;
             const commonProps = {
               onMouseEnter: () => setSelectedLog(log),
-              onMouseLeave: () => setSelectedLog(null),
               onClick: () => {
                 setSelectedLog(log);
                 startPlaybackFromEntry(log);
@@ -2194,7 +2203,7 @@ export function CognitionDebugPage() {
               <div className="mt-3 grid gap-2 text-xs text-slate-700 md:grid-cols-[1.2fr_1fr_1fr]">
                 <div>
                   <div className="font-medium text-slate-900">Seeds</div>
-                  <div>{entry.seeds.map((seed) => seed.label).join(" · ") || "无"}</div>
+                  <div>{entry.seeds.map((seed) => displayNodeLabel(seed.label)).join(" · ") || "无"}</div>
                 </div>
                 <div>
                   <div className="font-medium text-slate-900">结果</div>
@@ -2206,7 +2215,7 @@ export function CognitionDebugPage() {
                   <div>
                     {entry.top_activated
                       .slice(0, 3)
-                      .map((node) => `${node.label} (${node.activation.toFixed(2)})`)
+                      .map((node) => `${displayNodeLabel(node.label)} (${node.activation.toFixed(2)})`)
                       .join(" · ") || "无"}
                   </div>
                 </div>

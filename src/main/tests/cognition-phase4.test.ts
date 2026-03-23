@@ -176,6 +176,34 @@ test("AttentionSchema updates focus nodes and injects them as future seeds witho
   }
 });
 
+test("AttentionSchema prunes stale focus ids before reinjecting them as seeds", async () => {
+  const paths = await createTempPaths("yobi-cognition-phase4-attention-prune-");
+  try {
+    const schema = new AttentionSchema({
+      paths,
+      getCognitionConfig: () => DEFAULT_COGNITION_CONFIG
+    });
+    await schema.load();
+    schema.updateFromActivation({
+      activated: new Map([
+        ["winner", 1],
+        ["runner", 0.6]
+      ]),
+      path_log: []
+    });
+
+    const nextSeeds = schema.injectFocusSeeds(
+      [{ nodeId: "manual", energy: 0.9 }],
+      { isValidNode: (nodeId) => nodeId !== "runner" }
+    );
+
+    assert.deepEqual(nextSeeds.map((seed) => seed.nodeId), ["manual", "winner"]);
+    assert.deepEqual(schema.getWorkspaceState().focus_node_ids, ["winner"]);
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
 test("SubconsciousLoop logs prediction warmup and attention carries top nodes across manual runs", async () => {
   const paths = await createTempPaths("yobi-cognition-phase4-loop-");
   try {
@@ -329,6 +357,49 @@ test("CognitionEngine.start loads the bundled default graph without requiring a 
     });
 
     await assert.doesNotReject(() => engine.start());
+    await engine.stop();
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("CognitionEngine.start prunes stale attention focus ids that do not exist in the current graph", async () => {
+  const paths = await createTempPaths("yobi-cognition-attention-prune-engine-");
+  try {
+    await ensureKernelBootstrap(paths);
+    await fs.writeFile(
+      paths.cognitionAttentionFocusPath,
+      JSON.stringify({
+        focusNodeIds: ["04fb6be5-bf04-4687-9862-b197eaa2249e", "person:user"],
+        last_updated: new Date().toISOString()
+      }),
+      "utf8"
+    );
+
+    const engine = new CognitionEngine({
+      paths,
+      getConfig: () => ({}) as AppConfig,
+      memory: {
+        embedText: async () => [],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      conversation: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never
+    });
+
+    const snapshot = await engine.getDebugSnapshot();
+    assert.deepEqual(snapshot.workspace.attention?.focus_node_ids, ["person:user"]);
+
+    const persisted = JSON.parse(await fs.readFile(paths.cognitionAttentionFocusPath, "utf8")) as {
+      focusNodeIds?: string[];
+    };
+    assert.deepEqual(persisted.focusNodeIds, ["person:user"]);
+
     await engine.stop();
   } finally {
     await cleanupPaths(paths);

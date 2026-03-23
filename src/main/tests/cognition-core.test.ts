@@ -14,6 +14,7 @@ import { applySigmoidGate } from "../cognition/activation/sigmoid-gate.js";
 import { MemoryGraphStore } from "../cognition/graph/memory-graph.js";
 import { spread } from "../cognition/activation/spreading-activation.js";
 import { ThoughtPool } from "../cognition/thoughts/thought-bubble.js";
+import { buildBubbleSummaryContext } from "../cognition/evaluation/expression-gate.js";
 import { roughFilter } from "../cognition/evaluation/rough-filter.js";
 import { signalToSeeds } from "../cognition/loop/signal-to-seed.js";
 import { SubconsciousLoop } from "../cognition/loop/subconscious-loop.js";
@@ -873,6 +874,89 @@ test("roughFilter only passes when all four phase-one conditions are satisfied",
     roughFilter(bubble, now - 31 * 60 * 1000, false, config),
     false
   );
+});
+
+test("buildBubbleSummaryContext uses node content and relation paths instead of raw ids", () => {
+  const seedNode = makeNode({ id: "seed", content: "周末", type: "time_marker", embedding: [1, 0, 0] });
+  const weekendNode = makeNode({
+    id: "uuid-a",
+    content: "周末说好出门结果在家躺两天只下楼拿快递",
+    type: "fact",
+    embedding: [0, 1, 0]
+  });
+  const moodNode = makeNode({ id: "uuid-b", content: "兴奋", type: "emotion_anchor", embedding: [0, 0, 1] });
+  const graph = {
+    getNode(id: string) {
+      return new Map([
+        [seedNode.id, seedNode],
+        [weekendNode.id, weekendNode],
+        [moodNode.id, moodNode]
+      ]).get(id);
+    },
+    getEdgesBetween(source: string, target: string) {
+      if (source === weekendNode.id && target === moodNode.id) {
+        return [{
+          id: "weekend-mood",
+          source,
+          target,
+          relation_type: "emotional" as const,
+          weight: 0.2,
+          created_at: 0,
+          last_activated_at: 0
+        }];
+      }
+      return [];
+    }
+  };
+
+  const context = buildBubbleSummaryContext({
+    id: "bubble",
+    summary: "",
+    source_seeds: [seedNode.id],
+    activated_nodes: [
+      { node_id: weekendNode.id, activation: 0.42 },
+      { node_id: moodNode.id, activation: 0.38 }
+    ],
+    activation_peak: 0.42,
+    emotional_tone: 0.1,
+    novelty_score: 1,
+    created_at: 0,
+    last_reinforced_at: 0,
+    status: "nascent"
+  }, graph);
+
+  assert.match(context, /周末说好出门结果在家躺两天只下楼拿快递/);
+  assert.match(context, /兴奋/);
+  assert.match(context, /周末/);
+  assert.match(context, /--emotional-->/);
+  assert.doesNotMatch(context, /uuid-a|uuid-b/);
+});
+
+test("buildBubbleSummaryContext does not leak missing node ids", () => {
+  const context = buildBubbleSummaryContext({
+    id: "bubble",
+    summary: "",
+    source_seeds: ["b5dc8438-8aa5-4886-b283-9a6eab0f0b47"],
+    activated_nodes: [
+      { node_id: "04fb6be5-bf04-4687-9862-b197eaa2249e", activation: 0.5 }
+    ],
+    activation_peak: 0.5,
+    emotional_tone: 0,
+    novelty_score: 1,
+    created_at: 0,
+    last_reinforced_at: 0,
+    status: "nascent"
+  }, {
+    getNode() {
+      return undefined;
+    },
+    getEdgesBetween() {
+      return [];
+    }
+  });
+
+  assert.match(context, /未知记忆/);
+  assert.doesNotMatch(context, /04fb6be5|b5dc8438/);
 });
 
 test("SubconsciousLoop clears stale activation when a manual run produces no seeds", async () => {

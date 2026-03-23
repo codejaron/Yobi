@@ -31,6 +31,10 @@ import { ConsolidationEngine } from "../consolidation/consolidation-engine";
 const PRIMARY_RESOURCE_ID = "primary-user";
 const PRIMARY_THREAD_ID = "primary-thread";
 
+function resolveGraphLabel(graph: MemoryGraphStore, nodeId: string): string {
+  return graph.getNode(nodeId)?.content ?? "失效节点";
+}
+
 function sortActivationEntries(entries: Array<[string, number]>): Array<[string, number]> {
   return entries.sort((left, right) => {
     if (right[1] !== left[1]) {
@@ -55,7 +59,7 @@ function summarizeRound(
     .slice(0, 3)
     .map((item) => ({
       node_id: item.node_id,
-      label: graph.getNode(item.node_id)?.content ?? item.node_id,
+      label: resolveGraphLabel(graph, item.node_id),
       activation: item.activation
     }));
   return {
@@ -400,7 +404,9 @@ export class SubconsciousLoop {
         }
       ));
     }
-    const seeds = this.input.attentionSchema.injectFocusSeeds(deduplicateSeeds(seedBatches.flat()));
+    const seeds = this.input.attentionSchema.injectFocusSeeds(deduplicateSeeds(seedBatches.flat()), {
+      isValidNode: (nodeId) => Boolean(this.input.graph.getNode(nodeId))
+    });
     this.resetGraphActivationLevels(0);
 
     if (seeds.length === 0) {
@@ -482,7 +488,7 @@ export class SubconsciousLoop {
 
     const topActivated = rankedActivated.slice(0, 10).map(([nodeId, activation]) => ({
       node_id: nodeId,
-      label: this.input.graph.getNode(nodeId)?.content ?? nodeId,
+      label: resolveGraphLabel(this.input.graph, nodeId),
       activation
     }));
     const shouldCreateBubble = (topActivated[0]?.activation ?? 0) >= config.expression.activation_threshold;
@@ -522,6 +528,7 @@ export class SubconsciousLoop {
       const evaluation = await evaluateAndExpress({
         bubble: candidate,
         thoughtPool: this.input.thoughtPool,
+        graph: this.input.graph,
         recentDialogue,
         userProfile,
         modelFactory: this.input.modelFactory,
@@ -583,7 +590,7 @@ export class SubconsciousLoop {
       duration_ms: Date.now() - startedAt,
       seeds: seeds.map((seed) => ({
         node_id: seed.nodeId,
-        label: this.input.graph.getNode(seed.nodeId)?.content ?? seed.nodeId
+        label: resolveGraphLabel(this.input.graph, seed.nodeId)
       })),
       top_activated: topActivated,
       path_log: rawActivationResult.path_log,

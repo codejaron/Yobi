@@ -378,6 +378,8 @@ export class CognitionEngine {
       this.consolidationEngine?.interrupt();
       this.requireGraph().deserialize(serialized);
       this.thoughtPool?.reset();
+      this.attentionSchema?.reset();
+      await this.attentionSchema?.persist();
       return {
         accepted: true,
         message: `认知图已按当前 SOUL 重建（${result.nodeCount} 个节点，${result.edgeCount} 条边）。`
@@ -426,6 +428,9 @@ export class CognitionEngine {
     await this.emotionState.load();
     await this.predictionEngine.load();
     await this.attentionSchema.load();
+    if (this.attentionSchema.pruneInvalidFocusNodes((nodeId) => Boolean(this.graph?.getNode(nodeId))) > 0) {
+      await this.attentionSchema.persist();
+    }
     this.coldArchive = new ColdArchive({
       paths: this.input.paths,
       logger: this.input.logger,
