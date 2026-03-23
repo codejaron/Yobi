@@ -240,6 +240,34 @@ test("MemoryGraphStore.replaceNode updates an existing node in place", async () 
   }
 });
 
+test("MemoryGraphStore.toJSON omits heavy node fields from debug snapshots", async () => {
+  const paths = await createTempPaths("yobi-cognition-graph-debug-json-");
+  try {
+    const graph = new MemoryGraphStore(paths, DEFAULT_COGNITION_CONFIG.graph_maintenance);
+    graph.addNode(
+      makeNode({
+        id: "node-a",
+        content: "调试节点",
+        type: "fact",
+        embedding: [0.1, 0.2, 0.3],
+        activation_history: [1_000, 2_000, 3_000],
+        activation_level: 0.75,
+        base_level_activation: 0.42
+      })
+    );
+
+    const snapshot = graph.toJSON();
+    const nodeRecord = snapshot.nodes[0] as unknown as Record<string, unknown>;
+    assert.equal(snapshot.nodes.length, 1);
+    assert.equal(snapshot.nodes[0]?.id, "node-a");
+    assert.equal(snapshot.nodes[0]?.activation_history_count, 3);
+    assert.equal("embedding" in nodeRecord, false);
+    assert.equal("activation_history" in nodeRecord, false);
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
 test("MemoryGraphStore.addEdge caps outgoing edges per source by evicting the weakest edge", async () => {
   const paths = await createTempPaths("yobi-cognition-edge-cap-");
   try {

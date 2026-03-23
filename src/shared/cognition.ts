@@ -369,6 +369,10 @@ export interface MemoryEdge {
   last_activated_at: number;
 }
 
+export interface DebugMemoryNode extends Omit<MemoryNode, "embedding" | "activation_history"> {
+  activation_history_count: number;
+}
+
 export interface ActivatedNodeRef {
   node_id: string;
   activation: number;
@@ -693,7 +697,7 @@ export interface ActivationLogEntry {
 }
 
 export interface MemoryGraphSnapshot {
-  nodes: MemoryNode[];
+  nodes: DebugMemoryNode[];
   edges: MemoryEdge[];
   stats: {
     node_count: number;

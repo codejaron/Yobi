@@ -10,16 +10,16 @@ import {
   type CognitionDebugSnapshot,
   type ColdArchiveStats,
   type ConsolidationReport,
+  type DebugMemoryNode,
   type HealthMetrics,
   type MemoryEdge,
-  type MemoryNode
 } from "@shared/cognition";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@renderer/components/ui/card";
 import { cn } from "@renderer/lib/utils";
 
-const NODE_COLORS: Record<MemoryNode["type"], string> = {
+const NODE_COLORS: Record<DebugMemoryNode["type"], string> = {
   fact: "#4A90D9",
   event: "#7EC680",
   concept: "#F5A623",
@@ -32,7 +32,7 @@ const NODE_COLORS: Record<MemoryNode["type"], string> = {
   abstract_summary: "#C17C2F"
 };
 
-type GraphNode = MemoryNode & {
+type GraphNode = DebugMemoryNode & {
   x?: number;
   y?: number;
   vx?: number;
@@ -158,7 +158,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function nodeRenderRadius(node: MemoryNode): number {
+function nodeRenderRadius(node: DebugMemoryNode): number {
   return 8 + Math.min(32, node.activation_level * 32);
 }
 
@@ -1023,7 +1023,7 @@ export function CognitionDebugPage() {
     offsetY: 0
   });
   const [isGraphPanning, setIsGraphPanning] = useState(false);
-  const [hoveredNode, setHoveredNode] = useState<MemoryNode | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<DebugMemoryNode | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
   const [selectedLog, setSelectedLog] = useState<ActivationLogEntry | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1061,9 +1061,9 @@ export function CognitionDebugPage() {
       const next = await window.companion.getCognitionBroadcastHistory();
       setBroadcastHistory(next);
     } catch {
-      setBroadcastHistory(broadcastHistoryOf(snapshot));
+      // Snapshot already carries broadcast history; avoid tying refresh identity to snapshot updates.
     }
-  }, [snapshot]);
+  }, []);
 
   const loadConsolidationReport = useCallback(async () => {
     try {
@@ -1093,12 +1093,14 @@ export function CognitionDebugPage() {
   }, []);
 
   const refreshCognitionPanels = useCallback(async () => {
-    await loadSnapshot();
-    await loadHealthMetrics();
-    await loadBroadcastHistory();
-    await loadConsolidationReport();
-    await loadConsolidationHistory();
-    await loadArchiveStats();
+    await Promise.all([
+      loadSnapshot(),
+      loadHealthMetrics(),
+      loadBroadcastHistory(),
+      loadConsolidationReport(),
+      loadConsolidationHistory(),
+      loadArchiveStats()
+    ]);
   }, [
     loadArchiveStats,
     loadBroadcastHistory,
@@ -1348,7 +1350,7 @@ export function CognitionDebugPage() {
       y,
       viewport: graphViewport
     });
-    let closest: MemoryNode | null = null;
+    let closest: DebugMemoryNode | null = null;
     let minDistance = Infinity;
     const nodes = snapshot?.graph.nodes ?? [];
     nodes.forEach((node) => {
@@ -2524,7 +2526,7 @@ export function CognitionDebugPage() {
                         <div>类型：{hoveredNode.type}</div>
                         <div>激活：{hoveredNode.activation_level.toFixed(3)}</div>
                         <div>基础 B：{hoveredNode.base_level_activation.toFixed(3)}</div>
-                        <div>激活历史：{hoveredNode.activation_history.length}</div>
+                        <div>激活历史：{hoveredNode.activation_history_count}</div>
                       </div>
                     ) : null}
                   </div>

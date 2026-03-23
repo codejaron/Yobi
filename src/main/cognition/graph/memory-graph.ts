@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { encode, decode } from "@msgpack/msgpack";
 import type { CompanionPaths } from "@main/storage/paths";
-import type { GraphMaintenanceConfig, MemoryEdge, MemoryGraphSnapshot, MemoryNode } from "@shared/cognition";
+import type { DebugMemoryNode, GraphMaintenanceConfig, MemoryEdge, MemoryGraphSnapshot, MemoryNode } from "@shared/cognition";
 import type { MemoryGraph } from "./types";
 
 interface SerializedMemoryGraph {
@@ -411,8 +411,15 @@ export class MemoryGraphStore {
   }
 
   toJSON(): MemoryGraphSnapshot {
-    const nodes = this.getAllNodes();
-    const totalActivation = nodes.reduce((sum, node) => sum + node.activation_level, 0);
+    const rawNodes = this.getAllNodes();
+    const totalActivation = rawNodes.reduce((sum, node) => sum + node.activation_level, 0);
+    const nodes: DebugMemoryNode[] = rawNodes.map((node) => {
+      const { embedding: _embedding, activation_history, ...rest } = node;
+      return {
+        ...rest,
+        activation_history_count: activation_history.length
+      };
+    });
     return {
       nodes,
       edges: [...this.graph.edges],
