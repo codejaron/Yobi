@@ -22,6 +22,7 @@ const NODE_COLORS: Record<MemoryNode["type"], string> = {
   fact: "#4A90D9",
   event: "#7EC680",
   concept: "#F5A623",
+  person: "#4B5BDE",
   emotion_anchor: "#D0021B",
   external_entity: "#9013FE",
   time_marker: "#9B9B9B",

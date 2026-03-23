@@ -1,22 +1,18 @@
-import { randomUUID } from "node:crypto";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
 import {
-  memoryEdgeRelationSchema,
-  memoryNodeTypeSchema,
   type ActivationLogEntry,
   type BroadcastSummary,
   type ColdArchiveStats,
+  type CombinedDialogueExtractionDraft,
   type CognitionConfig,
   type CognitionConfigPatch,
   type ConsolidationReport,
   type CognitionDebugSnapshot,
   type HealthMetrics,
-  type MemoryEdge,
-  type MemoryNode
 } from "@shared/cognition";
-import { readJsonlFile } from "@main/storage/fs";
+import { readJsonlFile, readTextFile } from "@main/storage/fs";
 import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ConversationEngine } from "@main/core/conversation";
@@ -35,12 +31,60 @@ import { ColdArchive } from "./consolidation/cold-archive";
 import { ConsolidationEngine } from "./consolidation/consolidation-engine";
 import { GistExtractor } from "./consolidation/gist-extraction";
 import { SleepReplay } from "./consolidation/sleep-replay";
+import { applyCombinedExtraction } from "./ingestion/graph-adapter";
+import { runColdStart } from "./ingestion/cold-start";
+import { buildReplyMemoryBlock as buildReplyMemoryPrompt } from "./retrieval/memory-retrieval";
 
-const dialogueExtractionSchema = z.object({
+const factOperationSchema = z.object({
+  action: z.enum(["add", "update", "supersede"]),
+  fact: z.object({
+    entity: z.string().min(1).max(80),
+    key: z.string().min(1).max(80),
+    value: z.string().min(1).max(400),
+    category: z.enum(["identity", "preference", "event", "goal", "relationship", "emotion_pattern"]),
+    confidence: z.number().min(0).max(1).default(0.65),
+    ttl_class: z.enum(["permanent", "stable", "active", "session"]).default("stable"),
+    source: z.string().max(120).optional(),
+    source_range: z.string().max(120).optional()
+  }).strict()
+}).strict();
+
+const combinedExtractionSchema = z.object({
+  facts: z.array(z.string().min(1)).default([]),
+  fact_operations: z.array(factOperationSchema).max(60).default([]),
+  graph: z.object({
+    nodes: z.array(
+      z.object({
+        content: z.string().min(1),
+        type: z.enum(["fact", "event", "concept", "person", "intent", "time_marker", "emotion_anchor"]),
+        emotional_valence: z.number().min(-1).max(1).optional()
+      }).strict()
+    ).default([]),
+    edges: z.array(
+      z.object({
+        source_content: z.string().min(1),
+        target_content: z.string().min(1),
+        type: z.enum(["semantic", "temporal", "causal", "emotional"])
+      }).strict()
+    ).default([]),
+    entity_merges: z.array(
+      z.object({
+        source_content: z.string().min(1),
+        target_content: z.string().min(1)
+      }).strict()
+    ).default([])
+  }).strict().default({
+    nodes: [],
+    edges: [],
+    entity_merges: []
+  })
+}).strict();
+
+const coldStartSeedSchema = z.object({
   nodes: z.array(
     z.object({
       content: z.string().min(1),
-      type: memoryNodeTypeSchema,
+      type: z.enum(["concept", "emotion_anchor", "time_marker", "intent", "person"]),
       emotional_valence: z.number().min(-1).max(1).optional()
     }).strict()
   ).default([]),
@@ -48,8 +92,7 @@ const dialogueExtractionSchema = z.object({
     z.object({
       source_content: z.string().min(1),
       target_content: z.string().min(1),
-      relation_type: memoryEdgeRelationSchema,
-      weight: z.number().min(0).max(1).optional()
+      type: z.enum(["semantic", "temporal", "causal", "emotional"])
     }).strict()
   ).default([])
 }).strict();
@@ -57,7 +100,8 @@ const dialogueExtractionSchema = z.object({
 interface CognitionEngineInput {
   paths: CompanionPaths;
   getConfig: () => AppConfig;
-  memory: Pick<YobiMemory, "embedText" | "getProfile" | "listHistoryByCursor">;
+  memory: Pick<YobiMemory, "embedText" | "getProfile" | "listHistoryByCursor">
+    & Partial<Pick<YobiMemory, "getFactsStore" | "syncFactEmbeddings">>;
   conversation: ConversationEngine;
   logger: AppLogger;
   getUserOnline?: () => boolean;
@@ -139,9 +183,13 @@ export class CognitionEngine {
     const result = await generateObject({
       model: this.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(appConfig, "cognition"),
-      schema: dialogueExtractionSchema,
+      schema: combinedExtractionSchema,
       prompt: [
-        "请从以下对话中提取实体和关系，返回 JSON 格式 {nodes: [{content, type, emotional_valence?}], edges: [{source_content, target_content, relation_type, weight?}]}。",
+        "请从以下对话中同时提取句子级 facts、结构化 fact_operations、以及认知图 graph。",
+        "当前用户统一写成 {{user}}，AI 助手统一写成 {{yobi}}，第三方人物用对话中最完整的称呼。",
+        "graph.nodes 的 type 只能用 fact / event / concept / person / intent；如果内容本身是单个时间词或情绪词，也可直接输出 time_marker / emotion_anchor。",
+        "graph.edges 的 type 只能用 semantic / temporal / causal / emotional。",
+        "当对话中明确说明两个人物是同一人时，请在 graph.entity_merges 里输出 {source_content, target_content}。",
         "只返回结构化 JSON，不要解释。",
         JSON.stringify(
           {
@@ -157,51 +205,29 @@ export class CognitionEngine {
       ].join("\n")
     });
 
-    const parsed = dialogueExtractionSchema.parse(result.object ?? {});
-    const graph = this.requireGraph();
+    const parsed = combinedExtractionSchema.parse(result.object ?? {}) as CombinedDialogueExtractionDraft;
     const now = Date.now();
-    const contentToId = new Map<string, string>();
-
-    for (const draft of parsed.nodes) {
-      const embedding = await this.input.memory.embedText(draft.content);
-      const added = graph.addNode({
-        id: randomUUID(),
-        content: draft.content.trim(),
-        type: draft.type,
-        embedding: embedding ?? [],
-        activation_level: 0,
-        activation_history: [],
-        base_level_activation: Number.NEGATIVE_INFINITY,
-        emotional_valence: draft.emotional_valence ?? 0,
-        created_at: now,
-        last_activated_at: now,
-        metadata: {
-          channel: input.channel,
-          extracted_from: "dialogue"
+    await applyCombinedExtraction({
+      paths: this.input.paths,
+      graph: this.requireGraph(),
+      channel: input.channel,
+      draft: parsed,
+      cognitionConfig: this.requireConfig(),
+      nowMs: now,
+      memory: {
+        embedText: (text) => this.input.memory.embedText(text),
+        getFactsStore: () => {
+          if (!this.input.memory.getFactsStore) {
+            throw new Error("facts store unavailable");
+          }
+          return this.input.memory.getFactsStore();
+        },
+        syncFactEmbeddings: async (facts) => {
+          await this.input.memory.syncFactEmbeddings?.(facts);
         }
-      } satisfies MemoryNode);
-      contentToId.set(draft.content.trim(), added.id);
-    }
-
-    for (const draft of parsed.edges) {
-      const sourceId = contentToId.get(draft.source_content.trim());
-      const targetId = contentToId.get(draft.target_content.trim());
-      if (!sourceId || !targetId || sourceId === targetId) {
-        continue;
       }
-
-      graph.addEdge({
-        id: randomUUID(),
-        source: sourceId,
-        target: targetId,
-        relation_type: draft.relation_type,
-        weight: draft.weight ?? 0.6,
-        created_at: now,
-        last_activated_at: now
-      } satisfies MemoryEdge);
-    }
-
-    graph.serialize();
+    });
+    this.requireGraph().serialize();
     const residue = [normalizedUser, normalizedAssistant]
       .filter((value) => value.length > 0)
       .join("\n");
@@ -213,6 +239,25 @@ export class CognitionEngine {
       this.lastDialogueTime = now;
       this.queueEmotionAnalysis(residue);
     }
+  }
+
+  async buildReplyMemoryBlock(text: string): Promise<string> {
+    await this.ensureInitialized();
+    await this.repairGraphEmbeddingsIfNeeded();
+    return buildReplyMemoryPrompt({
+      graph: this.requireGraph(),
+      userText: text,
+      embedText: (value) => this.input.memory.embedText(value),
+      getRecentDialogueMessages: async () => {
+        const recent = await this.input.memory.listHistoryByCursor({
+          threadId: "main",
+          resourceId: "main",
+          limit: this.requireConfig().retrieval.dedup_lookback_turns * 2
+        });
+        return recent.items.map((item) => item.text);
+      },
+      cognitionConfig: this.requireConfig()
+    });
   }
 
   async getDebugSnapshot(): Promise<CognitionDebugSnapshot> {
@@ -298,6 +343,32 @@ export class CognitionEngine {
 
     this.cognitionConfig = await loadCognitionConfig(this.input.paths);
     this.graph = new MemoryGraphStore(this.input.paths, this.cognitionConfig.graph_maintenance);
+    await runColdStart({
+      paths: this.input.paths,
+      graph: this.graph,
+      cognitionConfig: this.cognitionConfig,
+      soulMarkdown: await readTextFile(this.input.paths.soulPath, ""),
+      embedText: (text) => this.input.memory.embedText(text),
+      generateSeeds: async ({ soulMarkdown, targetNodeCount }) => {
+        const result = await generateObject({
+          model: this.modelFactory.getCognitionModel(),
+          providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
+          schema: coldStartSeedSchema,
+          prompt: [
+            "请根据以下 soul 文本，输出一个 JSON，包含用于认知图冷启动的种子 nodes 和建议 edges。",
+            `目标节点数约 ${targetNodeCount} 个，覆盖五个维度：性格特征、兴趣领域、情感锚点、时间节点、交互意图。`,
+            "节点字段必须包含 content、type、emotional_valence；边字段必须包含 source_content、target_content、type。",
+            "只返回 JSON，不要解释。",
+            soulMarkdown
+          ].join("\n")
+        });
+        return coldStartSeedSchema.parse(result.object ?? {
+          nodes: [],
+          edges: []
+        });
+      }
+    });
+    this.graph.serialize();
     this.thoughtPool = new ThoughtPool(this.input.paths);
     this.emotionState = new EmotionStateManager({
       paths: this.input.paths,

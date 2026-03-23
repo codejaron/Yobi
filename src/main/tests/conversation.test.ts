@@ -469,6 +469,78 @@ test("ConversationEngine: injects task mode prompt only for task-mode console re
   assert.doesNotMatch(seenSystems[1] ?? "", /\[TASK MODE\]/);
 });
 
+test("ConversationEngine: injects cognition memory block from the optional provider", async () => {
+  const config = cloneConfig();
+  const seenSystems: string[] = [];
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async () => undefined,
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    ((input: { system: string }) => {
+      seenSystems.push(input.system);
+      return {
+        fullStream: (async function* () {
+          yield {
+            type: "text-delta",
+            text: "带记忆回复"
+          };
+        })(),
+        totalUsage: Promise.resolve(undefined)
+      };
+    }) as any
+  );
+
+  conversation.setCognitionMemoryProvider(async () => [
+    "[你对这个用户的记忆]",
+    "- 用户喜欢热乎的拉面"
+  ].join("\n"));
+
+  await conversation.reply({
+    text: "今天吃什么",
+    channel: "console",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    persistUserMessage: false
+  });
+
+  assert.equal(seenSystems.length, 1);
+  assert.match(seenSystems[0] ?? "", /\[你对这个用户的记忆\]/);
+  assert.match(seenSystems[0] ?? "", /用户喜欢热乎的拉面/);
+});
+
 test("ConversationEngine: parses hidden signals from raw final text before visible stripping", async () => {
   const config = cloneConfig();
   let seenSignals: RealtimeEmotionalSignals | null = null;

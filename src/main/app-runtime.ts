@@ -142,6 +142,7 @@ export class CompanionRuntime {
         this.emitCognitionTick(entry);
       }
     });
+    this.conversation.setCognitionMemoryProvider(({ userText }) => this.cognitionEngine.buildReplyMemoryBlock(userText));
     this.channelCoordinator.setPostReplyHook((input) => this.ingestDialogue(input));
     this.realtimeVoice.setAssistantReplyHook((input) => this.ingestDialogue(input));
     this.chatMediaStore = new ChatMediaStore(this.paths);

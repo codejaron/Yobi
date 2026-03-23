@@ -197,6 +197,8 @@ function buildTaskModePrompt(): string {
 }
 
 export class ConversationEngine {
+  private cognitionMemoryProvider: ((input: { userText: string }) => Promise<string>) | null = null;
+
   constructor(
     private readonly memory: YobiMemory,
     private readonly modelFactory: ModelFactory,
@@ -208,6 +210,10 @@ export class ConversationEngine {
     private readonly onRealtimeEmotionalSignals?: (signals: RealtimeEmotionalSignals) => void | Promise<void>,
     private readonly streamTextImpl: typeof streamText = streamText
   ) {}
+
+  setCognitionMemoryProvider(provider: ((input: { userText: string }) => Promise<string>) | null): void {
+    this.cognitionMemoryProvider = provider;
+  }
 
   async reply(input: {
     text: string;
@@ -279,19 +285,25 @@ export class ConversationEngine {
       .map((item) => item.trim())
       .filter(Boolean)
       .slice(-3);
-    const [factCandidates, episodeCandidates] = await Promise.all([
+    const [factCandidates, episodeCandidates, cognitionMemoryBlock] = await Promise.all([
       this.memory.searchRelevantFacts({
         queryTexts,
         facts,
         limit: 20
       }),
-      Promise.resolve(matchEpisodes(episodes, extractQueryTerms(queryTexts), 8))
+      Promise.resolve(matchEpisodes(episodes, extractQueryTerms(queryTexts), 8)),
+      this.cognitionMemoryProvider
+        ? this.cognitionMemoryProvider({
+            userText: normalizedText
+          }).catch(() => "")
+        : Promise.resolve("")
     ]);
     const externalPromptBlocks = [
       skillCatalog.summary.enabledCount > 0 ? skillCatalog.prompt : "",
       buildLocalNowPrompt(),
       input.channel === "console" && input.taskMode ? buildTaskModePrompt() : "",
       buildRealtimeSignalContractPrompt(),
+      cognitionMemoryBlock,
       input.voiceContext ? buildVoiceInputContextPrompt(input.voiceContext) : "",
       input.photoUrl ? `用户这轮附带图片 URL: ${input.photoUrl}` : ""
     ].filter(Boolean);

@@ -12,7 +12,6 @@ import { YobiMemory } from "@main/memory/setup";
 import { KernelEventQueue } from "./event-queue";
 import { KernelTaskQueue } from "./task-queue";
 import { StateStore } from "./state-store";
-import { splitExtractionWindows } from "@main/memory-v2/extraction-runner";
 import { BackgroundTaskWorkerService } from "@main/services/background-task-worker";
 import { appLogger as logger } from "@main/runtime/singletons";
 import {
@@ -245,9 +244,7 @@ export class KernelEngine {
   private async runTickCycle(): Promise<void> {
     this.applyStateDecay();
     await this.processQueuedEvents();
-    await this.maybeQueueIncrementalFactExtraction();
     await this.maybeScheduleDailyTasks();
-    await this.enqueueUnprocessedBufferTasks();
     await this.taskQueue.processAvailable();
     await this.maybeFinalizeDailyTasks();
     await this.input.memory.backfillFactEmbeddings(10);
@@ -262,7 +259,6 @@ export class KernelEngine {
       maxEvents: 20,
       priorities: new Set(["P0", "P1"])
     });
-    await this.enqueueUnprocessedBufferTasks();
     await this.taskQueue.processAvailable();
     await this.maybeFinalizeDailyTasks();
     await this.input.stateStore.flushIfDirty();
@@ -452,31 +448,8 @@ export class KernelEngine {
     ]);
   }
 
-  private async maybeQueueIncrementalFactExtraction(): Promise<void> {
-    const threshold = this.input.getConfig().kernel.factExtraction.incrementalMessageThreshold;
-    await this.input.memory.queuePendingBufferExtractions(threshold);
-  }
-
   private async enqueueUnprocessedBufferTasks(): Promise<void> {
-    const rows = await this.input.memory.consumeUnprocessedBuffer();
-    if (rows.length === 0) {
-      return;
-    }
-
-    const chunks = splitExtractionWindows({
-      messages: rows,
-      maxInputTokens: this.input.getConfig().kernel.factExtraction.maxInputTokens
-    });
-    await this.taskQueue.enqueueMany(
-      chunks.map((chunk) => ({
-        type: "fact-extraction" as const,
-        sourceRange: chunk.sourceRange,
-        payload: {
-          sourceRange: chunk.sourceRange,
-          messages: chunk.messages
-        }
-      }))
-    );
+    return;
   }
 
   private async maybeFinalizeDailyTasks(): Promise<void> {

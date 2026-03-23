@@ -12,6 +12,7 @@ export const memoryNodeTypeSchema = z.enum([
   "fact",
   "event",
   "concept",
+  "person",
   "emotion_anchor",
   "external_entity",
   "time_marker",
@@ -82,6 +83,26 @@ export const cognitionConfigSchema = z.object({
     duplicate_detection_threshold: z.number(),
     max_edges_per_node: z.number().int()
   }).strict(),
+  ingestion: z.object({
+    merge_cosine_threshold: z.number(),
+    edge_weight_increment: z.number(),
+    user_placeholder: z.string(),
+    yobi_placeholder: z.string()
+  }).strict(),
+  retrieval: z.object({
+    seed_top_k: z.number().int(),
+    spread_depth: z.number().int(),
+    result_top_k: z.number().int(),
+    final_top_k: z.number().int(),
+    dedup_cosine_threshold: z.number(),
+    dedup_lookback_turns: z.number().int(),
+    excluded_node_types: z.array(memoryNodeTypeSchema)
+  }).strict(),
+  cold_start: z.object({
+    seed_node_count: z.number().int(),
+    initial_edge_weight: z.number(),
+    semantic_edge_threshold: z.number()
+  }).strict(),
   loop: z.object({
     heartbeat_lambda_minutes: z.number(),
     min_interval_minutes: z.number(),
@@ -149,7 +170,9 @@ export const cognitionConfigSchema = z.object({
     cold_recall_months_lookback: z.number().int(),
     max_consolidation_duration_minutes: z.number(),
     interrupt_on_user_message: z.boolean(),
-    checkpoint_interval_nodes: z.number().int()
+    checkpoint_interval_nodes: z.number().int(),
+    entity_merge_embedding_threshold: z.number(),
+    entity_merge_neighbor_overlap: z.number()
   }).strict(),
   expression: z.object({
     activation_threshold: z.number(),
@@ -170,6 +193,9 @@ export type AttentionConfig = CognitionConfig["attention"];
 export type WorkspaceConfig = CognitionConfig["workspace"];
 export type ConsolidationConfig = CognitionConfig["consolidation"];
 export type ExpressionConfig = CognitionConfig["expression"];
+export type IngestionConfig = CognitionConfig["ingestion"];
+export type RetrievalConfig = CognitionConfig["retrieval"];
+export type ColdStartConfig = CognitionConfig["cold_start"];
 export type CognitionConfigPatch = DeepPartial<CognitionConfig>;
 
 export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
@@ -214,6 +240,26 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     hot_zone_max_nodes: 10_000,
     duplicate_detection_threshold: 0.92,
     max_edges_per_node: 15
+  },
+  ingestion: {
+    merge_cosine_threshold: 0.92,
+    edge_weight_increment: 0.05,
+    user_placeholder: "{{user}}",
+    yobi_placeholder: "{{yobi}}"
+  },
+  retrieval: {
+    seed_top_k: 3,
+    spread_depth: 2,
+    result_top_k: 10,
+    final_top_k: 5,
+    dedup_cosine_threshold: 0.9,
+    dedup_lookback_turns: 3,
+    excluded_node_types: ["time_marker", "emotion_anchor"]
+  },
+  cold_start: {
+    seed_node_count: 30,
+    initial_edge_weight: 0.2,
+    semantic_edge_threshold: 0.6
   },
   loop: {
     heartbeat_lambda_minutes: 15,
@@ -282,7 +328,9 @@ export const DEFAULT_COGNITION_CONFIG: CognitionConfig = {
     cold_recall_months_lookback: 3,
     max_consolidation_duration_minutes: 30,
     interrupt_on_user_message: true,
-    checkpoint_interval_nodes: 50
+    checkpoint_interval_nodes: 50,
+    entity_merge_embedding_threshold: 0.85,
+    entity_merge_neighbor_overlap: 0.3
   },
   expression: {
     activation_threshold: 0.4,
@@ -485,6 +533,15 @@ export interface ArchiveReport {
   lastProcessedIndex: number;
 }
 
+export interface ConsolidationMergedEntity {
+  source_id: string;
+  target_id: string;
+  source_content: string;
+  target_content: string;
+  similarity: number;
+  neighbor_overlap: number;
+}
+
 export interface ConsolidationHealthCheck {
   hot_node_limit_ok: boolean;
   no_orphans: boolean;
@@ -513,6 +570,7 @@ export interface ConsolidationReport {
   health_check: ConsolidationHealthCheck;
   before: ConsolidationGraphStats;
   after: ConsolidationGraphStats;
+  merged_entities: ConsolidationMergedEntity[];
   interrupted: boolean;
   last_completed_phase: "A" | "B" | "C" | "D" | "E";
 }
@@ -687,4 +745,37 @@ export interface DialogueExtractionDraft {
     relation_type: MemoryEdge["relation_type"];
     weight?: number;
   }>;
+}
+
+export interface CombinedDialogueExtractionDraft {
+  facts: string[];
+  fact_operations: Array<{
+    action: "add" | "update" | "supersede";
+    fact: {
+      entity: string;
+      key: string;
+      value: string;
+      category: import("./types").FactCategory;
+      confidence: number;
+      ttl_class: import("./types").FactTtlClass;
+      source?: string;
+      source_range?: string;
+    };
+  }>;
+  graph: {
+    nodes: Array<{
+      content: string;
+      type: Extract<MemoryNode["type"], "fact" | "event" | "concept" | "person" | "intent" | "time_marker" | "emotion_anchor">;
+      emotional_valence?: number;
+    }>;
+    edges: Array<{
+      source_content: string;
+      target_content: string;
+      type: Extract<MemoryEdge["relation_type"], "semantic" | "temporal" | "causal" | "emotional">;
+    }>;
+    entity_merges: Array<{
+      source_content: string;
+      target_content: string;
+    }>;
+  };
 }

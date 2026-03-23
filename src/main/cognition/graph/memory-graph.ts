@@ -77,9 +77,9 @@ export class MemoryGraphStore {
     this.loadHotGraph();
   }
 
-  addNode(node: MemoryNode): MemoryNode {
+  addNode(node: MemoryNode, options?: { skipDuplicateDetection?: boolean }): MemoryNode {
     const normalized = normalizeNode(node);
-    const duplicate = this.findDuplicate(normalized);
+    const duplicate = options?.skipDuplicateDetection ? null : this.findDuplicate(normalized);
     if (duplicate) {
       const duplicateLastConsolidatedAt = duplicate.last_consolidated_at
         ? Date.parse(duplicate.last_consolidated_at)
@@ -462,6 +462,12 @@ export class MemoryGraphStore {
       // Abstract summaries must remain distinct nodes even when their mean embeddings
       // are close to the events they summarize.
       if (node.type === "abstract_summary" || candidate.type === "abstract_summary") {
+        continue;
+      }
+      if (node.type === "person" || candidate.type === "person") {
+        continue;
+      }
+      if (candidate.type !== node.type) {
         continue;
       }
       if (candidate.embedding.length === 0) {

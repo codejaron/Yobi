@@ -1302,6 +1302,67 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
   }
 });
 
+test("KernelEngine.onUserMessage: does not enqueue legacy fact-extraction tasks from buffered messages", async () => {
+  const paths = await createTempPaths("yobi-kernel-no-legacy-facts-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    const stateStore = new StateStore(paths);
+    await memory.init();
+    await stateStore.init();
+
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "user",
+      text: "最近工作有点累",
+      metadata: {
+        channel: "console"
+      }
+    });
+    await memory.rememberMessage({
+      threadId: "main",
+      resourceId: "main",
+      role: "assistant",
+      text: "那今晚早点休息",
+      metadata: {
+        channel: "console"
+      }
+    });
+
+    const engine = new KernelEngine({
+      paths,
+      memory,
+      stateStore,
+      getConfig: () => config,
+      resourceId: "main",
+      threadId: "main",
+      backgroundWorker: {
+        init: async () => undefined,
+        getStatus: () => ({ available: false, message: "stub" })
+      } as any,
+      queueHandlers: [],
+      proactiveRewriteHandler: {
+        rewrite: async () => null,
+        getWorkerStatus: () => ({ available: false, message: "stub" }),
+        getPauseReason: () => "stub"
+      }
+    });
+    await engine.init();
+
+    await engine.onUserMessage({
+      ts: "2026-03-13T12:00:00.000Z",
+      text: "还在忙"
+    });
+
+    const queued = (engine as any).taskQueue.list() as PendingTask[];
+    assert.equal(queued.some((task) => task.type === "fact-extraction"), false);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
 test("KernelEngine.onUserMessage: updates session reentry and resets sessionWarmth to stage baseline when no prior engagement exists", async () => {
   const paths = await createTempPaths("yobi-user-message-state-");
   let memory: YobiMemory | null = null;

@@ -6,6 +6,7 @@ import { MemoryGraphStore } from "../graph/memory-graph";
 import { ColdArchive } from "./cold-archive";
 import { GistExtractor } from "./gist-extraction";
 import { SleepReplay } from "./sleep-replay";
+import { dedupePersonEntities } from "./entity-dedup";
 import type {
   ConsolidationCandidate,
   ConsolidationPhase,
@@ -145,6 +146,7 @@ export class ConsolidationEngine {
       skippedClusters: 0,
       newRelatedEdges: 0
     };
+    let mergedEntities = [] as ConsolidationReport["merged_entities"];
     let archiveReport = {
       migratedCount: 0,
       excludedByAbstraction: 0,
@@ -210,12 +212,17 @@ export class ConsolidationEngine {
           replayReport,
           gistReport,
           archiveReport,
+          mergedEntities,
           novelAssociations,
           interrupted,
           lastCompletedPhase
         });
       }
 
+      mergedEntities = dedupePersonEntities({
+        graph: this.input.graph,
+        cognitionConfig: this.input.getCognitionConfig()
+      }).mergedEntities;
       const windowStartMs = this.lastReport ? Date.parse(this.lastReport.completed_at) : startOfUtcDay(startedAtMs);
       gistReport = await this.input.gistExtractor.extractAbstractions({
         start: windowStartMs,
@@ -237,6 +244,7 @@ export class ConsolidationEngine {
           replayReport,
           gistReport,
           archiveReport,
+          mergedEntities,
           novelAssociations,
           interrupted,
           lastCompletedPhase
@@ -316,6 +324,7 @@ export class ConsolidationEngine {
         replayReport,
         gistReport,
         archiveReport,
+        mergedEntities,
         novelAssociations,
         interrupted,
         lastCompletedPhase: interrupted ? "D" : "E"
@@ -349,6 +358,10 @@ export class ConsolidationEngine {
         const record = row as Record<string, unknown>;
         return typeof record.completed_at === "string" && typeof record.trigger === "string" && record.after !== undefined;
       })
+      .map((row) => ({
+        ...row,
+        merged_entities: Array.isArray(row.merged_entities) ? row.merged_entities : []
+      }))
       .slice(-limit)
       .reverse();
   }
@@ -439,6 +452,7 @@ export class ConsolidationEngine {
     replayReport: ConsolidationReport["replay_report"];
     gistReport: ConsolidationReport["gist_report"];
     archiveReport: ConsolidationReport["archive_report"];
+    mergedEntities: ConsolidationReport["merged_entities"];
     novelAssociations: ConsolidationReport["novel_associations"];
     interrupted: boolean;
     lastCompletedPhase: ConsolidationPhase;
@@ -465,6 +479,7 @@ export class ConsolidationEngine {
       health_check: healthCheck,
       before: input.before,
       after,
+      merged_entities: input.mergedEntities,
       interrupted: input.interrupted,
       last_completed_phase: input.lastCompletedPhase
     };
