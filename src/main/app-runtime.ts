@@ -48,6 +48,11 @@ import {
 import { SenseVoiceModelManager } from "@main/services/sensevoice-model-manager";
 import { CognitionEngine } from "@main/cognition/engine";
 import { buildRuntimeRegistry, type RuntimeRegistry } from "@main/runtime/runtime-registry";
+import {
+  completeConsoleReply,
+  emitConsoleFinal as emitConsoleFinalEvent,
+  runConsolePostReplyTasks as runConsolePostReplyTasksHelper
+} from "@main/runtime/console-chat-lifecycle";
 
 interface HistoryQuery {
   query?: string;
@@ -877,17 +882,19 @@ export class CompanionRuntime {
         });
       }
 
-      latestHandle.finalized = true;
-      latestHandle.finishReason = "completed";
-      await this.ingestDialogue({
-        channel: "console",
+      completeConsoleReply({
+        requestId,
+        handle: latestHandle,
+        visibleReply,
         userText: text,
-        assistantText: visibleReply
+        emitFinal: (finalRequestId, finalHandle, finishReason, displayText) => {
+          this.emitConsoleFinal(finalRequestId, finalHandle as ConsoleRequestHandle, finishReason, displayText);
+        },
+        emitPetTalkingReply: (replyText) => {
+          this.petService.emitPetTalkingReply(replyText);
+        },
+        runPostReplyTasks: (payload) => this.runConsolePostReplyTasks(payload)
       });
-      this.emitConsoleFinal(requestId, latestHandle, "completed", visibleReply);
-      this.petService.emitPetTalkingReply(visibleReply);
-      await this.kernel.onAssistantMessage();
-      await this.emitStatus();
     } catch (error) {
       const latestHandle = this.activeConsoleRequests.get(requestId);
       if (latestHandle?.finalized && latestHandle.finishReason === "aborted") {
@@ -938,35 +945,37 @@ export class CompanionRuntime {
     return handle?.finalized === true;
   }
 
+  private async runConsolePostReplyTasks(input: {
+    channel: "console";
+    userText: string;
+    assistantText: string;
+  }): Promise<void> {
+    await runConsolePostReplyTasksHelper({
+      ...input,
+      ingestDialogue: (payload) => this.ingestDialogue(payload),
+      onAssistantMessage: () => this.kernel.onAssistantMessage(),
+      emitStatus: () => this.emitStatus(),
+      warn: (scope, event, payload, error) => this.logger.warn(scope, event, payload, error)
+    });
+  }
+
   private emitConsoleFinal(
     requestId: string,
     handle: ConsoleRequestHandle,
     finishReason: "completed" | "aborted",
     displayText?: string
   ): void {
-    if (handle.finalEventEmitted) {
-      return;
-    }
-
-    handle.finalEventEmitted = true;
-    if (finishReason === "aborted") {
-      this.consoleChannel.emit({
-        requestId,
-        type: "final",
-        finishReason: "aborted",
-        timestamp: new Date().toISOString()
-      });
-      return;
-    }
-
-    const visibleText = displayText?.trim() || "我这次没有生成有效回复，请重试一次。";
-    this.consoleChannel.emit({
+    emitConsoleFinalEvent({
       requestId,
-      type: "final",
-      finishReason: "completed",
-      rawText: visibleText,
-      displayText: visibleText,
-      timestamp: new Date().toISOString()
+      handle,
+      finishReason,
+      displayText,
+      emit: (event) => {
+        this.consoleChannel.emit({
+          ...event,
+          timestamp: event.timestamp ?? new Date().toISOString()
+        } as ConsoleRunEventV2);
+      }
     });
   }
 
