@@ -726,7 +726,7 @@ export class ConversationEngine {
       });
     }
 
-    void result.totalUsage
+    void Promise.resolve(result.totalUsage)
       .then((totalUsage) => {
         reportTokenUsage({
           source: tokenSourceFromChannel(input.channel),
@@ -736,7 +736,7 @@ export class ConversationEngine {
           outputText: finalText
         });
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         logger.warn("conversation", "token-usage-capture-failed", undefined, error);
       });
 
