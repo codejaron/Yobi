@@ -24,9 +24,6 @@ test("searchRelevantFacts: hybrid vector recall can bridge 疲劳语义到加班
     paths.ensureLayout();
 
     const config = cloneConfig();
-    config.memory.embedding.enabled = true;
-    config.memory.embedding.modelId = "test-model-v1";
-
     memory = new YobiMemory(paths, () => config);
     await memory.init();
 
@@ -87,9 +84,6 @@ test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => 
     paths.ensureLayout();
 
     const config = cloneConfig();
-    config.memory.embedding.enabled = true;
-    config.memory.embedding.modelId = "test-model-v1";
-
     memory = new YobiMemory(paths, () => config);
     await memory.init();
 
@@ -120,7 +114,6 @@ test("searchRelevantFacts: modelId 切换后旧向量视为 stale", async () => 
     ]);
     await memory.getFactEmbeddingStore().flushIfDirty();
 
-    config.memory.embedding.modelId = "test-model-v2";
     (memory as any).embedder = {
       init() {},
       getCurrentModelId: () => "test-model-v2",

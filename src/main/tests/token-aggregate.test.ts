@@ -27,19 +27,15 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
         dayKey: dayOffset(now, 0),
         timeZone: "Asia/Shanghai",
         tzOffsetMinutes: 480,
-        totalTokens: 165,
-        estimatedTokens: 21,
+        totalTokens: 158,
+        estimatedTokens: 19,
         bySource: {
           "chat:console": {
             tokens: 100,
             estimatedTokens: 0
           },
-          "background:fact-extraction": {
-            tokens: 30,
-            estimatedTokens: 0
-          },
           "background:cognition": {
-            tokens: 5,
+            tokens: 35,
             estimatedTokens: 1
           },
           "background:daily-summary": {
@@ -53,10 +49,6 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
           "background:reflection": {
             tokens: 9,
             estimatedTokens: 8
-          },
-          "background:proactive-push": {
-            tokens: 7,
-            estimatedTokens: 2
           }
         },
         updatedAt: "2026-03-10T04:00:00.000Z"
@@ -98,10 +90,10 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
     now
   });
 
-  assert.equal(today.totalTokens, 165);
-  assert.equal(today.estimatedTokens, 21);
+  assert.equal(today.totalTokens, 158);
+  assert.equal(today.estimatedTokens, 19);
   assert.equal(today.sourceTotals.chat.tokens, 100);
-  assert.equal(today.sourceTotals.background.tokens, 65);
+  assert.equal(today.sourceTotals.background.tokens, 58);
   assert.equal(today.backgroundDetails[0]?.label, "认知系统");
   assert.equal(today.backgroundDetails[0]?.tokens, 35);
   assert.equal(today.backgroundDetails[0]?.estimatedTokens, 1);
@@ -111,9 +103,7 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
   assert.equal(today.backgroundDetails[2]?.tokens, 6);
   assert.equal(today.backgroundDetails[3]?.label, "反思");
   assert.equal(today.backgroundDetails[3]?.tokens, 9);
-  assert.equal(today.backgroundDetails[4]?.label, "主动推送");
-  assert.equal(today.backgroundDetails[4]?.tokens, 7);
-  assert.equal(today.backgroundDetails.length, 5);
+  assert.equal(today.backgroundDetails.length, 4);
 
   const sevenDays = aggregateTokenStats(status, {
     period: "7d",
@@ -121,9 +111,9 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
     now
   });
 
-  assert.equal(sevenDays.totalTokens, 235);
+  assert.equal(sevenDays.totalTokens, 228);
   assert.equal(sevenDays.sourceTotals.chat.tokens, 170);
-  assert.equal(sevenDays.sourceTotals.background.tokens, 65);
+  assert.equal(sevenDays.sourceTotals.background.tokens, 58);
   assert.equal(sevenDays.trendWindowDays, 7);
   assert.equal(sevenDays.trendBars.length, 7);
 });
@@ -156,7 +146,7 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
         totalTokens: 80,
         estimatedTokens: 0,
         bySource: {
-          "background:proactive-push": {
+          "background:reflection": {
             tokens: 80,
             estimatedTokens: 0
           }
@@ -176,5 +166,5 @@ test("aggregateTokenStats: should downgrade 30-day trend on narrow viewport", ()
   assert.equal(result.trendDowngradedOnMobile, true);
   assert.equal(result.trendWindowDays, 7);
   assert.equal(result.trendBars.length, 7);
-  assert.equal(result.backgroundDetails[4]?.tokens, 80);
+  assert.equal(result.backgroundDetails[3]?.tokens, 80);
 });

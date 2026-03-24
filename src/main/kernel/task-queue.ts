@@ -253,7 +253,6 @@ function normalizeTask(raw: PendingTask): PendingTask | null {
   }
 
   if (
-    raw.type !== "fact-extraction" &&
     raw.type !== "profile-semantic-update" &&
     raw.type !== "daily-episode" &&
     raw.type !== "daily-reflection"

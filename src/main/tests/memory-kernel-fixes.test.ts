@@ -22,6 +22,7 @@ import {
   type PendingTask
 } from "@shared/types";
 import { DEFAULT_COGNITION_CONFIG } from "@shared/cognition";
+import { KERNEL_RUNTIME_DEFAULTS } from "@shared/runtime-tuning";
 
 function cloneConfig(): AppConfig {
   return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -469,12 +470,11 @@ test("buffer compaction: removed messages persist into unprocessed queue", async
   let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    config.kernel.buffer.maxMessages = 20;
-    config.kernel.buffer.lowWatermark = 10;
     memory = new YobiMemory(paths, () => config);
     await memory.init();
 
-    for (let index = 1; index <= 21; index += 1) {
+    const { maxMessages, lowWatermark } = KERNEL_RUNTIME_DEFAULTS.buffer;
+    for (let index = 1; index <= maxMessages + 1; index += 1) {
       await memory.rememberMessage({
         threadId: "main",
         resourceId: "main",
@@ -485,9 +485,9 @@ test("buffer compaction: removed messages persist into unprocessed queue", async
     }
 
     const pending = await memory.consumeUnprocessedBuffer();
-    assert.equal(pending.length, 11);
+    assert.equal(pending.length, maxMessages + 1 - lowWatermark);
     assert.equal(pending[0]?.text, "消息-1");
-    assert.equal(pending[10]?.text, "消息-11");
+    assert.equal(pending.at(-1)?.text, `消息-${maxMessages + 1 - lowWatermark}`);
   } finally {
     await cleanupMemoryPaths(paths, memory);
   }
@@ -606,8 +606,6 @@ test("searchRelevantFacts: bm25-only fallback keeps lexical hit when vector is u
   let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    config.memory.embedding.enabled = true;
-    config.memory.embedding.modelId = "missing-model.gguf";
     memory = new YobiMemory(paths, () => config);
     await memory.init();
 
@@ -654,12 +652,52 @@ test("searchRelevantFacts: bm25-only fallback keeps lexical hit when vector is u
   }
 });
 
+test("embedder toggle: disabled semantic retrieval reports disabled and keeps lexical retrieval", async () => {
+  const paths = await createTempPaths("yobi-embedder-disabled-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    config.memory.embedding.enabled = false;
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    await memory.getFactsStore().applyOperations(
+      [
+        {
+          action: "add",
+          fact: {
+            entity: "用户",
+            key: "偏好",
+            value: "喜欢咖啡",
+            category: "preference",
+            confidence: 0.8,
+            ttl_class: "stable"
+          }
+        }
+      ],
+      "test"
+    );
+
+    const results = await memory.searchRelevantFacts({
+      queryTexts: ["咖啡"],
+      limit: 5
+    });
+
+    assert.equal(memory.getEmbedderStatus().status, "disabled");
+    assert.equal(memory.getEmbedderStatus().mode, "disabled");
+    assert.equal(results[0]?.fact.key, "偏好");
+    assert.equal(results[0]?.semanticHit, false);
+    assert.equal(results[0]?.lexicalHit, true);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
 test("searchRelevantFacts: BM25 can match Chinese two-character tokens and symbol-heavy english tokens", async () => {
   const paths = await createTempPaths("yobi-bm25-tokens-");
   let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    config.memory.embedding.enabled = false;
     memory = new YobiMemory(paths, () => config);
     await memory.init();
 
@@ -708,7 +746,6 @@ test("searchRelevantFacts: stop-word-only query returns empty results", async ()
   let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    config.memory.embedding.enabled = false;
     memory = new YobiMemory(paths, () => config);
     await memory.init();
 
@@ -1325,7 +1362,6 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
   let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    config.kernel.dailyTaskHour = 3;
     memory = new YobiMemory(paths, () => config);
     const stateStore = new StateStore(paths);
     await memory.init();
@@ -1359,68 +1395,11 @@ test("scheduleDailyTasks: catches up yesterday after target hour and does not du
   }
 });
 
-test("KernelEngine.onUserMessage: does not enqueue legacy fact-extraction tasks from buffered messages", async () => {
-  const paths = await createTempPaths("yobi-kernel-no-legacy-facts-");
-  let memory: YobiMemory | null = null;
-  try {
-    const config = cloneConfig();
-    memory = new YobiMemory(paths, () => config);
-    const stateStore = new StateStore(paths);
-    await memory.init();
-    await stateStore.init();
-
-    await memory.rememberMessage({
-      threadId: "main",
-      resourceId: "main",
-      role: "user",
-      text: "最近工作有点累",
-      metadata: {
-        channel: "console"
-      }
-    });
-    await memory.rememberMessage({
-      threadId: "main",
-      resourceId: "main",
-      role: "assistant",
-      text: "那今晚早点休息",
-      metadata: {
-        channel: "console"
-      }
-    });
-
-    const engine = new KernelEngine({
-      paths,
-      memory,
-      stateStore,
-      getConfig: () => config,
-      resourceId: "main",
-      threadId: "main",
-      backgroundWorker: {
-        init: async () => undefined,
-        getStatus: () => ({ available: false, message: "stub" })
-      } as any,
-      queueHandlers: []
-    });
-    await engine.init();
-
-    await engine.onUserMessage({
-      ts: "2026-03-13T12:00:00.000Z",
-      text: "还在忙"
-    });
-
-    const queued = (engine as any).taskQueue.list() as PendingTask[];
-    assert.equal(queued.some((task) => task.type === "fact-extraction"), false);
-  } finally {
-    await cleanupMemoryPaths(paths, memory);
-  }
-});
-
 test("KernelEngine.onUserMessage: updates session reentry and resets sessionWarmth to stage baseline when no prior engagement exists", async () => {
   const paths = await createTempPaths("yobi-user-message-state-");
   let memory: YobiMemory | null = null;
   try {
     const config = cloneConfig();
-    config.kernel.sessionReentryGapHours = 6;
     memory = new YobiMemory(paths, () => config);
     const stateStore = new StateStore(paths);
     await memory.init();

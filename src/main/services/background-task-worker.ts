@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AppConfig, BufferMessage } from "@shared/types";
+import type { AppConfig } from "@shared/types";
 
 interface WorkerMessage {
   id: string;
@@ -11,23 +11,6 @@ interface WorkerMessage {
 export interface BackgroundWorkerStatus {
   available: boolean;
   message: string;
-}
-
-export interface FactExtractionWorkerResult {
-  operations: Array<{
-    action: "add" | "update" | "supersede";
-    fact: {
-      entity: string;
-      key: string;
-      value: string;
-      category: "identity" | "preference" | "event" | "goal" | "relationship" | "emotion_pattern";
-      confidence: number;
-      ttl_class: "permanent" | "stable" | "active" | "session";
-      source?: string;
-      source_range?: string;
-    };
-  }>;
-  tokenUsage?: unknown;
 }
 
 export class BackgroundTaskWorkerService {
@@ -83,16 +66,6 @@ export class BackgroundTaskWorkerService {
       available: this.ready && Boolean(this.worker),
       message: this.message
     };
-  }
-
-  async runFactExtraction(input: {
-    messages: BufferMessage[];
-    existingFacts: unknown;
-    profileHint: unknown;
-    config: AppConfig;
-    maxOutputTokens?: number;
-  }): Promise<FactExtractionWorkerResult> {
-    return this.call("fact-extraction", input) as Promise<FactExtractionWorkerResult>;
   }
 
   async runDailyEpisode(input: {

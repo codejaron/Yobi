@@ -44,15 +44,13 @@ test("KernelTaskQueue: worker-unavailable is treated as transient retry", async 
   const fixture = await createQueueFixture();
   const { queue } = fixture;
 
-  queue.register("fact-extraction", async () => {
+  queue.register("daily-reflection", async () => {
     throw new Error("background-worker-unavailable");
   });
   await queue.enqueue({
-    type: "fact-extraction",
-    sourceRange: "m1..m2",
+    type: "daily-reflection",
     payload: {
-      sourceRange: "m1..m2",
-      messages: []
+      dayKey: "2026-03-10"
     }
   });
   await queue.processAvailable();

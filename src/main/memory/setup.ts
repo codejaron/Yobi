@@ -13,6 +13,7 @@ import type {
   HistoryMessageMeta,
   UserProfile
 } from "@shared/types";
+import { KERNEL_RUNTIME_DEFAULTS } from "@shared/runtime-tuning";
 import { CompanionPaths } from "@main/storage/paths";
 import {
   ATTACHMENT_REUSE_USER_MESSAGE_WINDOW,
@@ -146,7 +147,7 @@ export class YobiMemory {
     this.profileStore = new ProfileStore(paths);
     this.episodesStore = new EpisodesStore(paths);
     this.factEmbeddingStore = new FactEmbeddingStore(paths);
-    this.embedder = new EmbedderService(paths, getConfig);
+    this.embedder = new EmbedderService(paths, () => this.getConfig().memory.embedding.enabled);
   }
 
   async init(): Promise<void> {
@@ -187,10 +188,9 @@ export class YobiMemory {
       meta: input.metadata,
       allowEmpty
     });
-    const kernel = this.getConfig().kernel;
     const compaction = await this.bufferStore.compactIfNeeded({
-      maxMessages: kernel.buffer.maxMessages,
-      lowWatermark: kernel.buffer.lowWatermark
+      maxMessages: KERNEL_RUNTIME_DEFAULTS.buffer.maxMessages,
+      lowWatermark: KERNEL_RUNTIME_DEFAULTS.buffer.lowWatermark
     });
     if (compaction.compacted && compaction.removed.length > 0) {
       await this.profileStore.updateFromStatSignals(compaction.removed);
@@ -424,10 +424,14 @@ export class YobiMemory {
     }
   }
 
+  refreshEmbeddingRuntime(): void {
+    this.embedder.refresh();
+  }
+
 
   async syncFactEmbeddings(facts: Fact[]): Promise<void> {
     await this.init();
-    if (facts.length === 0 || !this.getConfig().memory.embedding.enabled || !this.isVectorAvailable()) {
+    if (facts.length === 0 || !this.isVectorAvailable()) {
       return;
     }
 
@@ -455,7 +459,7 @@ export class YobiMemory {
 
   async backfillFactEmbeddings(limit = 10): Promise<void> {
     await this.init();
-    if (!this.getConfig().memory.embedding.enabled || !this.isVectorAvailable()) {
+    if (!this.isVectorAvailable()) {
       return;
     }
 
@@ -577,6 +581,14 @@ export class YobiMemory {
 
   getEmbedderStatus(): EmbedderRuntimeStatus {
     const embedderStatus = this.embedder.getStatus();
+    if (embedderStatus.status === "disabled") {
+      return {
+        status: "disabled",
+        mode: "disabled",
+        downloadPending: false,
+        message: ""
+      };
+    }
     const lexicalStatus = this.factsStore.getLexicalStatus();
     const vectorAvailable = embedderStatus.status === "ready";
     if (lexicalStatus.available && vectorAvailable) {
@@ -605,7 +617,7 @@ export class YobiMemory {
     }
     return {
       status: embedderStatus.status,
-      mode: embedderStatus.status === "disabled" ? "disabled" : "bm25-only",
+      mode: "bm25-only",
       downloadPending: embedderStatus.downloadPending,
       message: lexicalStatus.message || embedderStatus.message
     };

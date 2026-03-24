@@ -7,6 +7,7 @@ import type {
   RealtimeEmotionalSignals
 } from "@shared/types";
 import { getSessionWarmthBaseline } from "@shared/types";
+import { KERNEL_RUNTIME_DEFAULTS } from "@shared/runtime-tuning";
 import { CompanionPaths } from "@main/storage/paths";
 import { YobiMemory } from "@main/memory/setup";
 import { KernelEventQueue } from "./event-queue";
@@ -54,11 +55,10 @@ export class KernelEngine {
   private currentTickIntervalMs = 30_000;
 
   constructor(private readonly input: KernelEngineInput) {
-    const config = input.getConfig().kernel;
     this.taskQueue = new KernelTaskQueue(
       input.paths,
-      config.queue.maxConcurrent,
-      config.queue.retryLimit
+      KERNEL_RUNTIME_DEFAULTS.queue.maxConcurrent,
+      KERNEL_RUNTIME_DEFAULTS.queue.retryLimit
     );
   }
 
@@ -96,7 +96,6 @@ export class KernelEngine {
     const snapshot = this.input.stateStore.getSnapshot();
     const worker = this.input.backgroundWorker.getStatus();
     return {
-      enabled: this.input.getConfig().kernel.enabled,
       tickIntervalMs: this.currentTickIntervalMs,
       queueDepth: this.events.size() + this.taskQueue.depth(),
       lastTickAt: this.lastTickAt,
@@ -142,7 +141,7 @@ export class KernelEngine {
   }
 
   onRealtimeEmotionalSignals(signals: RealtimeEmotionalSignals | null | undefined): void {
-    const config = this.input.getConfig().kernel.emotionSignals;
+    const config = KERNEL_RUNTIME_DEFAULTS.emotionSignals;
     if (!config.enabled || !signals) {
       return;
     }
@@ -151,7 +150,7 @@ export class KernelEngine {
     const before = this.input.stateStore.getSnapshot();
     const after = this.input.stateStore.mutate((state) => {
       state.personality = {
-        ...this.input.getConfig().kernel.personality
+        ...KERNEL_RUNTIME_DEFAULTS.personality
       };
       const next = applyRealtimeEmotionalSignals({
         emotional: state.emotional,
@@ -172,7 +171,7 @@ export class KernelEngine {
   }
 
   syncPersonalityFromConfig(): void {
-    const personality = this.input.getConfig().kernel.personality;
+    const personality = KERNEL_RUNTIME_DEFAULTS.personality;
     this.input.stateStore.mutate((state) => {
       state.personality = {
         ...personality
@@ -288,7 +287,7 @@ export class KernelEngine {
     this.warmthIdleMinutesApplied = 0;
 
     this.input.stateStore.mutate((state) => {
-      const reentryThreshold = this.input.getConfig().kernel.sessionReentryGapHours;
+      const reentryThreshold = KERNEL_RUNTIME_DEFAULTS.sessionReentryGapHours;
       const stageBaseline = getSessionWarmthBaseline(state.relationship.stage);
       if (typeof gapMs === "number" && gapHours >= reentryThreshold) {
         state.sessionReentry = {
@@ -323,7 +322,7 @@ export class KernelEngine {
 
   private applyStateDecay(): void {
     const now = new Date();
-    const personality = this.input.getConfig().kernel.personality;
+    const personality = KERNEL_RUNTIME_DEFAULTS.personality;
     this.input.stateStore.mutate((state) => {
       const lastDecayAt = state.lastDecayAt ? new Date(state.lastDecayAt).getTime() : NaN;
       state.personality = {
@@ -390,7 +389,7 @@ export class KernelEngine {
   private async scheduleDailyTasks(force: boolean): Promise<void> {
     const now = new Date();
     const hour = now.getHours();
-    const targetHour = this.input.getConfig().kernel.dailyTaskHour;
+    const targetHour = KERNEL_RUNTIME_DEFAULTS.dailyTaskHour;
     const ready = force || hour >= targetHour;
     if (!ready) {
       return;
@@ -475,22 +474,21 @@ export class KernelEngine {
   }
 
   private resolveTickIntervalMs(): number {
-    const kernel = this.input.getConfig().kernel;
     const now = Date.now();
     const lastUser = this.lastUserMessageAt ? new Date(this.lastUserMessageAt).getTime() : 0;
     if (lastUser > 0) {
       const silence = now - lastUser;
       if (silence <= 5 * 60_000) {
-        return kernel.tick.activeIntervalMs;
+        return KERNEL_RUNTIME_DEFAULTS.tick.activeIntervalMs;
       }
       if (silence <= 30 * 60_000) {
-        return kernel.tick.warmIntervalMs;
+        return KERNEL_RUNTIME_DEFAULTS.tick.warmIntervalMs;
       }
       if (silence <= 6 * 3600 * 1000) {
-        return kernel.tick.idleIntervalMs;
+        return KERNEL_RUNTIME_DEFAULTS.tick.idleIntervalMs;
       }
     }
-    return kernel.tick.quietIntervalMs;
+    return KERNEL_RUNTIME_DEFAULTS.tick.quietIntervalMs;
   }
 
   private async evaluateRelationshipTransition(): Promise<void> {
@@ -515,8 +513,8 @@ export class KernelEngine {
     const targetIndex = stages.indexOf(targetStage);
 
     this.input.stateStore.mutate((state) => {
-      const upgradeWindow = this.input.getConfig().kernel.relationship.upgradeWindowDays;
-      const downgradeWindow = this.input.getConfig().kernel.relationship.downgradeWindowDays;
+      const upgradeWindow = KERNEL_RUNTIME_DEFAULTS.relationship.upgradeWindowDays;
+      const downgradeWindow = KERNEL_RUNTIME_DEFAULTS.relationship.downgradeWindowDays;
       if (targetIndex > currentIndex) {
         state.relationship.upgradeStreak += 1;
         state.relationship.downgradeStreak = 0;

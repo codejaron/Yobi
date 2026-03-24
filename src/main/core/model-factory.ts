@@ -213,10 +213,6 @@ export class ModelFactory {
     return this.getModelByRoute("chat");
   }
 
-  getFactExtractionModel(): any {
-    return this.getModelByRoute("factExtraction");
-  }
-
   getReflectionModel(): any {
     return this.getModelByRoute("reflection");
   }

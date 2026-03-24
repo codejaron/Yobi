@@ -2,14 +2,12 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
   AppConfig,
-  BufferMessage,
   PendingTask,
   PendingTaskType,
   ReflectionProposal
 } from "@shared/types";
 import { CompanionPaths } from "@main/storage/paths";
 import { YobiMemory } from "@main/memory/setup";
-import { normalizeBufferRow } from "./message-utils";
 import { clamp01 } from "./emotion-utils";
 import { toDayKey, shorten } from "./relationship-utils";
 import {
@@ -60,56 +58,6 @@ interface KernelTaskHandlerContext {
   backgroundWorker: BackgroundTaskWorkerService;
   resourceId: string;
   threadId: string;
-}
-
-export class FactExtractionTaskHandler implements KernelQueueTaskHandler {
-  readonly type = "fact-extraction" as const;
-
-  constructor(private readonly context: KernelTaskHandlerContext) {}
-
-  async handle(task: PendingTask): Promise<void> {
-    const sourceRange = typeof task.payload.sourceRange === "string" ? task.payload.sourceRange : "";
-    if (!sourceRange) {
-      return;
-    }
-
-    const messagesRaw = Array.isArray(task.payload.messages) ? task.payload.messages : [];
-    const messages = messagesRaw
-      .map((item) => normalizeBufferRow(item))
-      .filter((item): item is BufferMessage => item !== null);
-    if (messages.length === 0) {
-      return;
-    }
-
-    const existingFacts = this.context.memory.getFactsStore().listAll();
-    const profileHint = this.context.memory.getProfileStore().getProfile();
-    const config = this.context.getConfig();
-    const extractionResult = await this.context.backgroundWorker.runFactExtraction({
-      messages,
-      existingFacts,
-      profileHint,
-      config,
-      maxOutputTokens: config.kernel.factExtraction.maxOutputTokens
-    });
-    if (extractionResult.tokenUsage) {
-      reportTokenUsage({
-        source: "background:fact-extraction",
-        usage: extractionResult.tokenUsage,
-        inputText: JSON.stringify(messages),
-        outputText: JSON.stringify(extractionResult.operations)
-      });
-    }
-    const normalizedOperations = extractionResult.operations.map((operation) => ({
-      ...operation,
-      fact: {
-        ...operation.fact,
-        source_range: sourceRange
-      }
-    }));
-    const changedFacts = await this.context.memory.getFactsStore().applyOperations(normalizedOperations);
-    await this.context.memory.syncFactEmbeddings(changedFacts);
-    await this.context.memory.markExtractedByRange(sourceRange);
-  }
 }
 
 export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
@@ -335,7 +283,6 @@ export class DailyReflectionTaskHandler implements KernelQueueTaskHandler {
 
 export function buildKernelQueueTaskHandlers(context: KernelTaskHandlerContext): KernelQueueTaskHandler[] {
   return [
-    new FactExtractionTaskHandler(context),
     new DailyEpisodeTaskHandler(context),
     new ProfileSemanticTaskHandler(context),
     new DailyReflectionTaskHandler(context)

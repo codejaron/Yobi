@@ -4,7 +4,8 @@ import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { CompanionPaths } from "@main/storage/paths";
 import { appLogger as logger } from "@main/runtime/singletons";
-import type { AppConfig, EmbedderRuntimeStatus } from "@shared/types";
+import type { EmbedderRuntimeStatus } from "@shared/types";
+import { MEMORY_RUNTIME_DEFAULTS } from "@shared/runtime-tuning";
 
 export type EmbedderStatus = "disabled" | "loading" | "ready" | "error";
 
@@ -26,8 +27,9 @@ interface PendingWorkerCall {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-const DEFAULT_MODEL_ID = "embeddinggemma-300m-qat-Q8_0.gguf";
-const DEFAULT_MODEL_URL = "https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/main/embeddinggemma-300m-qat-Q8_0.gguf";
+const DEFAULT_MODEL_ID = MEMORY_RUNTIME_DEFAULTS.embedding.modelId;
+const DEFAULT_MODEL_URL =
+  "https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/main/embeddinggemma-300m-qat-Q8_0.gguf";
 const WORKER_CALL_TIMEOUT_MS = 20_000;
 
 function normalizeVector(vector: number[]): number[] {
@@ -74,10 +76,11 @@ export class EmbedderService {
   private worker: any = null;
   private pending = new Map<string, PendingWorkerCall>();
   private downloadPromise: Promise<void> | null = null;
+  private downloadAbortController: AbortController | null = null;
 
   constructor(
     private readonly paths: CompanionPaths,
-    private readonly getConfig: () => AppConfig
+    private readonly isEnabled: () => boolean
   ) {}
 
   init(): void {
@@ -88,6 +91,14 @@ export class EmbedderService {
   }
 
   getStatus(): EmbedderRuntimeStatus {
+    if (!this.isEnabled()) {
+      return {
+        status: "disabled",
+        mode: "disabled",
+        downloadPending: false,
+        message: ""
+      };
+    }
     const suffix = this.modelPath ? ` (${path.basename(this.modelPath)})` : "";
     return {
       status: this.status,
@@ -98,18 +109,15 @@ export class EmbedderService {
   }
 
   getCurrentModelId(): string {
-    return this.getConfig().memory.embedding.modelId;
+    return MEMORY_RUNTIME_DEFAULTS.embedding.modelId;
   }
 
   async embed(text: string): Promise<EmbeddingResult | null> {
-    const trimmed = text.trim();
-    if (!trimmed) {
+    if (!this.isEnabled()) {
       return null;
     }
-
-    if (!this.getConfig().memory.embedding.enabled) {
-      this.status = "disabled";
-      this.errorMessage = "embedding disabled";
+    const trimmed = text.trim();
+    if (!trimmed) {
       return null;
     }
 
@@ -142,12 +150,10 @@ export class EmbedderService {
   }
 
   private async initialize(): Promise<void> {
-    if (!this.getConfig().memory.embedding.enabled) {
-      this.status = "disabled";
-      this.errorMessage = "embedding disabled";
+    if (!this.isEnabled()) {
+      this.disable();
       return;
     }
-
     this.status = "loading";
     this.errorMessage = "";
     this.modelPath = resolveModelPath(this.paths, this.getCurrentModelId());
@@ -258,7 +264,10 @@ export class EmbedderService {
   private async downloadModelInBackground(downloadUrl: string): Promise<void> {
     try {
       await fs.promises.mkdir(this.paths.embeddingModelsDir, { recursive: true });
-      const response = await fetch(downloadUrl);
+      this.downloadAbortController = new AbortController();
+      const response = await fetch(downloadUrl, {
+        signal: this.downloadAbortController.signal
+      });
       if (!response.ok || !response.body) {
         throw new Error(`download failed: ${response.status}`);
       }
@@ -276,8 +285,16 @@ export class EmbedderService {
       await fs.promises.rename(tempPath, targetPath);
       this.modelPath = targetPath;
       this.errorMessage = "GGUF 下载完成，正在切换到向量检索";
-      await this.initializeWorkerBackend();
+      if (this.isEnabled()) {
+        await this.initializeWorkerBackend();
+      } else {
+        this.disable();
+      }
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        this.disable();
+        return;
+      }
       logger.error("embedder", "gguf-download-failed", {
         modelId: this.getCurrentModelId(),
         downloadUrl
@@ -285,8 +302,23 @@ export class EmbedderService {
       this.status = "error";
       this.errorMessage = error instanceof Error ? `GGUF 下载失败：${error.message}` : "GGUF 下载失败";
     } finally {
+      this.downloadAbortController = null;
       this.downloadPromise = null;
     }
+  }
+
+  refresh(): void {
+    if (!this.isEnabled()) {
+      this.disable();
+      return;
+    }
+
+    this.disposeWorker();
+    this.initPromise = null;
+    this.modelPath = null;
+    this.errorMessage = "";
+    this.status = "disabled";
+    this.init();
   }
 
   private callWorker(type: string, payload: Record<string, unknown>): Promise<unknown> {
@@ -337,5 +369,16 @@ export class EmbedderService {
         worker.kill();
       } catch {}
     }
+  }
+
+  private disable(): void {
+    this.downloadAbortController?.abort();
+    this.downloadAbortController = null;
+    this.downloadPromise = null;
+    this.initPromise = null;
+    this.modelPath = null;
+    this.errorMessage = "";
+    this.status = "disabled";
+    this.disposeWorker();
   }
 }

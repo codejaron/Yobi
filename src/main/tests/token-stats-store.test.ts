@@ -35,7 +35,7 @@ test("TokenStatsStore: should aggregate records into local day bucket", async ()
       timestamp: now
     });
     await store.record({
-      source: "background:proactive-push",
+      source: "background:reflection",
       tokens: 10,
       estimatedTokens: 0,
       timestamp: now
@@ -48,7 +48,7 @@ test("TokenStatsStore: should aggregate records into local day bucket", async ()
     assert.equal(status.days[0]?.estimatedTokens, 40);
     assert.equal(status.days[0]?.bySource["chat:console"]?.tokens, 120);
     assert.equal(status.days[0]?.bySource["background:cognition"]?.estimatedTokens, 40);
-    assert.equal(status.days[0]?.bySource["background:proactive-push"]?.tokens, 10);
+    assert.equal(status.days[0]?.bySource["background:reflection"]?.tokens, 10);
     assert.equal(typeof status.days[0]?.timeZone, "string");
     assert.equal(Number.isFinite(status.days[0]?.tzOffsetMinutes), true);
   } finally {

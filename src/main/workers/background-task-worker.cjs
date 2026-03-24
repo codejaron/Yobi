@@ -1,17 +1,5 @@
 const zod = require('zod');
 
-const factDraftSchema = zod.z.object({
-  entity: zod.z.string().min(1).max(80),
-  key: zod.z.string().min(1).max(80),
-  value: zod.z.string().min(1).max(400),
-  category: zod.z.enum(['identity', 'preference', 'event', 'goal', 'relationship', 'emotion_pattern']).default('event'),
-  confidence: zod.z.number().min(0).max(1).default(0.65),
-  ttl_class: zod.z.enum(['permanent', 'stable', 'active', 'session']).default('stable'),
-  source: zod.z.string().max(120).optional(),
-  source_range: zod.z.string().max(120).optional()
-});
-const factOperationSchema = zod.z.object({ action: zod.z.enum(['add', 'update', 'supersede']), fact: factDraftSchema });
-const extractionSchema = zod.z.object({ operations: zod.z.array(factOperationSchema).max(60).default([]) });
 const semanticProfileSchema = zod.z.object({
   preferredComfortStyle: zod.z.string().min(1).max(30).optional(),
   humorReceptivity: zod.z.number().min(0).max(1).optional(),
@@ -155,48 +143,6 @@ async function createModelForRoute(config, routeKey) {
   return providerUsesResponsesApi(provider) ? client.responses(route.model) : client.chat(route.model);
 }
 
-async function runFactExtraction(message) {
-  const { generateObject } = await import('ai');
-  const model = await createModelForRoute(message.config, 'factExtraction');
-  const system = [
-    '你负责从对话片段中提取结构化事实。',
-    '你输出 JSON，仅包含 operations。',
-    'action 仅可为 add / update / supersede。',
-    '不要复述对话，不要输出解释文本。'
-  ].join('\n');
-  const prompt = JSON.stringify({
-    message_window: message.messages.map((item) => ({ id: item.id, ts: item.ts, role: item.role, text: item.text })),
-    existing_facts: message.existingFacts,
-    profile_hint: message.profileHint,
-    now_iso: new Date().toISOString()
-  }, null, 2);
-  const result = await generateObject({
-    model,
-    providerOptions: resolveProviderOptions(message.config, 'factExtraction'),
-    schema: extractionSchema,
-    system,
-    prompt,
-    maxOutputTokens: Math.max(128, message.maxOutputTokens ?? 800)
-  });
-  const parsed = extractionSchema.parse(result.object ?? { operations: [] });
-  return {
-    operations: parsed.operations.map((operation) => ({
-      action: operation.action,
-      fact: {
-        entity: operation.fact.entity.trim(),
-        key: operation.fact.key.trim(),
-        value: operation.fact.value.trim(),
-        category: operation.fact.category,
-        confidence: operation.fact.confidence,
-        ttl_class: operation.fact.ttl_class,
-        source: operation.fact.source,
-        source_range: operation.fact.source_range
-      }
-    })),
-    tokenUsage: result.usage
-  };
-}
-
 async function runDailyEpisode(message) {
   const { generateObject } = await import('ai');
   const model = await createModelForRoute(message.config, 'reflection');
@@ -246,8 +192,7 @@ process.parentPort.on('message', async (message) => {
   const id = payload?.id;
   try {
     let result;
-    if (payload?.type === 'fact-extraction') result = await runFactExtraction(payload);
-    else if (payload?.type === 'daily-episode') result = await runDailyEpisode(payload);
+    if (payload?.type === 'daily-episode') result = await runDailyEpisode(payload);
     else if (payload?.type === 'profile-semantic-update') result = await runProfileSemantic(payload);
     else if (payload?.type === 'daily-reflection') result = await runDailyReflection(payload);
     else throw new Error(`unknown-background-task:${String(payload?.type || '')}`);

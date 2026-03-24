@@ -1,11 +1,11 @@
 import type {
-  AppConfig,
   EmotionalState,
   OCEANPersonality,
   RealtimeEmotionalSignals,
   RuminationEntry
 } from "@shared/types";
 import { DEFAULT_EMOTIONAL_STATE } from "@shared/types";
+import type { KernelEmotionSignalsConfig } from "@shared/runtime-tuning";
 import {
   advanceRuminationQueue,
   applyEmotionMapping,
@@ -104,7 +104,7 @@ export function advanceEmotionalRumination(input: {
 export function computeSignalAgeScale(
   latestMessageTs: string,
   now: Date,
-  config: AppConfig["kernel"]["emotionSignals"]
+  config: KernelEmotionSignalsConfig
 ): number {
   const latestTs = Number.isFinite(new Date(latestMessageTs).getTime())
     ? new Date(latestMessageTs).getTime()
@@ -130,7 +130,7 @@ export function applyEmotionalSignalsToState(input: {
   personality: OCEANPersonality;
   ruminationQueue: RuminationEntry[];
   signals: RealtimeEmotionalSignals;
-  config: AppConfig["kernel"]["emotionSignals"];
+  config: KernelEmotionSignalsConfig;
   ageScale: number;
   now?: Date;
 }): { emotional: EmotionalState; ruminationQueue: RuminationEntry[] } {
@@ -203,7 +203,7 @@ export function applyRealtimeEmotionalSignals(input: {
   personality: OCEANPersonality;
   ruminationQueue: RuminationEntry[];
   signals: RealtimeEmotionalSignals | null | undefined;
-  config: AppConfig["kernel"]["emotionSignals"];
+  config: KernelEmotionSignalsConfig;
   latestMessageTs?: string | null;
   now?: Date;
 }): { emotional: EmotionalState; ruminationQueue: RuminationEntry[] } {

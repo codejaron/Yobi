@@ -155,7 +155,7 @@ export class FactsStore {
     return [...this.listActive(), ...this.listArchive()];
   }
 
-  async applyOperations(operations: FactOperationInput[], source = "fact-extraction"): Promise<Fact[]> {
+  async applyOperations(operations: FactOperationInput[], source = "manual"): Promise<Fact[]> {
     await this.init();
     if (operations.length === 0) {
       return [];

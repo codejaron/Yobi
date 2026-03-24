@@ -18,6 +18,7 @@ import {
   toPersistedAssistantTimelineBlocks,
   toPersistedToolTraceItems
 } from "@shared/tool-trace";
+import { MEMORY_RUNTIME_DEFAULTS } from "@shared/runtime-tuning";
 import type { ModelFactory } from "./model-factory";
 import {
   ConversationAbortError,
@@ -316,8 +317,8 @@ export class ConversationEngine {
       buffer,
       facts: factCandidates.map((row) => row.fact),
       episodes: episodeCandidates.map((row) => row.episode),
-      maxTokens: Math.min(24_000, Math.max(4_000, config.memory.context.maxPromptTokens || 8_000)),
-      memoryFloorTokens: config.memory.context.memoryFloorTokens,
+      maxTokens: MEMORY_RUNTIME_DEFAULTS.context.maxPromptTokens,
+      memoryFloorTokens: MEMORY_RUNTIME_DEFAULTS.context.memoryFloorTokens,
       externalFixedTokens: estimateTokenCount(externalPromptBlocks.join("\n\n"))
     });
 

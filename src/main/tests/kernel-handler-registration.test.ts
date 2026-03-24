@@ -15,7 +15,6 @@ function createHandler(type: KernelQueueTaskHandler["type"]): KernelQueueTaskHan
 
 test("assertUniqueQueueHandlerTypes: unique types pass", () => {
   const handlers: KernelQueueTaskHandler[] = [
-    createHandler("fact-extraction"),
     createHandler("daily-episode"),
     createHandler("profile-semantic-update"),
     createHandler("daily-reflection")
@@ -28,11 +27,11 @@ test("assertUniqueQueueHandlerTypes: unique types pass", () => {
 
 test("assertUniqueQueueHandlerTypes: duplicate type throws", () => {
   const handlers: KernelQueueTaskHandler[] = [
-    createHandler("fact-extraction"),
-    createHandler("fact-extraction")
+    createHandler("daily-episode"),
+    createHandler("daily-episode")
   ];
 
   assert.throws(() => {
     assertUniqueQueueHandlerTypes(handlers);
-  }, /duplicate-kernel-task-handler:fact-extraction/);
+  }, /duplicate-kernel-task-handler:daily-episode/);
 });

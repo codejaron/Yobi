@@ -330,11 +330,10 @@ function buildSectionSnapshots(config: AppConfig, status: AppStatus | null): Rec
     memory: {
       badge: embedderLabel(embedderState).badge,
       tone: embedderLabel(embedderState).tone,
-      detail: config.memory.embedding.enabled
-        ? formatEmbedderDisplay(status?.embedder).statusLabel === "回退模式"
+      detail:
+        formatEmbedderDisplay(status?.embedder).statusLabel === "回退模式"
           ? formatEmbedderDisplay(status?.embedder).engineLabel
           : "Hybrid 检索已启用"
-        : "向量记忆已关闭"
     },
     tools: {
       badge:

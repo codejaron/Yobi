@@ -10,11 +10,11 @@ import {
 import {
   createDefaultEmotionalState,
   DEFAULT_OCEAN_PERSONALITY,
-  type AppConfig,
   type EmotionalState
 } from "@shared/types";
+import type { KernelEmotionSignalsConfig } from "@shared/runtime-tuning";
 
-const emotionSignalConfig: AppConfig["kernel"]["emotionSignals"] = {
+const emotionSignalConfig: KernelEmotionSignalsConfig = {
   enabled: true,
   deltaScale: 0.4,
   energyEngagementScale: 0.1,

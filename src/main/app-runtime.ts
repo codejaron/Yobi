@@ -1288,8 +1288,10 @@ export class CompanionRuntime {
     previousConfig: AppConfig,
     nextConfig: AppConfig
   ): Promise<void> {
-    if (JSON.stringify(previousConfig.kernel.personality) !== JSON.stringify(nextConfig.kernel.personality)) {
-      this.kernel.syncPersonalityFromConfig();
+    if (previousConfig.memory.embedding.enabled !== nextConfig.memory.embedding.enabled) {
+      await this.runConfigSideEffect("刷新本地语义检索", 4_000, async () => {
+        this.memory.refreshEmbeddingRuntime();
+      });
     }
 
     if (this.shouldRestartTelegram(previousConfig, nextConfig)) {

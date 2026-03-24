@@ -139,7 +139,6 @@ export function ProvidersPage({
       providers,
       modelRouting: {
         chat: normalizeRoute(config.modelRouting.chat),
-        factExtraction: normalizeRoute(config.modelRouting.factExtraction),
         reflection: normalizeRoute(config.modelRouting.reflection),
         cognition: normalizeRoute(config.modelRouting.cognition)
       }
@@ -462,13 +461,12 @@ export function ProvidersPage({
       <Card>
         <CardHeader>
           <CardTitle>模型路由</CardTitle>
-          <CardDescription>chat / factExtraction / reflection / cognition。</CardDescription>
+          <CardDescription>chat / reflection / cognition。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {(
             [
               ["chat", "Chat"],
-              ["factExtraction", "Fact Extraction"],
               ["reflection", "Reflection"],
               ["cognition", "Cognition"]
             ] as const

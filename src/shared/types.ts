@@ -4,6 +4,7 @@ import {
   PROVIDER_KINDS,
   QWEN_REGIONS
 } from "./provider-catalog";
+import { MEMORY_RUNTIME_DEFAULTS } from "./runtime-tuning";
 
 export const providerSchema = z
   .object({
@@ -186,128 +187,6 @@ export const scheduledTaskInputSchema = z
 
 const browseAuthStateSchema = z.enum(["missing", "pending", "active", "expired", "error"]);
 
-const kernelTickSchema = z
-  .object({
-    activeIntervalMs: z.number().int().min(1000).default(5000),
-    warmIntervalMs: z.number().int().min(1000).default(30000),
-    idleIntervalMs: z.number().int().min(1000).default(3 * 60_000),
-    quietIntervalMs: z.number().int().min(1000).default(10 * 60_000)
-  })
-  .strict();
-
-const kernelBufferSchema = z
-  .object({
-    maxMessages: z.number().int().min(20).max(1000).default(200),
-    lowWatermark: z.number().int().min(10).max(999).default(140)
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (value.lowWatermark >= value.maxMessages) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["lowWatermark"],
-        message: "lowWatermark must be less than maxMessages"
-      });
-    }
-  });
-
-const kernelRelationshipSchema = z
-  .object({
-    upgradeWindowDays: z.number().int().min(1).max(30).default(3),
-    downgradeWindowDays: z.number().int().min(1).max(90).default(7)
-  })
-  .strict();
-
-const kernelQueueSchema = z
-  .object({
-    maxConcurrent: z.number().int().min(1).max(8).default(1),
-    retryLimit: z.number().int().min(0).max(8).default(2)
-  })
-  .strict();
-
-const kernelFactExtractionSchema = z
-  .object({
-    maxInputTokens: z.number().int().min(256).max(16000).default(3000),
-    maxOutputTokens: z.number().int().min(128).max(4000).default(800),
-    incrementalMessageThreshold: z.number().int().min(1).max(500).default(20)
-  })
-  .strict();
-
-const kernelEmotionSignalsSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    deltaScale: z.number().min(0).max(1).default(0.4),
-    energyEngagementScale: z.number().min(0).max(0.5).default(0.1),
-    connectionTrustScale: z.number().min(0).max(1).default(0.5),
-    ruminationThreshold: z.number().min(0).max(1).default(0.7),
-    ruminationMaxStages: z.number().int().min(1).max(12).default(4),
-    windowMaxAbsDelta: z.number().min(0.01).max(1).default(0.2),
-    stalenessFullEffectMinutes: z.number().int().min(1).max(1440).default(30),
-    stalenessMaxAgeHours: z.number().int().min(1).max(168).default(24),
-    stalenessMinScale: z.number().min(0).max(1).default(0.15)
-  })
-  .strict();
-
-const kernelPersonalitySchema = z
-  .object({
-    openness: z.number().min(0).max(1).default(0.5),
-    conscientiousness: z.number().min(0).max(1).default(0.5),
-    extraversion: z.number().min(0).max(1).default(0.5),
-    agreeableness: z.number().min(0).max(1).default(0.5),
-    neuroticism: z.number().min(0).max(1).default(0.5)
-  })
-  .strict();
-
-const kernelSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    tick: kernelTickSchema.default({
-      activeIntervalMs: 5000,
-      warmIntervalMs: 30000,
-      idleIntervalMs: 3 * 60_000,
-      quietIntervalMs: 10 * 60_000
-    }),
-    buffer: kernelBufferSchema.default({
-      maxMessages: 200,
-      lowWatermark: 140
-    }),
-    relationship: kernelRelationshipSchema.default({
-      upgradeWindowDays: 3,
-      downgradeWindowDays: 7
-    }),
-    queue: kernelQueueSchema.default({
-      maxConcurrent: 1,
-      retryLimit: 2
-    }),
-    factExtraction: kernelFactExtractionSchema.default({
-      maxInputTokens: 3000,
-      maxOutputTokens: 800,
-      incrementalMessageThreshold: 20
-    }),
-    personality: kernelPersonalitySchema.default({
-      openness: 0.5,
-      conscientiousness: 0.5,
-      extraversion: 0.5,
-      agreeableness: 0.5,
-      neuroticism: 0.5
-    }),
-    emotionSignals: kernelEmotionSignalsSchema.default({
-      enabled: true,
-      deltaScale: 0.4,
-      energyEngagementScale: 0.1,
-      connectionTrustScale: 0.5,
-      ruminationThreshold: 0.7,
-      ruminationMaxStages: 4,
-      windowMaxAbsDelta: 0.2,
-      stalenessFullEffectMinutes: 30,
-      stalenessMaxAgeHours: 24,
-      stalenessMinScale: 0.15
-    }),
-    sessionReentryGapHours: z.number().int().min(1).max(168).default(6),
-    dailyTaskHour: z.number().int().min(0).max(23).default(3)
-  })
-  .strict();
-
 export const appConfigSchema = z
   .object({
     telegram: z
@@ -335,7 +214,6 @@ export const appConfigSchema = z
     modelRouting: z
       .object({
         chat: modelRouteSchema,
-        factExtraction: modelRouteSchema,
         reflection: modelRouteSchema,
         cognition: modelRouteSchema
       })
@@ -430,28 +308,20 @@ export const appConfigSchema = z
       .strict(),
     memory: z
       .object({
-        recentMessages: z.number().int().min(10).max(400).default(60),
-        context: z
-          .object({
-            memoryFloorTokens: z.number().int().min(200).max(8000).default(1200),
-            maxPromptTokens: z.number().int().min(4000).max(24_000).default(24_000)
-          })
-          .strict()
-          .default({
-            memoryFloorTokens: 1200,
-            maxPromptTokens: 24_000
-          }),
+        recentMessages: z.number().int().min(10).max(400).default(MEMORY_RUNTIME_DEFAULTS.recentMessages),
         embedding: z
           .object({
             enabled: z.boolean().default(true),
-            modelId: z.string().min(1).default("embeddinggemma-300m-qat-Q8_0.gguf"),
-            similarityThreshold: z.number().min(0).max(1).default(0.35)
+            similarityThreshold: z
+              .number()
+              .min(0)
+              .max(1)
+              .default(MEMORY_RUNTIME_DEFAULTS.embedding.similarityThreshold)
           })
           .strict()
           .default({
             enabled: true,
-            modelId: "embeddinggemma-300m-qat-Q8_0.gguf",
-            similarityThreshold: 0.35
+            similarityThreshold: MEMORY_RUNTIME_DEFAULTS.embedding.similarityThreshold
           }),
         facts: z
           .object({
@@ -475,53 +345,6 @@ export const appConfigSchema = z
           })
       })
       .strict(),
-    kernel: kernelSchema.default({
-      enabled: true,
-      tick: {
-        activeIntervalMs: 5000,
-        warmIntervalMs: 30000,
-        idleIntervalMs: 3 * 60_000,
-        quietIntervalMs: 10 * 60_000
-      },
-      buffer: {
-        maxMessages: 200,
-        lowWatermark: 140
-      },
-      relationship: {
-        upgradeWindowDays: 3,
-        downgradeWindowDays: 7
-      },
-      queue: {
-        maxConcurrent: 1,
-        retryLimit: 2
-      },
-      factExtraction: {
-        maxInputTokens: 3000,
-        maxOutputTokens: 800,
-        incrementalMessageThreshold: 20
-      },
-      personality: {
-        openness: 0.5,
-        conscientiousness: 0.5,
-        extraversion: 0.5,
-        agreeableness: 0.5,
-        neuroticism: 0.5
-      },
-      emotionSignals: {
-        enabled: true,
-        deltaScale: 0.4,
-        energyEngagementScale: 0.1,
-        connectionTrustScale: 0.5,
-        ruminationThreshold: 0.7,
-        ruminationMaxStages: 4,
-        windowMaxAbsDelta: 0.2,
-        stalenessFullEffectMinutes: 30,
-        stalenessMaxAgeHours: 24,
-        stalenessMinScale: 0.15
-      },
-      sessionReentryGapHours: 6,
-      dailyTaskHour: 3
-    }),
     tools: z
       .object({
         browser: z
@@ -1230,7 +1053,6 @@ export interface ReflectionProposal {
 }
 
 export type PendingTaskType =
-  | "fact-extraction"
   | "profile-semantic-update"
   | "daily-episode"
   | "daily-reflection";
@@ -1276,11 +1098,9 @@ export const TOKEN_USAGE_SOURCES = [
   "chat:qq",
   "chat:feishu",
   "background:cognition",
-  "background:fact-extraction",
   "background:daily-summary",
   "background:profile-update",
-  "background:reflection",
-  "background:proactive-push"
+  "background:reflection"
 ] as const;
 
 export type TokenUsageSource = (typeof TOKEN_USAGE_SOURCES)[number];
@@ -1307,7 +1127,6 @@ export interface TokenStatsStatus {
 }
 
 export interface KernelStatus {
-  enabled: boolean;
   tickIntervalMs: number;
   queueDepth: number;
   lastTickAt: string | null;
@@ -1539,10 +1358,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       providerId: "anthropic-main",
       model: "claude-sonnet-4"
     },
-    factExtraction: {
-      providerId: "anthropic-main",
-      model: "claude-3-5-haiku-latest"
-    },
     reflection: {
       providerId: "anthropic-main",
       model: "claude-3-5-haiku-latest"
@@ -1621,15 +1436,10 @@ export const DEFAULT_CONFIG: AppConfig = {
     autoFollowEnabled: false
   },
   memory: {
-    recentMessages: 60,
-    context: {
-      memoryFloorTokens: 1200,
-      maxPromptTokens: 24_000
-    },
+    recentMessages: MEMORY_RUNTIME_DEFAULTS.recentMessages,
     embedding: {
       enabled: true,
-      modelId: "embeddinggemma-300m-qat-Q8_0.gguf",
-      similarityThreshold: 0.35
+      similarityThreshold: MEMORY_RUNTIME_DEFAULTS.embedding.similarityThreshold
     },
     facts: {
       activeSoftCap: 500
@@ -1639,53 +1449,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       vectorWeight: 0.6,
       textWeight: 0.4
     }
-  },
-  kernel: {
-    enabled: true,
-    tick: {
-      activeIntervalMs: 5000,
-      warmIntervalMs: 30000,
-      idleIntervalMs: 3 * 60_000,
-      quietIntervalMs: 10 * 60_000
-    },
-    buffer: {
-      maxMessages: 200,
-      lowWatermark: 140
-    },
-    relationship: {
-      upgradeWindowDays: 3,
-      downgradeWindowDays: 7
-    },
-    queue: {
-      maxConcurrent: 1,
-      retryLimit: 2
-    },
-    factExtraction: {
-      maxInputTokens: 3000,
-      maxOutputTokens: 800,
-      incrementalMessageThreshold: 20
-    },
-    personality: {
-      openness: 0.5,
-      conscientiousness: 0.5,
-      extraversion: 0.5,
-      agreeableness: 0.5,
-      neuroticism: 0.5
-    },
-    emotionSignals: {
-      enabled: true,
-      deltaScale: 0.4,
-      energyEngagementScale: 0.1,
-      connectionTrustScale: 0.5,
-      ruminationThreshold: 0.7,
-      ruminationMaxStages: 4,
-      windowMaxAbsDelta: 0.2,
-      stalenessFullEffectMinutes: 30,
-      stalenessMaxAgeHours: 24,
-      stalenessMinScale: 0.15
-    },
-    sessionReentryGapHours: 6,
-    dailyTaskHour: 3
   },
   tools: {
     browser: {

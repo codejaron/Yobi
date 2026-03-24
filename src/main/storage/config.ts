@@ -135,7 +135,6 @@ function migrateRawConfig(raw: unknown): unknown {
 
   const voice = isPlainRecord(migratedRaw.voice) ? voiceOrDefault(migratedRaw.voice) : {};
   const alibabaVoice = isPlainRecord(migratedRaw.alibabaVoice) ? migratedRaw.alibabaVoice : {};
-  const legacyRuntimeConfig = isPlainRecord(migratedRaw.openclaw) ? migratedRaw.openclaw : null;
   const tools = isPlainRecord(migratedRaw.tools) ? migratedRaw.tools : {};
   const toolMcp = isPlainRecord(tools.mcp) ? tools.mcp : {};
   const mcpServers = Array.isArray(toolMcp.servers) ? toolMcp.servers : [];
@@ -143,13 +142,6 @@ function migrateRawConfig(raw: unknown): unknown {
   const legacyExaServer = mcpServers.find((server) => isPlainRecord(server) && server.id === "exa");
   const legacyExaEnabled =
     legacyExaServer && typeof legacyExaServer.enabled === "boolean" ? legacyExaServer.enabled : undefined;
-
-  if (legacyRuntimeConfig && isPlainRecord(migratedRaw.memory) && isPlainRecord(migratedRaw.memory.context)) {
-    const legacyContextTokens = Number(legacyRuntimeConfig.contextTokens);
-    if (Number.isFinite(legacyContextTokens) && migratedRaw.memory.context.maxPromptTokens === undefined) {
-      migratedRaw.memory.context.maxPromptTokens = Math.max(4_000, Math.min(24_000, Math.floor(legacyContextTokens)));
-    }
-  }
 
   if (!isPlainRecord(tools.browser)) {
     tools.browser = {
@@ -216,7 +208,7 @@ function voiceOrDefault(value: Record<string, unknown>): Record<string, unknown>
 
 function assertRouteProvidersExist(config: AppConfig): void {
   const providerIds = new Set(config.providers.map((provider) => provider.id));
-  const routes: Array<keyof AppConfig["modelRouting"]> = ["chat", "factExtraction", "reflection", "cognition"];
+  const routes: Array<keyof AppConfig["modelRouting"]> = ["chat", "reflection", "cognition"];
   for (const routeKey of routes) {
     const route = config.modelRouting[routeKey];
     if (!route) {
