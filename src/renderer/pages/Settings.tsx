@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AppConfig, AppStatus, BrowseAuthState, EmbedderRuntimeStatus, ThemeMode } from "@shared/types";
 import { Badge } from "@renderer/components/ui/badge";
-import { Button } from "@renderer/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@renderer/components/ui/card";
 import { AppearanceSettingsCard } from "@renderer/pages/settings/AppearanceSettingsCard";
 import { BilibiliBrowseCard } from "@renderer/pages/settings/BilibiliBrowseCard";
@@ -629,12 +628,11 @@ export function SettingsPage({
               </p>
               <p className="mt-3 text-sm text-foreground/80">{activeSnapshot.detail}</p>
             </div>
-            <Badge className={`${toneClassName(activeSnapshot.tone)} shrink-0 whitespace-nowrap`}>
-              {activeSnapshot.badge}
-            </Badge>
-            <Button type="button" variant="outline" onClick={onNavigateToCognition}>
-              开发者：认知调试面板
-            </Button>
+            {activeSection === "memory" ? null : (
+              <Badge className={`${toneClassName(activeSnapshot.tone)} shrink-0 whitespace-nowrap`}>
+                {activeSnapshot.badge}
+              </Badge>
+            )}
           </CardContent>
         </Card>
 
