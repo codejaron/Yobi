@@ -27,8 +27,8 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
         dayKey: dayOffset(now, 0),
         timeZone: "Asia/Shanghai",
         tzOffsetMinutes: 480,
-        totalTokens: 160,
-        estimatedTokens: 20,
+        totalTokens: 165,
+        estimatedTokens: 21,
         bySource: {
           "chat:console": {
             tokens: 100,
@@ -37,6 +37,10 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
           "background:fact-extraction": {
             tokens: 30,
             estimatedTokens: 0
+          },
+          "background:cognition": {
+            tokens: 5,
+            estimatedTokens: 1
           },
           "background:daily-summary": {
             tokens: 8,
@@ -94,12 +98,13 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
     now
   });
 
-  assert.equal(today.totalTokens, 160);
-  assert.equal(today.estimatedTokens, 20);
+  assert.equal(today.totalTokens, 165);
+  assert.equal(today.estimatedTokens, 21);
   assert.equal(today.sourceTotals.chat.tokens, 100);
-  assert.equal(today.sourceTotals.background.tokens, 60);
-  assert.equal(today.backgroundDetails[0]?.label, "事实提取");
-  assert.equal(today.backgroundDetails[0]?.tokens, 30);
+  assert.equal(today.sourceTotals.background.tokens, 65);
+  assert.equal(today.backgroundDetails[0]?.label, "认知系统");
+  assert.equal(today.backgroundDetails[0]?.tokens, 35);
+  assert.equal(today.backgroundDetails[0]?.estimatedTokens, 1);
   assert.equal(today.backgroundDetails[1]?.label, "每日总结");
   assert.equal(today.backgroundDetails[1]?.tokens, 8);
   assert.equal(today.backgroundDetails[2]?.label, "画像更新");
@@ -116,9 +121,9 @@ test("aggregateTokenStats: should aggregate today and 7-day source breakdown", (
     now
   });
 
-  assert.equal(sevenDays.totalTokens, 230);
+  assert.equal(sevenDays.totalTokens, 235);
   assert.equal(sevenDays.sourceTotals.chat.tokens, 170);
-  assert.equal(sevenDays.sourceTotals.background.tokens, 60);
+  assert.equal(sevenDays.sourceTotals.background.tokens, 65);
   assert.equal(sevenDays.trendWindowDays, 7);
   assert.equal(sevenDays.trendBars.length, 7);
 });

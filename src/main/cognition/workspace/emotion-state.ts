@@ -10,6 +10,7 @@ import type { CompanionPaths } from "@main/storage/paths";
 import type { AppLogger } from "@main/services/logger";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
+import { reportCognitionTokenUsage } from "../token-usage";
 import { readJsonFile, writeJsonFileAtomic } from "@main/storage/fs";
 
 const emotionAnalysisSchema = z.object({
@@ -161,16 +162,22 @@ export class EmotionStateManager {
       return this.input.getCognitionConfig().emotion.neutral_state;
     }
 
+    const prompt = [
+      "请根据以下对话文本判断一个简化情绪状态，只返回 JSON。",
+      "valence 范围 -1 到 1，负数表示负向，正数表示正向。",
+      "arousal 范围 0 到 1，数值越高表示越激动或紧张。",
+      text
+    ].join("\n");
     const result = await generateObject({
       model: this.input.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(this.input.getAppConfig(), "cognition"),
       schema: emotionAnalysisSchema,
-      prompt: [
-        "请根据以下对话文本判断一个简化情绪状态，只返回 JSON。",
-        "valence 范围 -1 到 1，负数表示负向，正数表示正向。",
-        "arousal 范围 0 到 1，数值越高表示越激动或紧张。",
-        text
-      ].join("\n")
+      prompt
+    });
+    reportCognitionTokenUsage({
+      usage: result.usage,
+      inputText: prompt,
+      outputText: JSON.stringify(result.object ?? {})
     });
     const parsed = emotionAnalysisSchema.parse(result.object ?? {});
     return parsed;

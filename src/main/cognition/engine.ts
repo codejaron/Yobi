@@ -33,6 +33,7 @@ import { ColdArchive } from "./consolidation/cold-archive";
 import { ConsolidationEngine } from "./consolidation/consolidation-engine";
 import { GistExtractor } from "./consolidation/gist-extraction";
 import { SleepReplay } from "./consolidation/sleep-replay";
+import { reportCognitionTokenUsage } from "./token-usage";
 import { applyCombinedExtraction } from "./ingestion/graph-adapter";
 import { populateBundledDefaultGraph } from "./ingestion/default-graph";
 import { runColdStart } from "./ingestion/cold-start";
@@ -183,29 +184,35 @@ export class CognitionEngine {
     }
 
     const appConfig = this.input.getConfig();
+    const prompt = [
+      "请从以下对话中同时提取句子级 facts、结构化 fact_operations、以及认知图 graph。",
+      "当前用户统一写成 {{user}}，AI 助手统一写成 {{yobi}}，第三方人物用对话中最完整的称呼。",
+      "graph.nodes 的 type 只能用 fact / event / concept / person / intent；如果内容本身是单个时间词或情绪词，也可直接输出 time_marker / emotion_anchor。",
+      "graph.edges 的 type 只能用 semantic / temporal / causal / emotional。",
+      "当对话中明确说明两个人物是同一人时，请在 graph.entity_merges 里输出 {source_content, target_content}。",
+      "只返回结构化 JSON，不要解释。",
+      JSON.stringify(
+        {
+          channel: input.channel,
+          chat_id: input.chatId ?? null,
+          user: normalizedUser,
+          assistant: normalizedAssistant,
+          now_iso: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    ].join("\n");
     const result = await generateObject({
       model: this.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(appConfig, "cognition"),
       schema: combinedExtractionSchema,
-      prompt: [
-        "请从以下对话中同时提取句子级 facts、结构化 fact_operations、以及认知图 graph。",
-        "当前用户统一写成 {{user}}，AI 助手统一写成 {{yobi}}，第三方人物用对话中最完整的称呼。",
-        "graph.nodes 的 type 只能用 fact / event / concept / person / intent；如果内容本身是单个时间词或情绪词，也可直接输出 time_marker / emotion_anchor。",
-        "graph.edges 的 type 只能用 semantic / temporal / causal / emotional。",
-        "当对话中明确说明两个人物是同一人时，请在 graph.entity_merges 里输出 {source_content, target_content}。",
-        "只返回结构化 JSON，不要解释。",
-        JSON.stringify(
-          {
-            channel: input.channel,
-            chat_id: input.chatId ?? null,
-            user: normalizedUser,
-            assistant: normalizedAssistant,
-            now_iso: new Date().toISOString()
-          },
-          null,
-          2
-        )
-      ].join("\n")
+      prompt
+    });
+    reportCognitionTokenUsage({
+      usage: result.usage,
+      inputText: prompt,
+      outputText: JSON.stringify(result.object ?? {})
     });
 
     const parsed = combinedExtractionSchema.parse(result.object ?? {}) as CombinedDialogueExtractionDraft;
@@ -452,14 +459,20 @@ export class CognitionEngine {
       graph: this.graph,
       getCognitionConfig: () => this.requireConfig(),
       summarizeCluster: async (nodes) => {
+        const prompt = [
+          "请将以下一组事件概括成一句抽象总结，不要逐条罗列。",
+          nodes.map((node) => `- ${node.content}`).join("\n")
+        ].join("\n");
         const result = await generateText({
           model: this.modelFactory.getCognitionModel(),
           providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
-          prompt: [
-            "请将以下一组事件概括成一句抽象总结，不要逐条罗列。",
-            nodes.map((node) => `- ${node.content}`).join("\n")
-          ].join("\n"),
+          prompt,
           maxOutputTokens: 120
+        });
+        reportCognitionTokenUsage({
+          usage: result.usage,
+          inputText: prompt,
+          outputText: result.text
         });
         return result.text.trim();
       }
@@ -522,17 +535,23 @@ export class CognitionEngine {
     soulMarkdown: string;
     targetNodeCount: number;
   }): Promise<z.infer<typeof coldStartSeedSchema>> {
+    const prompt = [
+      "请根据以下 soul 文本，输出一个 JSON，包含用于认知图冷启动的种子 nodes 和建议 edges。",
+      `目标节点数约 ${input.targetNodeCount} 个，覆盖五个维度：性格特征、兴趣领域、情感锚点、时间节点、交互意图。`,
+      "节点字段必须包含 content、type、emotional_valence；边字段必须包含 source_content、target_content、type。",
+      "只返回 JSON，不要解释。",
+      input.soulMarkdown
+    ].join("\n");
     const result = await generateObject({
       model: this.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
       schema: coldStartSeedSchema,
-      prompt: [
-        "请根据以下 soul 文本，输出一个 JSON，包含用于认知图冷启动的种子 nodes 和建议 edges。",
-        `目标节点数约 ${input.targetNodeCount} 个，覆盖五个维度：性格特征、兴趣领域、情感锚点、时间节点、交互意图。`,
-        "节点字段必须包含 content、type、emotional_valence；边字段必须包含 source_content、target_content、type。",
-        "只返回 JSON，不要解释。",
-        input.soulMarkdown
-      ].join("\n")
+      prompt
+    });
+    reportCognitionTokenUsage({
+      usage: result.usage,
+      inputText: prompt,
+      outputText: JSON.stringify(result.object ?? {})
     });
     return coldStartSeedSchema.parse(result.object ?? {
       nodes: [],

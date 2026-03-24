@@ -33,7 +33,7 @@ test("token-usage-reporter: should forward event to recorder", async () => {
   });
 
   reportTokenUsage({
-    source: "background:fact-extraction",
+    source: "background:cognition",
     inputText: "input",
     outputText: "output"
   });
@@ -42,7 +42,7 @@ test("token-usage-reporter: should forward event to recorder", async () => {
   setTokenRecorder(null);
 
   assert.equal(events.length, 1);
-  assert.equal(events[0]?.source, "background:fact-extraction");
+  assert.equal(events[0]?.source, "background:cognition");
   assert.equal(events[0]?.inputText, "input");
 });
 

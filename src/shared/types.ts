@@ -1275,6 +1275,7 @@ export const TOKEN_USAGE_SOURCES = [
   "chat:telegram",
   "chat:qq",
   "chat:feishu",
+  "background:cognition",
   "background:fact-extraction",
   "background:daily-summary",
   "background:profile-update",

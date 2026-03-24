@@ -3,6 +3,7 @@ import { z } from "zod";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { ModelFactory } from "@main/core/model-factory";
 import type { AppConfig, HistoryMessage, UserProfile } from "@shared/types";
+import { reportCognitionTokenUsage } from "../token-usage";
 import type {
   BubbleEvaluationDimensions,
   CognitionConfig,
@@ -173,33 +174,45 @@ export async function evaluateAndExpress(input: ExpressionEvaluationInput): Prom
 
   const cognitionModel = input.modelFactory.getCognitionModel();
   const bubbleSummaryContext = buildBubbleSummaryContext(input.bubble, input.graph);
+  const summaryPrompt = [
+    "以下是一次联想气泡的可读上下文，请用一句中文概括这次联想的核心主题。",
+    "要求：不要提 node_id、UUID、激活值、路径、图谱、节点这些词，直接总结 Yobi 此刻在想什么。",
+    bubbleSummaryContext
+  ].join("\n\n");
   const summaryTextResult = await generateText({
     model: cognitionModel,
     providerOptions: resolveOpenAIStoreOption(input.appConfig, "cognition"),
-    prompt: [
-      "以下是一次联想气泡的可读上下文，请用一句中文概括这次联想的核心主题。",
-      "要求：不要提 node_id、UUID、激活值、路径、图谱、节点这些词，直接总结 Yobi 此刻在想什么。",
-      bubbleSummaryContext
-    ].join("\n\n"),
+    prompt: summaryPrompt,
     maxOutputTokens: 120
+  });
+  reportCognitionTokenUsage({
+    usage: summaryTextResult.usage,
+    inputText: summaryPrompt,
+    outputText: summaryTextResult.text
   });
 
   const summaryText = summaryTextResult.text.trim();
   input.thoughtPool.matureBubble(input.bubble.id, summaryText);
 
+  const evaluationPrompt = [
+    "你是一个 AI 伙伴，正在考虑是否主动对用户说以下这个想法。",
+    "请从以下六个维度打 1-5 分并返回 JSON：relevance、information_gap、timing、novelty、expected_impact、relationship_fit。",
+    `想法内容：${summaryText}`,
+    `当前时间：${new Date().toISOString()}`,
+    `用户画像：${JSON.stringify(input.userProfile)}`,
+    `最近对话：\n${formatRecentDialogue(input.recentDialogue)}`
+  ].join("\n");
   const evaluation = await generateObject({
     model: cognitionModel,
     providerOptions: resolveOpenAIStoreOption(input.appConfig, "cognition"),
     schema: evaluationSchema,
-    prompt: [
-      "你是一个 AI 伙伴，正在考虑是否主动对用户说以下这个想法。",
-      "请从以下六个维度打 1-5 分并返回 JSON：relevance、information_gap、timing、novelty、expected_impact、relationship_fit。",
-      `想法内容：${summaryText}`,
-      `当前时间：${new Date().toISOString()}`,
-      `用户画像：${JSON.stringify(input.userProfile)}`,
-      `最近对话：\n${formatRecentDialogue(input.recentDialogue)}`
-    ].join("\n"),
+    prompt: evaluationPrompt,
     maxOutputTokens: 200
+  });
+  reportCognitionTokenUsage({
+    usage: evaluation.usage,
+    inputText: evaluationPrompt,
+    outputText: JSON.stringify(evaluation.object ?? {})
   });
 
   const dimensions = evaluationSchema.parse(evaluation.object ?? {});
@@ -216,11 +229,17 @@ export async function evaluateAndExpress(input: ExpressionEvaluationInput): Prom
     };
   }
 
+  const finalPrompt = `你现在自发想到了一个话题想和用户分享（不是回答用户的问题）。想法是：${summaryText}。请用自然、口语化的方式说出来，一两句话即可，不要有“我想到了”这种前缀。`;
   const finalExpression = await generateText({
     model: input.modelFactory.getChatModel(),
     providerOptions: resolveOpenAIStoreOption(input.appConfig, "chat"),
-    prompt: `你现在自发想到了一个话题想和用户分享（不是回答用户的问题）。想法是：${summaryText}。请用自然、口语化的方式说出来，一两句话即可，不要有“我想到了”这种前缀。`,
+    prompt: finalPrompt,
     maxOutputTokens: 120
+  });
+  reportCognitionTokenUsage({
+    usage: finalExpression.usage,
+    inputText: finalPrompt,
+    outputText: finalExpression.text
   });
 
   return {

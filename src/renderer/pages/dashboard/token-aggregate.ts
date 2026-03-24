@@ -38,12 +38,14 @@ export interface TokenAggregateResult {
 }
 
 const CHAT_SOURCES: TokenUsageSource[] = ["chat:console", "chat:telegram", "chat:qq", "chat:feishu"];
+const BACKGROUND_COGNITION_SOURCE: TokenUsageSource = "background:cognition";
 const BACKGROUND_FACT_EXTRACTION_SOURCE: TokenUsageSource = "background:fact-extraction";
 const BACKGROUND_DAILY_SUMMARY_SOURCE: TokenUsageSource = "background:daily-summary";
 const BACKGROUND_PROFILE_UPDATE_SOURCE: TokenUsageSource = "background:profile-update";
 const BACKGROUND_REFLECTION_SOURCE: TokenUsageSource = "background:reflection";
 const BACKGROUND_PROACTIVE_PUSH_SOURCE: TokenUsageSource = "background:proactive-push";
 const BACKGROUND_SOURCES: TokenUsageSource[] = [
+  BACKGROUND_COGNITION_SOURCE,
   BACKGROUND_FACT_EXTRACTION_SOURCE,
   BACKGROUND_DAILY_SUMMARY_SOURCE,
   BACKGROUND_PROFILE_UPDATE_SOURCE,
@@ -172,8 +174,11 @@ export function aggregateTokenStats(
     },
     backgroundDetails: [
       {
-        label: "事实提取",
-        ...(sourceTotals[BACKGROUND_FACT_EXTRACTION_SOURCE] ?? emptyCounters())
+        label: "认知系统",
+        ...addCounters(
+          sourceTotals[BACKGROUND_COGNITION_SOURCE] ?? emptyCounters(),
+          sourceTotals[BACKGROUND_FACT_EXTRACTION_SOURCE]
+        )
       },
       {
         label: "每日总结",
