@@ -1,4 +1,4 @@
-import { generateObject, generateText } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
 import {
@@ -37,6 +37,7 @@ import { reportCognitionTokenUsage } from "./token-usage";
 import { applyCombinedExtraction } from "./ingestion/graph-adapter";
 import { populateBundledDefaultGraph } from "./ingestion/default-graph";
 import { runColdStart } from "./ingestion/cold-start";
+import { generateStructuredJson } from "./ingestion/structured-json";
 import { buildReplyMemoryBlock as buildReplyMemoryPrompt } from "./retrieval/memory-retrieval";
 
 const factOperationSchema = z.object({
@@ -184,38 +185,27 @@ export class CognitionEngine {
     }
 
     const appConfig = this.input.getConfig();
-    const prompt = [
-      "请从以下对话中同时提取句子级 facts、结构化 fact_operations、以及认知图 graph。",
-      "当前用户统一写成 {{user}}，AI 助手统一写成 {{yobi}}，第三方人物用对话中最完整的称呼。",
-      "graph.nodes 的 type 只能用 fact / event / concept / person / intent；如果内容本身是单个时间词或情绪词，也可直接输出 time_marker / emotion_anchor。",
-      "graph.edges 的 type 只能用 semantic / temporal / causal / emotional。",
-      "当对话中明确说明两个人物是同一人时，请在 graph.entity_merges 里输出 {source_content, target_content}。",
-      "只返回结构化 JSON，不要解释。",
-      JSON.stringify(
-        {
-          channel: input.channel,
-          chat_id: input.chatId ?? null,
-          user: normalizedUser,
-          assistant: normalizedAssistant,
-          now_iso: new Date().toISOString()
-        },
-        null,
-        2
-      )
-    ].join("\n");
-    const result = await generateObject({
+    const prompt = buildDialogueExtractionPrompt({
+      channel: input.channel,
+      chatId: input.chatId ?? null,
+      user: normalizedUser,
+      assistant: normalizedAssistant,
+      nowIso: new Date().toISOString()
+    });
+    const result = await generateStructuredJson({
       model: this.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(appConfig, "cognition"),
       schema: combinedExtractionSchema,
+      maxAttempts: 3,
       prompt
     });
     reportCognitionTokenUsage({
       usage: result.usage,
       inputText: prompt,
-      outputText: JSON.stringify(result.object ?? {})
+      outputText: result.text
     });
 
-    const parsed = combinedExtractionSchema.parse(result.object ?? {}) as CombinedDialogueExtractionDraft;
+    const parsed = result.object as CombinedDialogueExtractionDraft;
     const now = Date.now();
     await applyCombinedExtraction({
       paths: this.input.paths,
@@ -536,27 +526,27 @@ export class CognitionEngine {
     targetNodeCount: number;
   }): Promise<z.infer<typeof coldStartSeedSchema>> {
     const prompt = [
-      "请根据以下 soul 文本，输出一个 JSON，包含用于认知图冷启动的种子 nodes 和建议 edges。",
-      `目标节点数约 ${input.targetNodeCount} 个，覆盖五个维度：性格特征、兴趣领域、情感锚点、时间节点、交互意图。`,
-      "节点字段必须包含 content、type、emotional_valence；边字段必须包含 source_content、target_content、type。",
-      "只返回 JSON，不要解释。",
+      "Read the soul text below and return one JSON object with cold-start seed nodes and suggested edges for the memory graph.",
+      `Target about ${input.targetNodeCount} nodes across five dimensions: personality traits, interests, emotional anchors, time markers, and interaction intents.`,
+      "The JSON must contain keys nodes and edges.",
+      "Each node must include content, type, and optional emotional_valence.",
+      "Each edge must include source_content, target_content, and type.",
+      "Do not include markdown fences or explanations. Return JSON only.",
       input.soulMarkdown
     ].join("\n");
-    const result = await generateObject({
+    const result = await generateStructuredJson({
       model: this.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
       schema: coldStartSeedSchema,
+      maxAttempts: 3,
       prompt
     });
     reportCognitionTokenUsage({
       usage: result.usage,
       inputText: prompt,
-      outputText: JSON.stringify(result.object ?? {})
+      outputText: result.text
     });
-    return coldStartSeedSchema.parse(result.object ?? {
-      nodes: [],
-      edges: []
-    });
+    return result.object;
   }
 
   private async loadLastExpressionTime(): Promise<number> {
@@ -750,4 +740,86 @@ export class CognitionEngine {
       );
     });
   }
+}
+
+function buildDialogueExtractionPrompt(input: {
+  channel: string;
+  chatId: string | null;
+  user: string;
+  assistant: string;
+  nowIso: string;
+}): string {
+  return [
+    "Extract sentence-level facts, structured fact_operations, and a memory graph from the dialogue below.",
+    "Return exactly one JSON object with the keys facts, fact_operations, and graph.",
+    "Use {{user}} for the human user and {{yobi}} for the assistant. Use the most complete name found in the dialogue for third parties.",
+    "facts must be an array of short factual strings.",
+    "fact_operations must be an array of objects with action and fact.",
+    "action must be one of add, update, supersede.",
+    "fact must include entity, key, value, category, confidence, ttl_class, and may include source and source_range.",
+    "category must be one of identity, preference, event, goal, relationship, emotion_pattern.",
+    "ttl_class must be one of permanent, stable, active, session.",
+    "graph must be an object with nodes, edges, and entity_merges.",
+    "graph.nodes[].type must be one of fact, event, concept, person, intent, time_marker, emotion_anchor.",
+    "graph.edges[].type must be one of semantic, temporal, causal, emotional.",
+    "If the dialogue explicitly says two people are the same person, include {source_content, target_content} in graph.entity_merges.",
+    "Do not output id, label, metadata, or any other extra fields.",
+    "Do not include markdown fences or explanations. Return JSON only.",
+    "Example output:",
+    JSON.stringify(
+      {
+        facts: [
+          "{{user}} likes hot ramen"
+        ],
+        fact_operations: [
+          {
+            action: "add",
+            fact: {
+              entity: "{{user}}",
+              key: "food_preference",
+              value: "hot ramen",
+              category: "preference",
+              confidence: 0.9,
+              ttl_class: "stable"
+            }
+          }
+        ],
+        graph: {
+          nodes: [
+            {
+              content: "{{user}}",
+              type: "person"
+            },
+            {
+              content: "{{user}} likes hot ramen",
+              type: "fact",
+              emotional_valence: 0.3
+            }
+          ],
+          edges: [
+            {
+              source_content: "{{user}}",
+              target_content: "{{user}} likes hot ramen",
+              type: "semantic"
+            }
+          ],
+          entity_merges: []
+        }
+      },
+      null,
+      2
+    ),
+    "Dialogue input:",
+    JSON.stringify(
+      {
+        channel: input.channel,
+        chat_id: input.chatId,
+        user: input.user,
+        assistant: input.assistant,
+        now_iso: input.nowIso
+      },
+      null,
+      2
+    )
+  ].join("\n");
 }

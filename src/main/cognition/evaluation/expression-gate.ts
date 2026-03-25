@@ -1,9 +1,10 @@
-import { generateObject, generateText } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import type { ModelFactory } from "@main/core/model-factory";
 import type { AppConfig, HistoryMessage, UserProfile } from "@shared/types";
 import { reportCognitionTokenUsage } from "../token-usage";
+import { generateStructuredJson } from "../ingestion/structured-json";
 import type {
   BubbleEvaluationDimensions,
   CognitionConfig,
@@ -195,27 +196,29 @@ export async function evaluateAndExpress(input: ExpressionEvaluationInput): Prom
   input.thoughtPool.matureBubble(input.bubble.id, summaryText);
 
   const evaluationPrompt = [
-    "你是一个 AI 伙伴，正在考虑是否主动对用户说以下这个想法。",
-    "请从以下六个维度打 1-5 分并返回 JSON：relevance、information_gap、timing、novelty、expected_impact、relationship_fit。",
-    `想法内容：${summaryText}`,
-    `当前时间：${new Date().toISOString()}`,
-    `用户画像：${JSON.stringify(input.userProfile)}`,
-    `最近对话：\n${formatRecentDialogue(input.recentDialogue)}`
+    "You are an AI companion deciding whether to proactively say the following thought to the user.",
+    "Return exactly one JSON object with integer scores from 1 to 5 for these keys: relevance, information_gap, timing, novelty, expected_impact, relationship_fit.",
+    `Thought: ${summaryText}`,
+    `Current time: ${new Date().toISOString()}`,
+    `User profile: ${JSON.stringify(input.userProfile)}`,
+    `Recent dialogue:\n${formatRecentDialogue(input.recentDialogue)}`,
+    "Do not include markdown fences or explanations. Return JSON only."
   ].join("\n");
-  const evaluation = await generateObject({
+  const evaluation = await generateStructuredJson({
     model: cognitionModel,
     providerOptions: resolveOpenAIStoreOption(input.appConfig, "cognition"),
     schema: evaluationSchema,
     prompt: evaluationPrompt,
+    maxAttempts: 3,
     maxOutputTokens: 200
   });
   reportCognitionTokenUsage({
     usage: evaluation.usage,
     inputText: evaluationPrompt,
-    outputText: JSON.stringify(evaluation.object ?? {})
+    outputText: evaluation.text
   });
 
-  const dimensions = evaluationSchema.parse(evaluation.object ?? {});
+  const dimensions = evaluation.object;
   const score = averageDimensions(dimensions);
 
   if (score < 3.5) {

@@ -1,4 +1,5 @@
 const zod = require('zod');
+const { generateStructuredJson } = require('./structured-json.cjs');
 
 const semanticProfileSchema = zod.z.object({
   preferredComfortStyle: zod.z.string().min(1).max(30).optional(),
@@ -144,12 +145,11 @@ async function createModelForRoute(config, routeKey) {
 }
 
 async function runDailyEpisode(message) {
-  const { generateObject } = await import('ai');
   const model = await createModelForRoute(message.config, 'reflection');
   const system = [
-    '你负责把指定日期的一整天对话整理成一条简短 episode。',
-    '请总结当天主线、列出未解事项、判断重要性，并分别给出用户情绪和 Yobi 情绪。',
-    '只输出 schema 字段，不要输出额外解释。'
+    'You summarize one full day of conversation into a short episode record.',
+    'Return a JSON object with summary, unresolved, significance, user_mood, and yobi_mood.',
+    'Do not include markdown fences or explanations.'
   ].join('\n');
   const prompt = JSON.stringify({
     date: message.date,
@@ -157,8 +157,16 @@ async function runDailyEpisode(message) {
     user_message_count: message.userMessageCount,
     message_window: Array.isArray(message.dayItems) ? message.dayItems.slice(-120) : []
   }, null, 2);
-  const result = await generateObject({ model, providerOptions: resolveProviderOptions(message.config, 'reflection'), schema: dailyEpisodeSummarySchema, system, prompt, maxOutputTokens: 240 });
-  const parsed = dailyEpisodeSummarySchema.parse(result.object ?? {});
+  const result = await generateStructuredJson({
+    model,
+    providerOptions: resolveProviderOptions(message.config, 'reflection'),
+    schema: dailyEpisodeSummarySchema,
+    system,
+    prompt,
+    maxOutputTokens: 240,
+    maxAttempts: 3
+  });
+  const parsed = result.object;
   return {
     summary: parsed.summary,
     unresolved: parsed.unresolved,
@@ -170,21 +178,43 @@ async function runDailyEpisode(message) {
 }
 
 async function runProfileSemantic(message) {
-  const { generateObject } = await import('ai');
   const model = await createModelForRoute(message.config, 'reflection');
-  const system = '你根据最近对话模式更新用户画像，保持小幅变化，不要发散猜测。只输出 schema 字段。';
+  const system = [
+    'Update the user profile from recent conversation patterns.',
+    'Make only small, evidence-based adjustments and avoid speculation.',
+    'Return JSON only.'
+  ].join('\n');
   const prompt = JSON.stringify({ profile: message.profile, recent_episodes: message.episodes }, null, 2);
-  const result = await generateObject({ model, providerOptions: resolveProviderOptions(message.config, 'reflection'), schema: semanticProfileSchema, system, prompt, maxOutputTokens: 400 });
-  return { result: semanticProfileSchema.parse(result.object ?? {}), tokenUsage: result.usage };
+  const result = await generateStructuredJson({
+    model,
+    providerOptions: resolveProviderOptions(message.config, 'reflection'),
+    schema: semanticProfileSchema,
+    system,
+    prompt,
+    maxOutputTokens: 400,
+    maxAttempts: 3
+  });
+  return { result: result.object, tokenUsage: result.usage };
 }
 
 async function runDailyReflection(message) {
-  const { generateObject } = await import('ai');
   const model = await createModelForRoute(message.config, 'reflection');
-  const system = '你是 Yobi 的反思模块，请给出一个可执行的微调建议和评分。分数越高表示证据越充分。';
+  const system = [
+    'You are Yobi\'s reflection module.',
+    'Return one actionable tuning suggestion with supporting evidence and scores.',
+    'Return JSON only.'
+  ].join('\n');
   const prompt = JSON.stringify({ recent_episodes: message.episodes }, null, 2);
-  const result = await generateObject({ model, providerOptions: resolveProviderOptions(message.config, 'reflection'), schema: reflectionSchema, system, prompt, maxOutputTokens: 400 });
-  return { result: reflectionSchema.parse(result.object), tokenUsage: result.usage };
+  const result = await generateStructuredJson({
+    model,
+    providerOptions: resolveProviderOptions(message.config, 'reflection'),
+    schema: reflectionSchema,
+    system,
+    prompt,
+    maxOutputTokens: 400,
+    maxAttempts: 3
+  });
+  return { result: result.object, tokenUsage: result.usage };
 }
 
 process.parentPort.on('message', async (message) => {

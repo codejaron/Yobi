@@ -1,4 +1,3 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import type { AppConfig } from "@shared/types";
 import type {
@@ -11,6 +10,7 @@ import type { AppLogger } from "@main/services/logger";
 import type { ModelFactory } from "@main/core/model-factory";
 import { resolveOpenAIStoreOption } from "@main/core/provider-utils";
 import { reportCognitionTokenUsage } from "../token-usage";
+import { generateStructuredJson } from "../ingestion/structured-json";
 import { readJsonFile, writeJsonFileAtomic } from "@main/storage/fs";
 
 const emotionAnalysisSchema = z.object({
@@ -163,23 +163,24 @@ export class EmotionStateManager {
     }
 
     const prompt = [
-      "请根据以下对话文本判断一个简化情绪状态，只返回 JSON。",
-      "valence 范围 -1 到 1，负数表示负向，正数表示正向。",
-      "arousal 范围 0 到 1，数值越高表示越激动或紧张。",
+      "Analyze the dialogue text below and return exactly one JSON object with valence and arousal.",
+      "valence must be between -1 and 1, where negative means negative emotion and positive means positive emotion.",
+      "arousal must be between 0 and 1, where higher means more excited, activated, or tense.",
+      "Do not include markdown fences or explanations. Return JSON only.",
       text
     ].join("\n");
-    const result = await generateObject({
+    const result = await generateStructuredJson({
       model: this.input.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(this.input.getAppConfig(), "cognition"),
       schema: emotionAnalysisSchema,
+      maxAttempts: 3,
       prompt
     });
     reportCognitionTokenUsage({
       usage: result.usage,
       inputText: prompt,
-      outputText: JSON.stringify(result.object ?? {})
+      outputText: result.text
     });
-    const parsed = emotionAnalysisSchema.parse(result.object ?? {});
-    return parsed;
+    return result.object;
   }
 }

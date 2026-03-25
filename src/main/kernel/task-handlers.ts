@@ -166,46 +166,58 @@ export class ProfileSemanticTaskHandler implements KernelQueueTaskHandler {
       null,
       2
     );
-    const result = await this.context.backgroundWorker.runProfileSemantic({
-      profile,
-      episodes: episodes.map((episode) => ({ date: episode.date, summary: episode.summary })),
-      config: this.context.getConfig()
-    });
-    if (result.tokenUsage) {
-      reportTokenUsage({
-        source: "background:profile-update",
-        usage: result.tokenUsage,
-        inputText: prompt,
-        outputText: JSON.stringify(result.result ?? {})
+    try {
+      const result = await this.context.backgroundWorker.runProfileSemantic({
+        profile,
+        episodes: episodes.map((episode) => ({ date: episode.date, summary: episode.summary })),
+        config: this.context.getConfig()
       });
+      if (result.tokenUsage) {
+        reportTokenUsage({
+          source: "background:profile-update",
+          usage: result.tokenUsage,
+          inputText: prompt,
+          outputText: JSON.stringify(result.result ?? {})
+        });
+      }
+      const parsed = semanticProfileSchema.parse(result.result ?? {});
+      await this.context.memory.getProfileStore().applySemanticPatch((draft) => {
+        if (parsed.preferredComfortStyle) {
+          draft.communication.preferred_comfort_style = parsed.preferredComfortStyle;
+        }
+        if (typeof parsed.humorReceptivity === "number") {
+          draft.communication.humor_receptivity = clamp01(parsed.humorReceptivity);
+        }
+        if (typeof parsed.adviceReceptivity === "number") {
+          draft.communication.advice_receptivity = clamp01(parsed.adviceReceptivity);
+        }
+        if (typeof parsed.emotionalOpenness === "number") {
+          draft.communication.emotional_openness = clamp01(parsed.emotionalOpenness);
+        }
+        for (const item of parsed.whatWorks) {
+          if (!draft.interaction_notes.what_works.includes(item)) {
+            draft.interaction_notes.what_works.push(item);
+          }
+        }
+        for (const item of parsed.whatFails) {
+          if (!draft.interaction_notes.what_fails.includes(item)) {
+            draft.interaction_notes.what_fails.push(item);
+          }
+        }
+        draft.interaction_notes.what_works = draft.interaction_notes.what_works.slice(-20);
+        draft.interaction_notes.what_fails = draft.interaction_notes.what_fails.slice(-20);
+      });
+    } catch (error) {
+      logger.warn(
+        "kernel",
+        "profile-semantic-update-failed",
+        {
+          episodeCount: episodes.length
+        },
+        error
+      );
+      throw error;
     }
-    const parsed = semanticProfileSchema.parse(result.result ?? {});
-    await this.context.memory.getProfileStore().applySemanticPatch((draft) => {
-      if (parsed.preferredComfortStyle) {
-        draft.communication.preferred_comfort_style = parsed.preferredComfortStyle;
-      }
-      if (typeof parsed.humorReceptivity === "number") {
-        draft.communication.humor_receptivity = clamp01(parsed.humorReceptivity);
-      }
-      if (typeof parsed.adviceReceptivity === "number") {
-        draft.communication.advice_receptivity = clamp01(parsed.adviceReceptivity);
-      }
-      if (typeof parsed.emotionalOpenness === "number") {
-        draft.communication.emotional_openness = clamp01(parsed.emotionalOpenness);
-      }
-      for (const item of parsed.whatWorks) {
-        if (!draft.interaction_notes.what_works.includes(item)) {
-          draft.interaction_notes.what_works.push(item);
-        }
-      }
-      for (const item of parsed.whatFails) {
-        if (!draft.interaction_notes.what_fails.includes(item)) {
-          draft.interaction_notes.what_fails.push(item);
-        }
-      }
-      draft.interaction_notes.what_works = draft.interaction_notes.what_works.slice(-20);
-      draft.interaction_notes.what_fails = draft.interaction_notes.what_fails.slice(-20);
-    });
   }
 }
 
@@ -230,54 +242,66 @@ export class DailyReflectionTaskHandler implements KernelQueueTaskHandler {
       null,
       2
     );
-    const result = await this.context.backgroundWorker.runDailyReflection({
-      episodes: episodes.map((episode) => ({
-        date: episode.date,
-        summary: episode.summary,
-        significance: episode.significance
-      })),
-      config: this.context.getConfig()
-    });
-    if (result.tokenUsage) {
-      reportTokenUsage({
-        source: "background:reflection",
-        usage: result.tokenUsage,
-        inputText: prompt,
-        outputText: JSON.stringify(result.result ?? {})
+    try {
+      const result = await this.context.backgroundWorker.runDailyReflection({
+        episodes: episodes.map((episode) => ({
+          date: episode.date,
+          summary: episode.summary,
+          significance: episode.significance
+        })),
+        config: this.context.getConfig()
       });
-    }
-    const parsed = reflectionSchema.parse(result.result);
-    const average =
-      (parsed.scores.specificity + parsed.scores.evidence + parsed.scores.novelty + parsed.scores.usefulness) /
-      4;
-    const proposal: ReflectionProposal = {
-      id: randomUUID(),
-      created_at: new Date().toISOString(),
-      summary: parsed.summary,
-      evidence: parsed.evidence,
-      scores: parsed.scores,
-      risk: average >= 0.75 ? "low" : "high",
-      requires_review: average < 0.75,
-      applied: average >= 0.75
-    };
+      if (result.tokenUsage) {
+        reportTokenUsage({
+          source: "background:reflection",
+          usage: result.tokenUsage,
+          inputText: prompt,
+          outputText: JSON.stringify(result.result ?? {})
+        });
+      }
+      const parsed = reflectionSchema.parse(result.result);
+      const average =
+        (parsed.scores.specificity + parsed.scores.evidence + parsed.scores.novelty + parsed.scores.usefulness) /
+        4;
+      const proposal: ReflectionProposal = {
+        id: randomUUID(),
+        created_at: new Date().toISOString(),
+        summary: parsed.summary,
+        evidence: parsed.evidence,
+        scores: parsed.scores,
+        risk: average >= 0.75 ? "low" : "high",
+        requires_review: average < 0.75,
+        applied: average >= 0.75
+      };
 
-    if (proposal.applied) {
-      await this.context.memory.getProfileStore().applySemanticPatch((draft) => {
-        if (!draft.interaction_notes.what_works.includes(proposal.summary)) {
-          draft.interaction_notes.what_works.push(proposal.summary);
-        }
-      });
-    }
+      if (proposal.applied) {
+        await this.context.memory.getProfileStore().applySemanticPatch((draft) => {
+          if (!draft.interaction_notes.what_works.includes(proposal.summary)) {
+            draft.interaction_notes.what_works.push(proposal.summary);
+          }
+        });
+      }
 
-    const queue = await readJsonFile<ReflectionProposal[]>(this.context.paths.reflectionQueuePath, []);
-    const log = await readJsonFile<ReflectionProposal[]>(this.context.paths.reflectionLogPath, []);
+      const queue = await readJsonFile<ReflectionProposal[]>(this.context.paths.reflectionQueuePath, []);
+      const log = await readJsonFile<ReflectionProposal[]>(this.context.paths.reflectionLogPath, []);
 
-    if (proposal.requires_review) {
-      queue.push(proposal);
-      await writeJsonFileAtomic(this.context.paths.reflectionQueuePath, queue.slice(-200));
+      if (proposal.requires_review) {
+        queue.push(proposal);
+        await writeJsonFileAtomic(this.context.paths.reflectionQueuePath, queue.slice(-200));
+      }
+      log.push(proposal);
+      await writeJsonFileAtomic(this.context.paths.reflectionLogPath, log.slice(-500));
+    } catch (error) {
+      logger.warn(
+        "kernel",
+        "daily-reflection-failed",
+        {
+          episodeCount: episodes.length
+        },
+        error
+      );
+      throw error;
     }
-    log.push(proposal);
-    await writeJsonFileAtomic(this.context.paths.reflectionLogPath, log.slice(-500));
   }
 }
 
