@@ -34,6 +34,33 @@ function unwrapMessage(message) {
   return message;
 }
 
+function buildDailyEpisodeSystemPrompt() {
+  return [
+    'You summarize one full day of conversation into a short episode record.',
+    'Return a JSON object with summary, unresolved, significance, user_mood, and yobi_mood.',
+    'Output text fields must use the same language as the input dialogue. Do not translate.',
+    'Do not include markdown fences or explanations.'
+  ].join('\n');
+}
+
+function buildProfileSemanticSystemPrompt() {
+  return [
+    'Update the user profile from recent conversation patterns.',
+    'Make only small, evidence-based adjustments and avoid speculation.',
+    'When you add or rewrite natural-language text fields, keep the same language as the recent episodes. Do not translate.',
+    'Return JSON only.'
+  ].join('\n');
+}
+
+function buildDailyReflectionSystemPrompt() {
+  return [
+    'You are Yobi\'s reflection module.',
+    'Return one actionable tuning suggestion with supporting evidence and scores.',
+    'Output summary and evidence in the same language as the recent episodes. Do not translate.',
+    'Return JSON only.'
+  ].join('\n');
+}
+
 function isPlainRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -146,11 +173,7 @@ async function createModelForRoute(config, routeKey) {
 
 async function runDailyEpisode(message) {
   const model = await createModelForRoute(message.config, 'reflection');
-  const system = [
-    'You summarize one full day of conversation into a short episode record.',
-    'Return a JSON object with summary, unresolved, significance, user_mood, and yobi_mood.',
-    'Do not include markdown fences or explanations.'
-  ].join('\n');
+  const system = buildDailyEpisodeSystemPrompt();
   const prompt = JSON.stringify({
     date: message.date,
     fallback_summary: message.fallbackSummary,
@@ -179,11 +202,7 @@ async function runDailyEpisode(message) {
 
 async function runProfileSemantic(message) {
   const model = await createModelForRoute(message.config, 'reflection');
-  const system = [
-    'Update the user profile from recent conversation patterns.',
-    'Make only small, evidence-based adjustments and avoid speculation.',
-    'Return JSON only.'
-  ].join('\n');
+  const system = buildProfileSemanticSystemPrompt();
   const prompt = JSON.stringify({ profile: message.profile, recent_episodes: message.episodes }, null, 2);
   const result = await generateStructuredJson({
     model,
@@ -199,11 +218,7 @@ async function runProfileSemantic(message) {
 
 async function runDailyReflection(message) {
   const model = await createModelForRoute(message.config, 'reflection');
-  const system = [
-    'You are Yobi\'s reflection module.',
-    'Return one actionable tuning suggestion with supporting evidence and scores.',
-    'Return JSON only.'
-  ].join('\n');
+  const system = buildDailyReflectionSystemPrompt();
   const prompt = JSON.stringify({ recent_episodes: message.episodes }, null, 2);
   const result = await generateStructuredJson({
     model,
@@ -217,17 +232,25 @@ async function runDailyReflection(message) {
   return { result: result.object, tokenUsage: result.usage };
 }
 
-process.parentPort.on('message', async (message) => {
-  const payload = unwrapMessage(message);
-  const id = payload?.id;
-  try {
-    let result;
-    if (payload?.type === 'daily-episode') result = await runDailyEpisode(payload);
-    else if (payload?.type === 'profile-semantic-update') result = await runProfileSemantic(payload);
-    else if (payload?.type === 'daily-reflection') result = await runDailyReflection(payload);
-    else throw new Error(`unknown-background-task:${String(payload?.type || '')}`);
-    process.parentPort.postMessage({ id, ok: true, result });
-  } catch (error) {
-    process.parentPort.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
+module.exports = {
+  buildDailyEpisodeSystemPrompt,
+  buildProfileSemanticSystemPrompt,
+  buildDailyReflectionSystemPrompt
+};
+
+if (process.parentPort) {
+  process.parentPort.on('message', async (message) => {
+    const payload = unwrapMessage(message);
+    const id = payload?.id;
+    try {
+      let result;
+      if (payload?.type === 'daily-episode') result = await runDailyEpisode(payload);
+      else if (payload?.type === 'profile-semantic-update') result = await runProfileSemantic(payload);
+      else if (payload?.type === 'daily-reflection') result = await runDailyReflection(payload);
+      else throw new Error(`unknown-background-task:${String(payload?.type || '')}`);
+      process.parentPort.postMessage({ id, ok: true, result });
+    } catch (error) {
+      process.parentPort.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+}

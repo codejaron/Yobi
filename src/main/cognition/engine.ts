@@ -449,10 +449,7 @@ export class CognitionEngine {
       graph: this.graph,
       getCognitionConfig: () => this.requireConfig(),
       summarizeCluster: async (nodes) => {
-        const prompt = [
-          "请将以下一组事件概括成一句抽象总结，不要逐条罗列。",
-          nodes.map((node) => `- ${node.content}`).join("\n")
-        ].join("\n");
+        const prompt = buildClusterSummaryPrompt(nodes);
         const result = await generateText({
           model: this.modelFactory.getCognitionModel(),
           providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
@@ -525,15 +522,7 @@ export class CognitionEngine {
     soulMarkdown: string;
     targetNodeCount: number;
   }): Promise<z.infer<typeof coldStartSeedSchema>> {
-    const prompt = [
-      "Read the soul text below and return one JSON object with cold-start seed nodes and suggested edges for the memory graph.",
-      `Target about ${input.targetNodeCount} nodes across five dimensions: personality traits, interests, emotional anchors, time markers, and interaction intents.`,
-      "The JSON must contain keys nodes and edges.",
-      "Each node must include content, type, and optional emotional_valence.",
-      "Each edge must include source_content, target_content, and type.",
-      "Do not include markdown fences or explanations. Return JSON only.",
-      input.soulMarkdown
-    ].join("\n");
+    const prompt = buildColdStartSeedPrompt(input);
     const result = await generateStructuredJson({
       model: this.modelFactory.getCognitionModel(),
       providerOptions: resolveOpenAIStoreOption(this.input.getConfig(), "cognition"),
@@ -742,7 +731,7 @@ export class CognitionEngine {
   }
 }
 
-function buildDialogueExtractionPrompt(input: {
+export function buildDialogueExtractionPrompt(input: {
   channel: string;
   chatId: string | null;
   user: string;
@@ -752,11 +741,17 @@ function buildDialogueExtractionPrompt(input: {
   return [
     "Extract sentence-level facts, structured fact_operations, and a memory graph from the dialogue below.",
     "Return exactly one JSON object with the keys facts, fact_operations, and graph.",
+    "All natural-language text values in the output must use the same language as the latest user message.",
+    "This includes facts[] strings, fact.value, and graph.nodes[].content.",
+    "JSON field names and enum values stay in English.",
+    "Do not translate placeholders, proper names, product names, code, commands, file paths, version numbers, or quoted text.",
     "Use {{user}} for the human user and {{yobi}} for the assistant. Use the most complete name found in the dialogue for third parties.",
+    "graph.edges[].source_content/target_content and graph.entity_merges must reuse the exact node content or mention text from the dialogue or graph.",
     "facts must be an array of short factual strings.",
     "fact_operations must be an array of objects with action and fact.",
     "action must be one of add, update, supersede.",
     "fact must include entity, key, value, category, confidence, ttl_class, and may include source and source_range.",
+    "fact.key should remain concise and stable across turns for the same kind of fact.",
     "category must be one of identity, preference, event, goal, relationship, emotion_pattern.",
     "ttl_class must be one of permanent, stable, active, session.",
     "graph must be an object with nodes, edges, and entity_merges.",
@@ -821,5 +816,29 @@ function buildDialogueExtractionPrompt(input: {
       null,
       2
     )
+  ].join("\n");
+}
+
+export function buildClusterSummaryPrompt(nodes: ReadonlyArray<{ content: string }>): string {
+  return [
+    "请将以下一组事件概括成一句抽象总结，不要逐条罗列。",
+    "请沿用这些事件本身的语言，不要翻译。",
+    nodes.map((node) => `- ${node.content}`).join("\n")
+  ].join("\n");
+}
+
+export function buildColdStartSeedPrompt(input: {
+  soulMarkdown: string;
+  targetNodeCount: number;
+}): string {
+  return [
+    "Read the soul text below and return one JSON object with cold-start seed nodes and suggested edges for the memory graph.",
+    `Target about ${input.targetNodeCount} nodes across five dimensions: personality traits, interests, emotional anchors, time markers, and interaction intents.`,
+    "The JSON must contain keys nodes and edges.",
+    "Each node must include content, type, and optional emotional_valence.",
+    "The content field of each node must use the same language as the soul text. Do not translate.",
+    "Each edge must include source_content, target_content, and type.",
+    "Do not include markdown fences or explanations. Return JSON only.",
+    input.soulMarkdown
   ].join("\n");
 }
