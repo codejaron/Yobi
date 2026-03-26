@@ -4,7 +4,7 @@ import {
   applyVoiceSessionEventToConsoleChatLiveVoiceState,
   createConsoleChatLiveVoiceState
 } from "@shared/console-chat-live-voice";
-import type { VoiceSessionEvent, VoiceSessionState } from "@shared/types";
+import type { ChatAttachment, VoiceSessionEvent, VoiceSessionState } from "@shared/types";
 
 function createVoiceSessionState(
   patch: Partial<VoiceSessionState> & Pick<VoiceSessionState, "sessionId" | "phase">
@@ -40,6 +40,19 @@ function createStateEvent(state: VoiceSessionState): VoiceSessionEvent {
     type: "state",
     state,
     timestamp: "2026-03-14T00:00:00.000Z"
+  };
+}
+
+function createAttachment(id = "attachment-1"): ChatAttachment {
+  return {
+    id,
+    kind: "image",
+    filename: "companion-capture.jpg",
+    mimeType: "image/jpeg",
+    size: 1234,
+    path: `/tmp/${id}.jpg`,
+    source: "companion-capture",
+    createdAt: "2026-03-14T00:00:00.000Z"
   };
 }
 
@@ -186,6 +199,40 @@ test("console chat live voice: second user turn gets a new turn id", () => {
   assert.notEqual(lastMessage?.id, firstTurnUserId);
   assert.equal(lastMessage?.id, "voice-live:session-1:2:user");
   assert.equal(state.activeTurnIndex, 2);
+});
+
+test("console chat live voice: final user transcript carries companion attachments and keeps them across snapshots", () => {
+  let state = createConsoleChatLiveVoiceState();
+  const attachment = createAttachment();
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(
+    state,
+    createStateEvent(createVoiceSessionState({ sessionId: "session-1", phase: "listening" }))
+  );
+
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(state, {
+    type: "user-transcript",
+    text: "な",
+    isFinal: true,
+    attachments: [attachment],
+    timestamp: "2026-03-14T00:00:01.000Z"
+  });
+
+  assert.equal(state.messages[0]?.attachments?.length, 1);
+  assert.equal(state.messages[0]?.attachments?.[0]?.id, attachment.id);
+
+  state = applyVoiceSessionEventToConsoleChatLiveVoiceState(
+    state,
+    createStateEvent(
+      createVoiceSessionState({
+        sessionId: "session-1",
+        phase: "assistant-thinking",
+        userTranscript: "な"
+      })
+    )
+  );
+
+  assert.equal(state.messages[0]?.attachments?.length, 1);
+  assert.equal(state.messages[0]?.attachments?.[0]?.id, attachment.id);
 });
 
 test("console chat live voice: interrupt closes the current assistant bubble and next user starts a new turn", () => {

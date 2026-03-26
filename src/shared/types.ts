@@ -595,6 +595,7 @@ export type VoiceSessionEvent =
       text: string;
       isFinal: boolean;
       metadata?: SpeechRecognitionMetadata | null;
+      attachments?: ChatAttachment[];
       timestamp: string;
     }
   | {

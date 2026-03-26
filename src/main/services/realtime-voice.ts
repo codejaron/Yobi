@@ -600,6 +600,11 @@ export class RealtimeVoiceService {
         text,
         isFinal: true,
         metadata: recognized.metadata,
+        ...(speechAttachments.length > 0
+          ? {
+              attachments: speechAttachments
+            }
+          : {}),
         timestamp: nowIso()
       });
       this.emitState();

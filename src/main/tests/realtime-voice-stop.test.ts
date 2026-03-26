@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { ChatAttachment, VoiceSessionEvent } from "@shared/types";
 import { RealtimeVoiceService } from "../services/realtime-voice.js";
 import { createVoiceSessionState, reduceVoiceSessionState } from "../services/realtime-voice-state.js";
 import type { VoiceActivityDetector } from "../services/realtime-voice-vad.js";
@@ -93,6 +94,19 @@ function createFakeVad(
     processChunk,
     reset: () => undefined,
     dispose: () => undefined
+  };
+}
+
+function createAttachment(id = "attachment-1"): ChatAttachment {
+  return {
+    id,
+    kind: "image",
+    filename: "companion-capture.jpg",
+    mimeType: "image/jpeg",
+    size: 1234,
+    path: `/tmp/${id}.jpg`,
+    source: "companion-capture",
+    createdAt: "2026-03-14T00:00:00.000Z"
   };
 }
 
@@ -413,4 +427,44 @@ test("realtime voice: maxUtteranceMs still forces a flush when VAD keeps speakin
   } finally {
     Date.now = originalDateNow;
   }
+});
+
+test("realtime voice: final user transcript event includes companion attachments", async () => {
+  const service = createService();
+  const events: VoiceSessionEvent[] = [];
+  const attachment = createAttachment();
+
+  service.onEvent((event: VoiceSessionEvent) => {
+    events.push(event);
+  });
+  service.handleUserTurn = async () => undefined;
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+  service.speechActive = true;
+  service.activeAsrSession = {
+    pushPcm: async () => undefined,
+    flush: async () => ({
+      text: "な",
+      metadata: null
+    }),
+    abort: async () => undefined
+  } satisfies StreamingAsrSession;
+  service.activeSpeechCaptureSession = {
+    attachments: [attachment]
+  };
+
+  await service.finishSpeech();
+
+  const transcriptEvent = events.find(
+    (event) => event.type === "user-transcript" && event.isFinal
+  );
+  assert.equal(transcriptEvent?.type, "user-transcript");
+  assert.equal(transcriptEvent?.attachments?.length, 1);
+  assert.equal(transcriptEvent?.attachments?.[0]?.id, attachment.id);
 });

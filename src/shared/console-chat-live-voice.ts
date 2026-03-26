@@ -1,4 +1,4 @@
-import type { VoiceSessionEvent, VoiceSessionPhase, VoiceSessionState } from "./types";
+import type { ChatAttachment, VoiceSessionEvent, VoiceSessionPhase, VoiceSessionState } from "./types";
 
 export type ConsoleChatLiveVoiceTurnStage = "idle" | "user" | "assistant-pending" | "assistant";
 
@@ -8,6 +8,7 @@ export interface ConsoleChatLiveVoiceMessage {
   role: "user" | "assistant";
   text: string;
   state: "streaming" | "done";
+  attachments?: ChatAttachment[];
 }
 
 export interface ConsoleChatLiveVoiceState {
@@ -20,7 +21,7 @@ export interface ConsoleChatLiveVoiceState {
 export type ConsoleChatLiveVoiceAction =
   | { type: "clear" }
   | { type: "state"; state: VoiceSessionState }
-  | { type: "user-transcript"; text: string; isFinal: boolean }
+  | { type: "user-transcript"; text: string; isFinal: boolean; attachments?: ChatAttachment[] }
   | { type: "assistant-transcript"; text: string; isFinal: boolean };
 
 interface TurnMessages {
@@ -52,7 +53,8 @@ export function applyVoiceSessionEventToConsoleChatLiveVoiceState(
     return reduceConsoleChatLiveVoiceState(state, {
       type: "user-transcript",
       text: event.text,
-      isFinal: event.isFinal
+      isFinal: event.isFinal,
+      attachments: event.attachments
     });
   }
 
@@ -98,6 +100,10 @@ export function reduceConsoleChatLiveVoiceState(
         : action.isFinal
           ? "done"
           : "streaming";
+    const nextAttachments =
+      action.attachments && action.attachments.length > 0
+        ? action.attachments
+        : currentTurn.user?.attachments;
 
     return {
       ...current,
@@ -108,7 +114,8 @@ export function reduceConsoleChatLiveVoiceState(
         requestId,
         role: "user",
         text: nextText,
-        state: nextState
+        state: nextState,
+        attachments: nextAttachments
       })
     };
   }
@@ -171,12 +178,14 @@ function applyVoiceSessionSnapshot(
   const turnIndex = resolveSnapshotTurnIndex(next, normalizedSnapshot);
   let messages = next.messages;
   if (hasUser) {
+    const turn = getTurnMessages(messages, normalizedSnapshot.sessionId, turnIndex);
     messages = upsertMessage(messages, {
       id: buildMessageId(normalizedSnapshot.sessionId, turnIndex, "user"),
       requestId: buildTurnRequestId(normalizedSnapshot.sessionId, turnIndex),
       role: "user",
       text: normalizedSnapshot.userTranscript,
-      state: isUserFinalPhase(normalizedSnapshot.phase) ? "done" : "streaming"
+      state: isUserFinalPhase(normalizedSnapshot.phase) ? "done" : "streaming",
+      attachments: turn.user?.attachments
     });
   }
 

@@ -182,6 +182,7 @@ function readScrollMetrics(node: HTMLDivElement) {
 function createTransientVoiceMessage(message: ConsoleChatLiveVoiceMessage): ConsoleMessage {
   return {
     ...message,
+    attachments: message.attachments?.map((attachment) => toConsoleAttachmentView(attachment)),
     transientOrigin: "voice"
   };
 }
