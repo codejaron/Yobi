@@ -143,6 +143,15 @@ const api = {
   setVoiceSessionMode(mode) {
     return ipcRenderer.invoke('voice:session:set-mode', { mode });
   },
+  getCompanionModeState() {
+    return ipcRenderer.invoke('companion:mode:get');
+  },
+  startCompanionMode() {
+    return ipcRenderer.invoke('companion:mode:start');
+  },
+  stopCompanionMode() {
+    return ipcRenderer.invoke('companion:mode:stop');
+  },
   listConsoleHistory(input) {
     return ipcRenderer.invoke('console:chat:history', input ?? {});
   },
@@ -161,6 +170,13 @@ const api = {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on(channel, wrapped);
     ipcRenderer.send('voice:session:subscribe');
+    return () => ipcRenderer.removeListener(channel, wrapped);
+  },
+  onCompanionModeEvent(listener) {
+    const channel = 'runtime:companion-mode-event';
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on(channel, wrapped);
+    ipcRenderer.send('companion:mode:subscribe');
     return () => ipcRenderer.removeListener(channel, wrapped);
   },
   listScheduledTasks() {

@@ -520,7 +520,7 @@ export interface VoiceHistoryMeta {
 }
 
 export type ChatAttachmentKind = "image" | "file";
-export type ChatAttachmentSource = "user-upload" | "tool-generated";
+export type ChatAttachmentSource = "user-upload" | "tool-generated" | "companion-capture";
 
 export interface ConsoleChatAttachmentInput {
   name?: string;
@@ -611,6 +611,58 @@ export type VoiceSessionEvent =
   | {
       type: "playback";
       playback: VoicePlaybackState;
+      timestamp: string;
+    }
+  | {
+      type: "error";
+      message: string;
+      timestamp: string;
+    };
+
+export type CompanionModeAvailability =
+  | "ready"
+  | "microphone-permission-required"
+  | "screen-permission-required";
+
+export interface CompanionModeFrontWindow {
+  appName: string;
+  title: string;
+  focused: boolean;
+}
+
+export interface CompanionModeState {
+  active: boolean;
+  availability: CompanionModeAvailability;
+  reason: string | null;
+  lastSampleAt: string | null;
+  lastProactiveAt: string | null;
+  frontWindow: CompanionModeFrontWindow | null;
+}
+
+export type CompanionModeEvent =
+  | {
+      type: "state";
+      state: CompanionModeState;
+      timestamp: string;
+    }
+  | {
+      type: "speech-capture";
+      stage: "start" | "recapture";
+      attached: boolean;
+      frontWindow: CompanionModeFrontWindow | null;
+      timestamp: string;
+    }
+  | {
+      type: "proactive-check";
+      outcome: "baseline" | "skip-prefilter" | "skip-title-unstable" | "skip-llm" | "speak";
+      diffRatio?: number;
+      frontWindow: CompanionModeFrontWindow | null;
+      timestamp: string;
+    }
+  | {
+      type: "proactive-fired";
+      text: string;
+      frontWindow: CompanionModeFrontWindow | null;
       timestamp: string;
     }
   | {

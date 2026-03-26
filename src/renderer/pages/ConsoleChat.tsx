@@ -25,8 +25,10 @@ export function ConsoleChatPage() {
     micButtonLabel,
     stoppingRequest,
     voiceSession,
+    companionModeState,
     pendingVoiceContext,
     toggleVoiceSession,
+    toggleCompanionMode,
     chatBottomRef,
     chatListRef,
     inputRef,
@@ -78,8 +80,10 @@ export function ConsoleChatPage() {
         micButtonLabel={micButtonLabel}
         stoppingRequest={stoppingRequest}
         voiceSession={voiceSession}
+        companionModeState={companionModeState}
         pendingVoiceContext={pendingVoiceContext}
         toggleVoiceSession={toggleVoiceSession}
+        toggleCompanionMode={toggleCompanionMode}
         micHint={micHint}
         taskMode={taskMode}
         setTaskMode={setTaskMode}

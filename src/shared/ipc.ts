@@ -15,6 +15,8 @@ import type {
   ScheduledTaskRun,
   UserProfile,
   VoiceInputContext,
+  CompanionModeEvent,
+  CompanionModeState,
   VoiceSessionEvent,
   VoiceSessionState,
   VoiceTranscriptionResult,
@@ -142,6 +144,10 @@ export interface CompanionApi {
     reason?: "vad" | "manual" | "system";
   }): Promise<{ accepted: boolean }>;
   setVoiceSessionMode(mode: RealtimeVoiceMode): Promise<VoiceSessionState>;
+  getCompanionModeState(): Promise<CompanionModeState>;
+  startCompanionMode(): Promise<CompanionModeState>;
+  stopCompanionMode(): Promise<CompanionModeState>;
+  onCompanionModeEvent(listener: (event: CompanionModeEvent) => void): () => void;
   listConsoleHistory(input?: {
     cursor?: string;
     limit?: number;

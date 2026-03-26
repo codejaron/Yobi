@@ -1,6 +1,11 @@
 import { useLayoutEffect, useRef } from "react";
 import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
-import type { CommandApprovalDecision, VoiceInputContext, VoiceSessionState } from "@shared/types";
+import type {
+  CommandApprovalDecision,
+  CompanionModeState,
+  VoiceInputContext,
+  VoiceSessionState
+} from "@shared/types";
 import { FileText, Loader2, Mic, Paperclip, Square, X } from "lucide-react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -49,8 +54,10 @@ interface ConsoleChatPaneProps {
   micButtonLabel: string;
   stoppingRequest: boolean;
   voiceSession: VoiceSessionState | null;
+  companionModeState: CompanionModeState | null;
   pendingVoiceContext: VoiceInputContext | null;
   toggleVoiceSession: () => Promise<void>;
+  toggleCompanionMode: () => Promise<void>;
   micHint: string;
   taskMode: boolean;
   setTaskMode: (value: boolean) => void;
@@ -161,8 +168,10 @@ export function ConsoleChatPane({
   micButtonLabel,
   stoppingRequest,
   voiceSession,
+  companionModeState,
   pendingVoiceContext,
   toggleVoiceSession,
+  toggleCompanionMode,
   micHint,
   taskMode,
   setTaskMode,
@@ -174,6 +183,11 @@ export function ConsoleChatPane({
   const recognitionLabels = formatRecognitionMeta(
     voiceSession?.userTranscriptMetadata ?? pendingVoiceContext?.metadata ?? null
   );
+  const companionLabel = companionModeState?.active
+    ? "陪伴 开启"
+    : companionModeState?.availability === "ready"
+      ? "陪伴 关闭"
+      : "陪伴 受限";
 
   useLayoutEffect(() => {
     const node = inputRef.current;
@@ -196,6 +210,17 @@ export function ConsoleChatPane({
             <Badge className="status-badge status-badge--neutral">
               语音 {voiceSession?.phase ?? "idle"}
             </Badge>
+            <Badge
+              className={
+                companionModeState?.active
+                  ? "status-badge status-badge--info"
+                  : companionModeState?.availability === "ready"
+                    ? "status-badge status-badge--neutral"
+                    : "status-badge status-badge--warn"
+              }
+            >
+              {companionLabel}
+            </Badge>
             {recognitionLabels.map((label) => (
               <Badge key={label} className="status-badge status-badge--info">
                 {label}
@@ -213,6 +238,15 @@ export function ConsoleChatPane({
               title="少追问，优先推进任务"
             />
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => void toggleCompanionMode()}
+            title={companionModeState?.reason ?? "切换陪伴模式"}
+          >
+            {companionModeState?.active ? "关闭陪伴模式" : "启动陪伴模式"}
+          </Button>
           <Button
             variant="outline"
             size="sm"

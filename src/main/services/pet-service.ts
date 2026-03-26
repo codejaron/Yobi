@@ -4,6 +4,7 @@ import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { app } from "electron";
 import type {
   AppConfig,
+  ChatAttachment,
   EmotionalState,
   KernelStateDocument,
   VoiceInputContext,
@@ -42,6 +43,7 @@ interface PetServiceInput {
   primaryThreadId: string;
   chatReplyTimeoutMs: number;
   withTimeout: <T>(promise: Promise<T>, timeoutMs: number, label: string) => Promise<T>;
+  captureCompanionSpeechContext?: () => Promise<ChatAttachment[]>;
   onStatusChange?: () => void | Promise<void>;
 }
 
@@ -51,8 +53,10 @@ export class PetService {
   private lastPublishedEmotionalState: EmotionalState | null = null;
   private lastPublishedAtMs = 0;
   private lastVoicePhase: VoiceSessionPhase = "idle";
+  private captureCompanionSpeechContext: (() => Promise<ChatAttachment[]>) | null = null;
 
   constructor(private readonly input: PetServiceInput) {
+    this.captureCompanionSpeechContext = input.captureCompanionSpeechContext ?? null;
     this.input.stateStore.subscribe((state) => {
       this.handleKernelStateSnapshot(state);
     }, { emitCurrent: true });
@@ -70,6 +74,10 @@ export class PetService {
     this.input.globalPtt.stop();
     this.petPttRecording = false;
     this.input.realtimeVoice.stop();
+  }
+
+  setCompanionCaptureContextProvider(provider: (() => Promise<ChatAttachment[]>) | null): void {
+    this.captureCompanionSpeechContext = provider;
   }
 
   async importPetModelDirectory(sourceDir: string): Promise<{ modelDir: string }> {
@@ -121,7 +129,11 @@ export class PetService {
     };
   }
 
-  async chatFromPet(text: string, voiceContext?: VoiceInputContext): Promise<{ replyText: string }> {
+  async chatFromPet(
+    text: string,
+    voiceContext?: VoiceInputContext,
+    attachments: ChatAttachment[] = []
+  ): Promise<{ replyText: string }> {
     const normalized = text.trim();
     if (!normalized) {
       return { replyText: "" };
@@ -136,6 +148,7 @@ export class PetService {
       const reply = await this.input.withTimeout(
         this.input.channelRouter.handleConsole({
           text: normalized,
+          attachments,
           resourceId: this.input.primaryResourceId,
           threadId: this.input.primaryThreadId,
           voiceContext
@@ -226,6 +239,7 @@ export class PetService {
       };
     }
 
+    const companionAttachments = await this.captureCompanionSpeechContext?.().catch(() => []) ?? [];
     const replied = await this.chatFromPet(
       text,
       transcribed.metadata
@@ -233,7 +247,8 @@ export class PetService {
             provider: this.input.getConfig().voice.asrProvider,
             metadata: transcribed.metadata
           }
-        : undefined
+        : undefined,
+      companionAttachments
     );
     return {
       sent: true,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppConfig,
+  ChatAttachment,
   RealtimeVoiceMode,
   VoiceSessionEvent,
   VoiceSessionState,
@@ -11,6 +12,7 @@ import type { AppLogger } from "./logger";
 import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ConversationEngine } from "@main/core/conversation";
+import type { CompanionSpeechCaptureSession } from "./companion-mode";
 import { SentenceChunkBuffer } from "./realtime-voice-chunker";
 import { shouldAutoStartVoiceSession } from "./realtime-voice-lifecycle";
 import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
@@ -42,6 +44,8 @@ interface RealtimeVoiceServiceInput {
   }) => Promise<void>;
   onAssistantMessage?: () => Promise<void>;
   onStatusChange?: () => void | Promise<void>;
+  captureCompanionSpeechStartContext?: () => Promise<CompanionSpeechCaptureSession | null>;
+  captureCompanionSpeechRecapture?: (session: CompanionSpeechCaptureSession | null) => Promise<void>;
   createVad?: (input: {
     config: VoiceActivityDetectorConfig;
     logger: AppLogger;
@@ -92,6 +96,10 @@ export class RealtimeVoiceService {
         assistantText: string;
       }) => Promise<void> | void)
     | null = null;
+  private captureCompanionSpeechStartContext:
+    (() => Promise<CompanionSpeechCaptureSession | null>) | null = null;
+  private captureCompanionSpeechRecapture:
+    ((session: CompanionSpeechCaptureSession | null) => Promise<void>) | null = null;
   private state: VoiceSessionState;
   private pttHeld = false;
   private vad: VoiceActivityDetector | null = null;
@@ -101,6 +109,7 @@ export class RealtimeVoiceService {
   private speechStartedAtMs = 0;
   private preRollBuffers: Buffer[] = [];
   private speechBuffers: Buffer[] = [];
+  private activeSpeechCaptureSession: CompanionSpeechCaptureSession | null = null;
   private activeAsrSession: StreamingAsrSession | null = null;
   private activeTtsSession: StreamingTtsSession | null = null;
   private replyAbortController: AbortController | null = null;
@@ -117,6 +126,8 @@ export class RealtimeVoiceService {
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
     this.host = new VoiceHostWindowController(input.logger);
+    this.captureCompanionSpeechStartContext = input.captureCompanionSpeechStartContext ?? null;
+    this.captureCompanionSpeechRecapture = input.captureCompanionSpeechRecapture ?? null;
     this.state = createEmptyVoiceState(this.input.getConfig().realtimeVoice.mode);
     this.host.onMessage((message) => {
       void this.handleHostMessage(message).catch((error) => {
@@ -157,6 +168,14 @@ export class RealtimeVoiceService {
     }) => Promise<void> | void
   ): void {
     this.assistantReplyHook = hook;
+  }
+
+  setCompanionCaptureHooks(input: {
+    captureCompanionSpeechStartContext?: (() => Promise<CompanionSpeechCaptureSession | null>) | null;
+    captureCompanionSpeechRecapture?: ((session: CompanionSpeechCaptureSession | null) => Promise<void>) | null;
+  }): void {
+    this.captureCompanionSpeechStartContext = input.captureCompanionSpeechStartContext ?? null;
+    this.captureCompanionSpeechRecapture = input.captureCompanionSpeechRecapture ?? null;
   }
 
   isActive(): boolean {
@@ -431,6 +450,7 @@ export class RealtimeVoiceService {
     this.speechStartedAtMs = 0;
     this.preRollBuffers = [];
     this.speechBuffers = [];
+    this.activeSpeechCaptureSession = null;
     this.vad?.reset();
     if (this.activeAsrSession) {
       void this.activeAsrSession.abort().catch(() => undefined);
@@ -484,6 +504,7 @@ export class RealtimeVoiceService {
     this.speechActive = true;
     this.speechStartedAtMs = Date.now();
     this.speechBuffers = [];
+    this.activeSpeechCaptureSession = await this.captureCompanionSpeechStartContext?.() ?? null;
     this.input.logger.info("realtime-voice", "speech:start", {
       sessionId: this.state.sessionId ?? "unknown"
     });
@@ -547,6 +568,7 @@ export class RealtimeVoiceService {
     try {
       const recognized = await asrSession.flush();
       const text = recognized.text.trim();
+      const speechAttachments = this.activeSpeechCaptureSession?.attachments ?? [];
       if (!text) {
         this.state = {
           ...this.state,
@@ -581,10 +603,11 @@ export class RealtimeVoiceService {
         timestamp: nowIso()
       });
       this.emitState();
-      await this.handleUserTurn(text, recognized.metadata);
+      await this.handleUserTurn(text, recognized.metadata, speechAttachments);
     } catch (error) {
       this.fail(error instanceof Error ? error.message : "语音识别失败");
     } finally {
+      this.activeSpeechCaptureSession = null;
       this.preRollBuffers = [];
       this.speechBuffers = [];
       this.vad?.reset();
@@ -722,6 +745,7 @@ export class RealtimeVoiceService {
 
       this.speechBuffers.push(Buffer.from(chunk));
       await this.activeAsrSession.pushPcm(chunk);
+      await this.captureCompanionSpeechRecapture?.(this.activeSpeechCaptureSession ?? null);
       return;
     }
 
@@ -741,6 +765,7 @@ export class RealtimeVoiceService {
     if (this.speechActive && this.activeAsrSession) {
       this.speechBuffers.push(Buffer.from(chunk));
       await this.activeAsrSession.pushPcm(chunk);
+      await this.captureCompanionSpeechRecapture?.(this.activeSpeechCaptureSession ?? null);
     }
 
     const config = this.input.getConfig().realtimeVoice;
@@ -756,7 +781,8 @@ export class RealtimeVoiceService {
 
   private async handleUserTurn(
     text: string,
-    metadata: VoiceSessionState["userTranscriptMetadata"] = null
+    metadata: VoiceSessionState["userTranscriptMetadata"] = null,
+    attachments: ChatAttachment[] = []
   ): Promise<void> {
     const sessionId = this.state.sessionId;
     const target = this.state.target;
@@ -772,6 +798,11 @@ export class RealtimeVoiceService {
       text,
       metadata: {
         channel: "console",
+        ...(attachments.length > 0
+          ? {
+              attachments
+            }
+          : {}),
         voice: {
           source: "voice",
           sessionId,
@@ -833,6 +864,7 @@ export class RealtimeVoiceService {
       try {
         const finalText = await this.input.conversation.reply({
           text,
+          attachments,
           channel: "console",
           resourceId: target.resourceId,
           threadId: target.threadId,

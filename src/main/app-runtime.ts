@@ -18,6 +18,8 @@ import {
   type VoiceSessionState,
   type RealtimeVoiceMode,
   type VoiceInputContext,
+  type CompanionModeEvent,
+  type CompanionModeState,
   type VoiceSessionTarget,
   type VoiceTranscriptionResult
 } from "@shared/types";
@@ -36,7 +38,9 @@ import { isConversationAbortError } from "@main/core/conversation-abort";
 import { supportsChatAttachment } from "@main/core/provider-utils";
 import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-tags";
 import { ChatMediaStore } from "@main/services/chat-media";
+import { CompanionModeService } from "@main/services/companion-mode";
 import { ExaSearchService } from "@main/services/exa-search";
+import { captureFrontWindowFrame } from "@main/services/front-window-capture";
 import { ScheduledTaskService } from "@main/services/scheduled-tasks";
 import { ScheduledTaskStore } from "@main/storage/scheduled-task-store";
 import { createBuiltinTools } from "@main/tools/builtin";
@@ -97,6 +101,7 @@ export class CompanionRuntime {
   private readonly realtimeVoice: RuntimeRegistry["realtimeVoice"];
   private readonly pet: RuntimeRegistry["pet"];
   private readonly petService: RuntimeRegistry["petService"];
+  private readonly systemPermissionsService: RuntimeRegistry["systemPermissionsService"];
   private readonly activityCoordinator: RuntimeRegistry["activityCoordinator"];
   private readonly channelCoordinator: RuntimeRegistry["channelCoordinator"];
   private readonly lifecycleCoordinator: RuntimeRegistry["lifecycleCoordinator"];
@@ -106,8 +111,10 @@ export class CompanionRuntime {
   private readonly scheduledTaskStore: ScheduledTaskStore;
   private readonly scheduledTaskService: ScheduledTaskService;
   private readonly chatMediaStore: ChatMediaStore;
+  private readonly companionMode: CompanionModeService;
   private chatMediaCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private cognitionTickListeners = new Set<(entry: ActivationLogEntry) => void>();
+  private companionModeListeners = new Set<(event: CompanionModeEvent) => void>();
 
   constructor(registry: RuntimeRegistry) {
     this.paths = registry.paths;
@@ -131,6 +138,7 @@ export class CompanionRuntime {
     this.realtimeVoice = registry.realtimeVoice;
     this.pet = registry.pet;
     this.petService = registry.petService;
+    this.systemPermissionsService = registry.systemPermissionsService;
     this.activityCoordinator = registry.activityCoordinator;
     this.channelCoordinator = registry.channelCoordinator;
     this.lifecycleCoordinator = registry.lifecycleCoordinator;
@@ -154,6 +162,58 @@ export class CompanionRuntime {
     this.channelCoordinator.setPostReplyHook((input) => this.ingestDialogue(input));
     this.realtimeVoice.setAssistantReplyHook((input) => this.ingestDialogue(input));
     this.chatMediaStore = new ChatMediaStore(this.paths);
+    this.companionMode = new CompanionModeService({
+      logger: this.logger,
+      getConfig: () => this.getConfig(),
+      getSystemPermissions: () => {
+        this.systemPermissionsService.refreshSystemPermissions();
+        return this.systemPermissionsService.getSnapshot();
+      },
+      getVoiceSessionState: () => this.realtimeVoice.getState(),
+      startVoiceSession: (input) => this.realtimeVoice.startSession(input),
+      stopVoiceSession: () => this.realtimeVoice.stopSession(),
+      dispatchAutomationMessage: async (input) =>
+        this.dispatchAssistantAutomationMessage({
+          message: input.text,
+          attachments: input.attachments,
+          metadata: {
+            proactive: true,
+            source: "yobi"
+          },
+          pushTargets: this.getConfig().proactive.pushTargets,
+          recordProactive: true
+        }),
+      readActivitySnapshot: () => this.activityCoordinator.getSnapshot(),
+      getRecentHistory: async () =>
+        this.memory.listHistory({
+          resourceId: PRIMARY_RESOURCE_ID,
+          threadId: PRIMARY_THREAD_ID,
+          limit: 8,
+          offset: 0
+        }),
+      captureFrontWindow: async () =>
+        captureFrontWindowFrame({
+          chatMediaStore: this.chatMediaStore,
+          source: "companion-capture"
+        }),
+      modelFactory: registry.modelFactory,
+      onStatusChange: () => {
+        void this.emitStatus();
+      }
+    });
+    this.companionMode.onEvent((event) => {
+      for (const listener of this.companionModeListeners) {
+        listener(event);
+      }
+    });
+    this.realtimeVoice.setCompanionCaptureHooks({
+      captureCompanionSpeechStartContext: () => this.companionMode.captureSpeechStartContext(),
+      captureCompanionSpeechRecapture: (session) => this.companionMode.maybeCaptureSpeechRecapture(session)
+    });
+    this.petService.setCompanionCaptureContextProvider(async () => {
+      const session = await this.companionMode.captureSpeechStartContext();
+      return session?.attachments ?? [];
+    });
     this.scheduledTaskStore = new ScheduledTaskStore(this.paths);
     this.scheduledTaskService = new ScheduledTaskService({
       store: this.scheduledTaskStore,
@@ -230,6 +290,7 @@ export class CompanionRuntime {
       clearInterval(this.chatMediaCleanupTimer);
       this.chatMediaCleanupTimer = null;
     }
+    await this.companionMode.stop().catch(() => undefined);
     await this.scheduledTaskService.stop();
     await this.kernel.stop();
     await this.cognitionEngine.stop();
@@ -257,6 +318,18 @@ export class CompanionRuntime {
 
   onVoiceSessionEvent(listener: (event: VoiceSessionEvent) => void): () => void {
     return this.realtimeVoice.onEvent(listener);
+  }
+
+  onCompanionModeEvent(listener: (event: CompanionModeEvent) => void): () => void {
+    this.companionModeListeners.add(listener);
+    listener({
+      type: "state",
+      state: this.companionMode.getState(),
+      timestamp: new Date().toISOString()
+    });
+    return () => {
+      this.companionModeListeners.delete(listener);
+    };
   }
 
   getConfig(): AppConfig {
@@ -711,6 +784,18 @@ export class CompanionRuntime {
     return this.realtimeVoice.setMode(mode);
   }
 
+  getCompanionModeState(): CompanionModeState {
+    return this.companionMode.getState();
+  }
+
+  async startCompanionMode(): Promise<CompanionModeState> {
+    return this.companionMode.start();
+  }
+
+  async stopCompanionMode(): Promise<CompanionModeState> {
+    return this.companionMode.stop();
+  }
+
   private registerBuiltinTools(): void {
     const exaSearchService = new ExaSearchService(() => this.getConfig());
 
@@ -1155,6 +1240,7 @@ export class CompanionRuntime {
 
   private async dispatchAssistantAutomationMessage(input: {
     message: string;
+    attachments?: ChatAttachment[];
     metadata: {
       proactive?: boolean;
       source: "yobi";
@@ -1190,7 +1276,14 @@ export class CompanionRuntime {
       resourceId: PRIMARY_RESOURCE_ID,
       channel: "console",
       text: normalizedMessage,
-      metadata: input.metadata
+      metadata: {
+        ...input.metadata,
+        ...(input.attachments && input.attachments.length > 0
+          ? {
+              attachments: input.attachments
+            }
+          : {})
+      }
     });
     await this.kernel.onAssistantMessage();
 

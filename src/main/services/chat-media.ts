@@ -415,6 +415,7 @@ export class ChatMediaStore {
     data: Buffer;
     prefix: string;
     filename?: string;
+    source?: ChatAttachment["source"];
   }): Promise<ChatAttachment> {
     const createdAt = new Date().toISOString();
     const id = randomUUID();
@@ -435,7 +436,7 @@ export class ChatMediaStore {
       mimeType: input.mediaType,
       size: input.data.length,
       path: targetPath,
-      source: "tool-generated",
+      source: input.source ?? "tool-generated",
       createdAt
     };
   }

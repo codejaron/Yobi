@@ -10,6 +10,7 @@ import type { CompanionRuntime } from "./app-runtime";
 const STATUS_CHANNEL = "runtime:status";
 const CONSOLE_RUN_EVENT_CHANNEL = "runtime:console-run-event";
 const VOICE_SESSION_EVENT_CHANNEL = "runtime:voice-session-event";
+const COMPANION_MODE_EVENT_CHANNEL = "runtime:companion-mode-event";
 const COGNITION_TICK_CHANNEL = "cognition:tick-completed";
 const SENSEVOICE_MODEL_PROGRESS_CHANNEL = "runtime:sensevoice-model-progress";
 
@@ -21,6 +22,7 @@ interface IpcSubscription {
 const statusSubscriptions = new Map<number, IpcSubscription>();
 const consoleRunSubscriptions = new Map<number, IpcSubscription>();
 const voiceSessionSubscriptions = new Map<number, IpcSubscription>();
+const companionModeSubscriptions = new Map<number, IpcSubscription>();
 const cognitionTickSubscriptions = new Map<number, IpcSubscription>();
 
 function clearSubscription(target: WebContents, subscriptions: Map<number, IpcSubscription>): void {
@@ -271,6 +273,9 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
   ipcMain.handle("voice:session:set-mode", (_, payload: { mode?: "ptt" | "free" }) =>
     runtime.setVoiceSessionMode(payload?.mode === "free" ? "free" : "ptt")
   );
+  ipcMain.handle("companion:mode:get", () => runtime.getCompanionModeState());
+  ipcMain.handle("companion:mode:start", () => runtime.startCompanionMode());
+  ipcMain.handle("companion:mode:stop", () => runtime.stopCompanionMode());
   ipcMain.handle(
     "console:chat:history",
     (
@@ -336,6 +341,10 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
 
   ipcMain.on("voice:session:subscribe", (event) => {
     subscribeToVoiceSession(runtime, event.sender);
+  });
+
+  ipcMain.on("companion:mode:subscribe", (event) => {
+    subscribeToCompanionMode(runtime, event.sender);
   });
 
   ipcMain.on("cognition:tick:subscribe", (event) => {
@@ -413,6 +422,29 @@ function subscribeToVoiceSession(runtime: CompanionRuntime, target: WebContents)
   };
 
   voiceSessionSubscriptions.set(target.id, {
+    unsubscribe,
+    onDestroyed
+  });
+  target.on("destroyed", onDestroyed);
+}
+
+function subscribeToCompanionMode(runtime: CompanionRuntime, target: WebContents): void {
+  clearSubscription(target, companionModeSubscriptions);
+
+  const unsubscribe = runtime.onCompanionModeEvent((event) => {
+    if (target.isDestroyed()) {
+      clearSubscription(target, companionModeSubscriptions);
+      return;
+    }
+
+    target.send(COMPANION_MODE_EVENT_CHANNEL, event);
+  });
+
+  const onDestroyed = () => {
+    clearSubscription(target, companionModeSubscriptions);
+  };
+
+  companionModeSubscriptions.set(target.id, {
     unsubscribe,
     onDestroyed
   });

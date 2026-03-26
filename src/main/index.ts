@@ -134,6 +134,23 @@ async function toggleFreeConversationFromMenu(sourceWindow: BrowserWindow): Prom
   }
 }
 
+async function toggleCompanionModeFromMenu(sourceWindow: BrowserWindow): Promise<void> {
+  try {
+    const current = runtime.getCompanionModeState();
+    if (current.active) {
+      await runtime.stopCompanionMode();
+      return;
+    }
+
+    await runtime.startCompanionMode();
+  } catch (error) {
+    logger.warn("index", "toggle-companion-mode-from-menu-failed", undefined, error);
+    if (!sourceWindow.isDestroyed()) {
+      sourceWindow.focus();
+    }
+  }
+}
+
 function registerShellMenuIpc(): void {
   ipcMain.on(
     "pet:menu:show",
@@ -146,6 +163,7 @@ function registerShellMenuIpc(): void {
       const x = Number.isFinite(payload?.x) ? Math.round(payload?.x ?? 0) : undefined;
       const y = Number.isFinite(payload?.y) ? Math.round(payload?.y ?? 0) : undefined;
       const current = runtime.getConfig();
+      const companionModeActive = runtime.getCompanionModeState().active;
       const menu = Menu.buildFromTemplate(
         buildPetContextMenuTemplate(current, {
           openConsole: () => {
@@ -168,10 +186,13 @@ function registerShellMenuIpc(): void {
               }
             });
           },
+          toggleCompanionMode: () => {
+            void toggleCompanionModeFromMenu(sourceWindow);
+          },
           toggleFreeConversation: () => {
             void toggleFreeConversationFromMenu(sourceWindow);
           }
-        })
+        }, companionModeActive)
       );
 
       menu.popup({

@@ -4,13 +4,15 @@ import type { AppConfig } from "@shared/types";
 interface PetContextMenuActions {
   openConsole: () => void;
   disablePet: () => void;
+  toggleCompanionMode: () => void;
   toggleFreeConversation: () => void;
   toggleSpeechReply: () => void;
 }
 
 export function buildPetContextMenuTemplate(
   config: AppConfig,
-  actions: PetContextMenuActions
+  actions: PetContextMenuActions,
+  companionModeActive = false
 ): MenuItemConstructorOptions[] {
   const freeConversationEnabled = config.realtimeVoice.enabled && config.realtimeVoice.mode === "free";
 
@@ -27,6 +29,15 @@ export function buildPetContextMenuTemplate(
       type: "checkbox",
       checked: config.realtimeVoice.speechReplyEnabled,
       click: actions.toggleSpeechReply
+    },
+    {
+      type: "separator"
+    },
+    {
+      label: "陪伴模式",
+      type: "checkbox",
+      checked: companionModeActive,
+      click: actions.toggleCompanionMode
     },
     {
       type: "separator"
