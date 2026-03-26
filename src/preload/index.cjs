@@ -116,6 +116,9 @@ const api = {
     ipcRenderer.on(channel, wrapped);
     return () => ipcRenderer.removeListener(channel, wrapped);
   },
+  loadChatImagePreview(input) {
+    return ipcRenderer.invoke('chat-media:preview', input ?? {});
+  },
   sendConsoleChat(input) {
     return ipcRenderer.invoke('console:chat:send', input ?? {});
   },

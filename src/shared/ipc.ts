@@ -126,6 +126,7 @@ export interface CompanionApi {
   }>;
   onStatus(listener: (status: AppStatus) => void): () => void;
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
+  loadChatImagePreview(input: { path: string; mimeType?: string | null }): Promise<string | null>;
 
   sendConsoleChat(input: ConsoleChatRequestInput): Promise<{ requestId: string }>;
   sendConsoleChatWithVoice(input: ConsoleChatRequestInput): Promise<{ requestId: string }>;

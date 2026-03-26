@@ -100,3 +100,43 @@ test("ChatMediaStore: cleanupExpired removes files older than retention window",
     await cleanup(paths);
   }
 });
+
+test("ChatMediaStore: reads stored image previews as data URLs", async () => {
+  const paths = await createTempPaths("yobi-chat-media-preview-");
+  try {
+    const store = new ChatMediaStore(paths);
+    const attachment = await store.storeToolMedia({
+      mediaType: "image/png",
+      data: Buffer.from(makePngBase64(), "base64"),
+      prefix: "browser",
+      filename: "browser-screenshot.png"
+    });
+
+    const previewUrl = await (store as any).readImagePreviewDataUrl({
+      path: attachment.path,
+      mimeType: attachment.mimeType
+    });
+
+    assert.equal(previewUrl, `data:image/png;base64,${makePngBase64()}`);
+  } finally {
+    await cleanup(paths);
+  }
+});
+
+test("ChatMediaStore: does not read image previews outside the chat media directory", async () => {
+  const paths = await createTempPaths("yobi-chat-media-preview-guard-");
+  try {
+    const store = new ChatMediaStore(paths);
+    const outsiderPath = path.join(paths.baseDir, "outside.png");
+    await fs.writeFile(outsiderPath, Buffer.from(makePngBase64(), "base64"));
+
+    const previewUrl = await (store as any).readImagePreviewDataUrl({
+      path: outsiderPath,
+      mimeType: "image/png"
+    });
+
+    assert.equal(previewUrl, null);
+  } finally {
+    await cleanup(paths);
+  }
+});

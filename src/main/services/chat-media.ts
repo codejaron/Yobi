@@ -124,6 +124,11 @@ function sanitizeFilename(value: string | undefined, fallbackBase: string, exten
   return `${safeName}${safeExt}`;
 }
 
+function isPathInsideRoot(targetPath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, targetPath);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 function detectImageSignature(buffer: Buffer): { mimeType: string; extension: string } | null {
   for (const entry of IMAGE_SIGNATURES) {
     if (entry.matches(buffer)) {
@@ -439,6 +444,34 @@ export class ChatMediaStore {
       source: input.source ?? "tool-generated",
       createdAt
     };
+  }
+
+  async readImagePreviewDataUrl(input: {
+    path: string;
+    mimeType?: string | null;
+  }): Promise<string | null> {
+    const mimeType = String(input.mimeType ?? "").trim().toLowerCase();
+    if (!mimeType.startsWith("image/")) {
+      return null;
+    }
+
+    const targetPath = path.resolve(input.path);
+    const chatMediaRoot = path.resolve(this.paths.chatMediaDir);
+    if (!isPathInsideRoot(targetPath, chatMediaRoot)) {
+      return null;
+    }
+
+    try {
+      const buffer = await fs.readFile(targetPath);
+      const detected = detectImageSignature(buffer);
+      if (!detected) {
+        return null;
+      }
+
+      return `data:${detected.mimeType};base64,${buffer.toString("base64")}`;
+    } catch {
+      return null;
+    }
   }
 
   async cleanupExpired(retentionDays = CHAT_MEDIA_RETENTION_DAYS, now = new Date()): Promise<number> {

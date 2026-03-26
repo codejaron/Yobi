@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type {
   CommandApprovalDecision,
@@ -90,20 +90,70 @@ function formatAttachmentSize(size: number): string {
   return `${size} B`;
 }
 
-function toFilePreviewUrl(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const prefix = normalized.startsWith("/") ? "" : "/";
-  return `file://${prefix}${encodeURI(normalized)}`;
+const attachmentPreviewCache = new Map<string, string | null>();
+
+function buildAttachmentPreviewCacheKey(attachment: ConsoleAttachmentView): string {
+  return `${attachment.path ?? ""}::${attachment.mimeType}`;
 }
 
-function renderAttachmentPreview(attachment: ConsoleAttachmentView, removable = false, onRemove?: () => void) {
-  const previewUrl =
-    attachment.kind === "image"
-      ? (attachment.previewUrl ?? (attachment.path ? toFilePreviewUrl(attachment.path) : undefined))
-      : undefined;
+function AttachmentPreviewCard(input: {
+  attachment: ConsoleAttachmentView;
+  removable?: boolean;
+  onRemove?: () => void;
+}) {
+  const { attachment, removable = false, onRemove } = input;
+  const [previewUrl, setPreviewUrl] = useState<string | undefined>(attachment.previewUrl);
+
+  useEffect(() => {
+    if (attachment.kind !== "image") {
+      setPreviewUrl(undefined);
+      return;
+    }
+
+    if (attachment.previewUrl) {
+      setPreviewUrl(attachment.previewUrl);
+      return;
+    }
+
+    if (!attachment.path) {
+      setPreviewUrl(undefined);
+      return;
+    }
+
+    const cacheKey = buildAttachmentPreviewCacheKey(attachment);
+    if (attachmentPreviewCache.has(cacheKey)) {
+      const cached = attachmentPreviewCache.get(cacheKey);
+      setPreviewUrl(cached ?? undefined);
+      return;
+    }
+
+    let cancelled = false;
+    setPreviewUrl(undefined);
+    void window.companion
+      .loadChatImagePreview({
+        path: attachment.path,
+        mimeType: attachment.mimeType
+      })
+      .then((nextPreviewUrl) => {
+        attachmentPreviewCache.set(cacheKey, nextPreviewUrl);
+        if (!cancelled) {
+          setPreviewUrl(nextPreviewUrl ?? undefined);
+        }
+      })
+      .catch(() => {
+        attachmentPreviewCache.set(cacheKey, null);
+        if (!cancelled) {
+          setPreviewUrl(undefined);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.kind, attachment.mimeType, attachment.path, attachment.previewUrl]);
 
   return (
-    <div key={attachment.id} className="surface-panel flex items-start gap-3 rounded-xl border px-3 py-3">
+    <div className="surface-panel flex items-start gap-3 rounded-xl border px-3 py-3">
       {previewUrl ? (
         <img
           src={previewUrl}
@@ -323,7 +373,9 @@ export function ConsoleChatPane({
                   <div className="w-fit rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
                     {item.attachments && item.attachments.length > 0 ? (
                       <div className="mb-3 grid gap-2">
-                        {item.attachments.map((attachment) => renderAttachmentPreview(attachment))}
+                        {item.attachments.map((attachment) => (
+                          <AttachmentPreviewCard key={attachment.id} attachment={attachment} />
+                        ))}
                       </div>
                     ) : null}
                     {item.text ? (
@@ -402,9 +454,14 @@ export function ConsoleChatPane({
             />
             {composerAttachments.length > 0 ? (
               <div className="grid gap-2">
-                {composerAttachments.map((attachment) =>
-                  renderAttachmentPreview(attachment, true, () => onRemoveAttachment(attachment.id))
-                )}
+                {composerAttachments.map((attachment) => (
+                  <AttachmentPreviewCard
+                    key={attachment.id}
+                    attachment={attachment}
+                    removable
+                    onRemove={() => onRemoveAttachment(attachment.id)}
+                  />
+                ))}
               </div>
             ) : null}
             <div className="flex items-end gap-2">

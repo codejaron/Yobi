@@ -97,6 +97,20 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       patch: input.patch as any
     })
   );
+  ipcMain.handle(
+    "chat-media:preview",
+    (
+      _,
+      payload: {
+        path?: string;
+        mimeType?: string | null;
+      }
+    ) =>
+      runtime.loadChatImagePreview({
+        path: payload?.path ?? "",
+        mimeType: payload?.mimeType ?? null
+      })
+  );
   ipcMain.handle("mind:profile:patch", (_, input: { patch: Record<string, unknown> }) =>
     runtime.patchProfile({
       patch: input.patch as any

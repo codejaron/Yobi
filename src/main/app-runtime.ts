@@ -644,6 +644,13 @@ export class CompanionRuntime {
     return this.dataCoordinator.getConsoleChatHistory(input);
   }
 
+  async loadChatImagePreview(input: {
+    path: string;
+    mimeType?: string | null;
+  }): Promise<string | null> {
+    return this.chatMediaStore.readImagePreviewDataUrl(input);
+  }
+
   async startConsoleChat(input: string | {
     text?: string;
     voiceContext?: VoiceInputContext;
