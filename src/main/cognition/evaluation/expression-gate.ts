@@ -177,7 +177,7 @@ export async function evaluateAndExpress(input: ExpressionEvaluationInput): Prom
   const bubbleSummaryContext = buildBubbleSummaryContext(input.bubble, input.graph);
   const summaryPrompt = [
     "以下是一次联想气泡的可读上下文，请用一句中文概括这次联想的核心主题。",
-    "要求：不要提 node_id、UUID、激活值、路径、图谱、节点这些词，直接总结 Yobi 此刻在想什么。",
+    "要求：不要提 node_id、UUID、激活值、路径、图谱、节点这些词，直接总结你此刻在想什么。",
     bubbleSummaryContext
   ].join("\n\n");
   const summaryTextResult = await generateText({
