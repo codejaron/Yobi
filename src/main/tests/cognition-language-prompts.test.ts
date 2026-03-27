@@ -59,11 +59,51 @@ test("background worker daily episode system prompt preserves the dialogue langu
   try {
     const workerModule = require(path.resolve(process.cwd(), "src/main/workers/background-task-worker.cjs")) as {
       buildDailyEpisodeSystemPrompt: () => string;
+      buildDailyEpisodePrompt: (input: {
+        date: string;
+        fallbackSummary: string;
+        userMessageCount: number;
+        dayItems: Array<{ role: string; text: string }>;
+      }) => string;
+      buildDailyReflectionSystemPrompt: () => string;
+      buildDailyReflectionPrompt: (input: {
+        episodes: Array<{ date: string; summary: string; significance: number }>;
+      }) => string;
     };
     const system = workerModule.buildDailyEpisodeSystemPrompt();
+    const dailyEpisodePrompt = workerModule.buildDailyEpisodePrompt({
+      date: "2026-03-26",
+      fallbackSummary: "当日共对话 3 条，用户消息 2 条。",
+      userMessageCount: 2,
+      dayItems: [
+        { role: "user", text: "今天有点累" },
+        { role: "assistant", text: "先休息一下" }
+      ]
+    });
+    const reflectionSystem = workerModule.buildDailyReflectionSystemPrompt();
+    const reflectionPrompt = workerModule.buildDailyReflectionPrompt({
+      episodes: [
+        { date: "2026-03-24", summary: "第一天", significance: 0.4 },
+        { date: "2026-03-25", summary: "第二天", significance: 0.7 }
+      ]
+    });
 
     assert.match(system, /same language as the input dialogue/i);
     assert.match(system, /Do not translate/i);
+    assert.match(system, /short mood labels/i);
+    assert.match(system, /Do not mention, infer, or invent calendar dates/i);
+    assert.equal(dailyEpisodePrompt.includes('"date"'), false);
+    assert.equal(dailyEpisodePrompt.includes("2026-03-26"), false);
+
+    assert.match(reflectionSystem, /All four scores are required/i);
+    assert.match(reflectionSystem, /specificity/i);
+    assert.match(reflectionSystem, /evidence/i);
+    assert.match(reflectionSystem, /novelty/i);
+    assert.match(reflectionSystem, /usefulness/i);
+    assert.match(reflectionSystem, /Do not mention, infer, or invent calendar dates/i);
+    assert.equal(reflectionPrompt.includes('"date"'), false);
+    assert.equal(reflectionPrompt.includes("2026-03-24"), false);
+    assert.equal(reflectionPrompt.includes("2026-03-25"), false);
   } finally {
     runtimeProcess.parentPort = originalParentPort;
   }

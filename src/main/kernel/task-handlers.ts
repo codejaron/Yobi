@@ -81,7 +81,7 @@ export class DailyEpisodeTaskHandler implements KernelQueueTaskHandler {
     const last = dayItems[dayItems.length - 1];
     const userMessages = dayItems.filter((item) => item.role === "user");
     const fallbackSummary = [
-      `${dayKey} 共对话 ${dayItems.length} 条，用户消息 ${userMessages.length} 条。`,
+      `当日共对话 ${dayItems.length} 条，用户消息 ${userMessages.length} 条。`,
       first ? `开场：${shorten(first.text, 40)}` : "",
       last ? `收尾：${shorten(last.text, 40)}` : ""
     ]

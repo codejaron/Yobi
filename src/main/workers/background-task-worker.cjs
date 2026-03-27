@@ -37,9 +37,15 @@ function unwrapMessage(message) {
 function buildDailyEpisodeSystemPrompt() {
   return [
     'You summarize one full day of conversation into a short episode record.',
-    'Return a JSON object with summary, unresolved, significance, user_mood, and yobi_mood.',
+    'Return exactly one JSON object with these keys: summary, unresolved, significance, user_mood, yobi_mood.',
+    'summary must be a short plain-text day summary no longer than 240 characters.',
+    'unresolved must be an array of at most 5 plain-text strings, each no longer than 120 characters.',
+    'significance must be a number between 0 and 1.',
+    'user_mood and yobi_mood must be short mood labels, not sentences, and each must stay within 30 characters.',
     'Output text fields must use the same language as the input dialogue. Do not translate.',
-    'Do not include markdown fences or explanations.'
+    'Do not mention, infer, or invent calendar dates in any output field. Dates are handled by the system.',
+    'If user mood is unclear, use "unknown". If yobi mood is unclear, use "neutral".',
+    'Return JSON only. Do not include markdown fences or explanations.'
   ].join('\n');
 }
 
@@ -55,10 +61,36 @@ function buildProfileSemanticSystemPrompt() {
 function buildDailyReflectionSystemPrompt() {
   return [
     'You are Yobi\'s reflection module.',
-    'Return one actionable tuning suggestion with supporting evidence and scores.',
+    'Return exactly one actionable tuning suggestion with supporting evidence and scores.',
+    'Return exactly one JSON object with this shape: {"summary": string, "evidence": string[], "scores": {"specificity": number, "evidence": number, "novelty": number, "usefulness": number}}.',
+    'All four scores are required and each score must be a number between 0 and 1.',
+    'summary must be no longer than 200 characters.',
+    'evidence must be an array of at most 5 strings, each no longer than 160 characters.',
     'Output summary and evidence in the same language as the recent episodes. Do not translate.',
+    'Do not mention, infer, or invent calendar dates in summary or evidence. Dates are handled by the system.',
+    'If evidence is weak, lower the scores instead of omitting any field.',
     'Return JSON only.'
   ].join('\n');
+}
+
+function buildDailyEpisodePrompt(message) {
+  return JSON.stringify({
+    fallback_summary: message.fallbackSummary,
+    user_message_count: message.userMessageCount,
+    message_window: Array.isArray(message.dayItems) ? message.dayItems.slice(-120) : []
+  }, null, 2);
+}
+
+function buildDailyReflectionPrompt(message) {
+  return JSON.stringify({
+    recent_episodes: Array.isArray(message.episodes)
+      ? message.episodes.map((episode, index) => ({
+          order: index + 1,
+          summary: episode.summary,
+          significance: episode.significance
+        }))
+      : []
+  }, null, 2);
 }
 
 function isPlainRecord(value) {
@@ -174,12 +206,7 @@ async function createModelForRoute(config, routeKey) {
 async function runDailyEpisode(message) {
   const model = await createModelForRoute(message.config, 'reflection');
   const system = buildDailyEpisodeSystemPrompt();
-  const prompt = JSON.stringify({
-    date: message.date,
-    fallback_summary: message.fallbackSummary,
-    user_message_count: message.userMessageCount,
-    message_window: Array.isArray(message.dayItems) ? message.dayItems.slice(-120) : []
-  }, null, 2);
+  const prompt = buildDailyEpisodePrompt(message);
   const result = await generateStructuredJson({
     model,
     providerOptions: resolveProviderOptions(message.config, 'reflection'),
@@ -219,7 +246,7 @@ async function runProfileSemantic(message) {
 async function runDailyReflection(message) {
   const model = await createModelForRoute(message.config, 'reflection');
   const system = buildDailyReflectionSystemPrompt();
-  const prompt = JSON.stringify({ recent_episodes: message.episodes }, null, 2);
+  const prompt = buildDailyReflectionPrompt(message);
   const result = await generateStructuredJson({
     model,
     providerOptions: resolveProviderOptions(message.config, 'reflection'),
@@ -234,8 +261,10 @@ async function runDailyReflection(message) {
 
 module.exports = {
   buildDailyEpisodeSystemPrompt,
+  buildDailyEpisodePrompt,
   buildProfileSemanticSystemPrompt,
-  buildDailyReflectionSystemPrompt
+  buildDailyReflectionSystemPrompt,
+  buildDailyReflectionPrompt
 };
 
 if (process.parentPort) {

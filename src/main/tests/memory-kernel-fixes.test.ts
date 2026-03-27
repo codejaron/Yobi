@@ -550,7 +550,7 @@ test("DailyEpisodeTaskHandler: uses payload dayKey and stores emotional context"
       ts: new Date(2026, 2, 10, 9, 0, 0).toISOString()
     });
 
-    const workerCalls: Array<{ date: string; texts: string[] }> = [];
+    const workerCalls: Array<{ date: string; texts: string[]; fallbackSummary: string }> = [];
     const handler = new DailyEpisodeTaskHandler({
       paths,
       memory,
@@ -559,8 +559,13 @@ test("DailyEpisodeTaskHandler: uses payload dayKey and stores emotional context"
         runDailyEpisode: async (input: {
           date: string;
           dayItems: Array<{ role: string; text: string }>;
+          fallbackSummary: string;
         }) => {
-          workerCalls.push({ date: input.date, texts: input.dayItems.map((item) => item.text) });
+          workerCalls.push({
+            date: input.date,
+            texts: input.dayItems.map((item) => item.text),
+            fallbackSummary: input.fallbackSummary
+          });
           return {
             summary: "昨天总结",
             unresolved: ["还有后续"],
@@ -590,6 +595,7 @@ test("DailyEpisodeTaskHandler: uses payload dayKey and stores emotional context"
     const episodes = await memory.getEpisodesStore().getByDate("2026-03-09");
     assert.equal(workerCalls[0]?.date, "2026-03-09");
     assert.deepEqual(workerCalls[0]?.texts, ["昨天白天的内容", "昨天的回复"]);
+    assert.equal(workerCalls[0]?.fallbackSummary.includes("2026-03-09"), false);
     assert.equal(episodes.length, 1);
     assert.equal(episodes[0]?.summary, "昨天总结");
     assert.equal(episodes[0]?.emotional_context.user_mood, "tired");
