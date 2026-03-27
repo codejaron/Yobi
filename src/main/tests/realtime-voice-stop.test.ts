@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ChatAttachment, VoiceSessionEvent } from "@shared/types";
 import type { VoiceSessionState } from "@shared/types";
 import { RealtimeVoiceService } from "../services/realtime-voice.js";
+import type { CompanionSpeechCaptureSession } from "../services/companion-mode.js";
 import { createVoiceSessionState, reduceVoiceSessionState } from "../services/realtime-voice-state.js";
 import type { VoiceActivityDetector } from "../services/realtime-voice-vad.js";
 import type { VoiceHostCommand } from "../services/voice-host-window.js";
@@ -359,6 +360,84 @@ test("realtime voice: free mode speech start opens ASR and pushes the triggering
 
   assert.equal(service.speechActive, true);
   assert.deepEqual(pushes, [3200]);
+});
+
+test("realtime voice: slow companion capture at speech start does not drop following speech frames", async () => {
+  const pushes: number[] = [];
+  const captureStarted = createDeferred<void>();
+  const companionCaptureDeferred = createDeferred<CompanionSpeechCaptureSession | null>();
+  let vadCallCount = 0;
+  const service = createService({
+    createVad: async () =>
+      createFakeVad(async () => {
+        vadCallCount += 1;
+        return {
+          probability: 0.82,
+          speechStarted: vadCallCount === 1,
+          speechEnded: false,
+          speaking: true
+        };
+      }),
+    voiceRouter: {
+      createStreamingAsrSession: () =>
+        ({
+          pushPcm: async (chunk: Buffer) => {
+            pushes.push(chunk[0] ?? 0);
+          },
+          flush: async () => ({
+            text: "",
+            metadata: null
+          }),
+          abort: async () => undefined
+        }) satisfies StreamingAsrSession
+    }
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+  service.setCompanionCaptureHooks({
+    captureCompanionSpeechStartContext: async () => {
+      captureStarted.resolve();
+      return companionCaptureDeferred.promise;
+    },
+    captureCompanionSpeechRecapture: async () => undefined
+  });
+
+  const firstChunk = Buffer.alloc(3200, 1);
+  const secondChunk = Buffer.alloc(3200, 2);
+
+  const firstFrame = service.handlePcmFrame(firstChunk, 16_000);
+  await captureStarted.promise;
+  const secondFrame = service.handlePcmFrame(secondChunk, 16_000);
+  await secondFrame;
+
+  assert.deepEqual(pushes, [1, 2]);
+
+  companionCaptureDeferred.resolve({
+    attachments: [],
+    startedAtMs: Date.now(),
+    lastBitmap: Buffer.alloc(4),
+    frontWindow: {
+      appName: "Safari",
+      title: "Example",
+      focused: true
+    },
+    recaptureUsed: false,
+    pendingTitleChange: null,
+    lastTitleTriggerAtMs: 0,
+    nextCheckAtMs: Date.now()
+  });
+
+  await firstFrame;
 });
 
 test("realtime voice: free mode speech end flushes after pushing the ending chunk", async () => {

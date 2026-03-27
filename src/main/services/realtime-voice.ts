@@ -110,6 +110,8 @@ export class RealtimeVoiceService {
   private preRollBuffers: Buffer[] = [];
   private speechBuffers: Buffer[] = [];
   private activeSpeechCaptureSession: CompanionSpeechCaptureSession | null = null;
+  private activeSpeechCapturePromise: Promise<CompanionSpeechCaptureSession | null> | null = null;
+  private speechCaptureGeneration = 0;
   private activeAsrSession: StreamingAsrSession | null = null;
   private activeTtsSession: StreamingTtsSession | null = null;
   private replyAbortController: AbortController | null = null;
@@ -469,7 +471,9 @@ export class RealtimeVoiceService {
     this.speechStartedAtMs = 0;
     this.preRollBuffers = [];
     this.speechBuffers = [];
+    this.speechCaptureGeneration += 1;
     this.activeSpeechCaptureSession = null;
+    this.activeSpeechCapturePromise = null;
     this.vad?.reset();
     if (this.activeAsrSession) {
       void this.activeAsrSession.abort().catch(() => undefined);
@@ -523,7 +527,7 @@ export class RealtimeVoiceService {
     this.speechActive = true;
     this.speechStartedAtMs = Date.now();
     this.speechBuffers = [];
-    this.activeSpeechCaptureSession = await this.captureCompanionSpeechStartContext?.() ?? null;
+    this.startSpeechCaptureContext();
     this.input.logger.info("realtime-voice", "speech:start", {
       sessionId: this.state.sessionId ?? "unknown"
     });
@@ -587,7 +591,8 @@ export class RealtimeVoiceService {
     try {
       const recognized = await asrSession.flush();
       const text = recognized.text.trim();
-      const speechAttachments = this.activeSpeechCaptureSession?.attachments ?? [];
+      const speechCaptureSession = await this.awaitSpeechCaptureSession();
+      const speechAttachments = speechCaptureSession?.attachments ?? [];
       if (!text) {
         this.state = {
           ...this.state,
@@ -632,9 +637,52 @@ export class RealtimeVoiceService {
       this.fail(error instanceof Error ? error.message : "语音识别失败");
     } finally {
       this.activeSpeechCaptureSession = null;
+      this.activeSpeechCapturePromise = null;
       this.preRollBuffers = [];
       this.speechBuffers = [];
       this.vad?.reset();
+    }
+  }
+
+  private startSpeechCaptureContext(): void {
+    const generation = ++this.speechCaptureGeneration;
+    const capturePromise = (async () => {
+      try {
+        return await this.captureCompanionSpeechStartContext?.() ?? null;
+      } catch (error) {
+        this.input.logger.warn(
+          "realtime-voice",
+          "capture-speech-start-context-failed",
+          undefined,
+          error
+        );
+        return null;
+      }
+    })();
+
+    this.activeSpeechCapturePromise = capturePromise;
+    void capturePromise.then((session) => {
+      if (this.speechCaptureGeneration !== generation) {
+        return;
+      }
+
+      this.activeSpeechCaptureSession = session;
+    });
+  }
+
+  private async awaitSpeechCaptureSession(): Promise<CompanionSpeechCaptureSession | null> {
+    const pendingCapture = this.activeSpeechCapturePromise;
+    if (!pendingCapture) {
+      return this.activeSpeechCaptureSession;
+    }
+
+    try {
+      const session = await pendingCapture;
+      return session ?? this.activeSpeechCaptureSession;
+    } finally {
+      if (this.activeSpeechCapturePromise === pendingCapture) {
+        this.activeSpeechCapturePromise = null;
+      }
     }
   }
 

@@ -44,7 +44,8 @@ import {
 import { getConsoleComposerKeyAction } from "@shared/console-chat-composer";
 import {
   getRealtimeVoiceToggleButtonState,
-  shouldDisableConsoleMicButton
+  shouldDisableConsoleMicButton,
+  toggleCompanionModeWithVoiceSessionSync
 } from "@shared/console-chat-voice";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
@@ -756,11 +757,23 @@ export function useConsoleChatController(): ConsoleChatController {
       return;
     }
 
-    const next = companionModeState?.active
-      ? await window.companion.stopCompanionMode()
-      : await window.companion.startCompanionMode();
-    setCompanionModeState(next);
-  }, [companionModeState?.active, historyLoaded]);
+    const result = await toggleCompanionModeWithVoiceSessionSync({
+      companionModeActive: Boolean(companionModeState?.active),
+      voiceSessionActive: Boolean(voiceSession?.sessionId),
+      startCompanionMode: () => window.companion.startCompanionMode(),
+      stopCompanionMode: () => window.companion.stopCompanionMode(),
+      getVoiceSessionState: () => window.companion.getVoiceSessionState(),
+      onVoiceStartingChange: setRealtimeVoiceStarting
+    });
+    setCompanionModeState(result.companionState);
+    if (result.voiceState) {
+      applyVoiceSessionEvent({
+        type: "state",
+        state: result.voiceState,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }, [applyVoiceSessionEvent, companionModeState?.active, historyLoaded, voiceSession?.sessionId]);
 
   useEffect(() => {
     void loadLatestHistory();
