@@ -35,11 +35,33 @@ export type VoiceHostMessage =
 
 type Listener = (message: VoiceHostMessage) => void;
 
+export function cleanupClosedVoiceHostWindowState<TWindow>(input: {
+  window: TWindow | null;
+  pendingWindow: TWindow | null;
+  readyWindowId: number | null;
+  closedWindow: TWindow;
+  closedWindowId: number;
+}): {
+  window: TWindow | null;
+  pendingWindow: TWindow | null;
+  readyWindowId: number | null;
+} {
+  return {
+    window: input.window === input.closedWindow ? null : input.window,
+    pendingWindow:
+      input.pendingWindow === input.closedWindow ? null : input.pendingWindow,
+    readyWindowId:
+      input.readyWindowId === input.closedWindowId ? null : input.readyWindowId
+  };
+}
+
 export class VoiceHostWindowController {
   private window: BrowserWindow | null = null;
+  private pendingWindow: BrowserWindow | null = null;
   private listeners = new Set<Listener>();
   private readyPromise: Promise<void> | null = null;
   private resolveReady: (() => void) | null = null;
+  private readyWindowId: number | null = null;
   private readonly commandChannel = "voice-host:command";
   private readonly eventChannel = "voice-host:event";
   private eventListenerRegistered = false;
@@ -76,11 +98,14 @@ export class VoiceHostWindowController {
   }
 
   close(): void {
-    if (this.window && !this.window.isDestroyed()) {
-      this.window.close();
+    const targetWindow = this.window ?? this.pendingWindow;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.close();
     }
     this.window = null;
+    this.pendingWindow = null;
     this.resolveReady = null;
+    this.readyWindowId = null;
   }
 
   private async createWindow(): Promise<void> {
@@ -111,6 +136,8 @@ export class VoiceHostWindowController {
         backgroundThrottling: false
       }
     });
+    const windowId = window.webContents.id;
+    this.pendingWindow = window;
 
     window.webContents.on("did-finish-load", () => {
       this.logger.info("voice-host", "webcontents:did-finish-load");
@@ -144,7 +171,16 @@ export class VoiceHostWindowController {
 
     window.on("closed", () => {
       this.logger.info("voice-host", "create-window:closed");
-      this.window = null;
+      const next = cleanupClosedVoiceHostWindowState({
+        window: this.window,
+        pendingWindow: this.pendingWindow,
+        readyWindowId: this.readyWindowId,
+        closedWindow: window,
+        closedWindowId: windowId
+      });
+      this.window = next.window;
+      this.pendingWindow = next.pendingWindow;
+      this.readyWindowId = next.readyWindowId;
       this.resolveReady = null;
     });
 
@@ -164,9 +200,6 @@ export class VoiceHostWindowController {
       this.logger.warn("voice-host", "renderer:probe-failed", undefined, error);
     }
 
-    this.window = window;
-    this.logger.info("voice-host", "create-window:command-ready");
-
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         this.resolveReady = null;
@@ -179,11 +212,27 @@ export class VoiceHostWindowController {
         this.resolveReady = null;
         resolve();
       };
+
+      if (this.readyWindowId === windowId) {
+        this.resolveReady();
+      }
     });
+
+    this.window = window;
+    if (this.pendingWindow === window) {
+      this.pendingWindow = null;
+    }
+    this.logger.info("voice-host", "create-window:command-ready");
   }
 
   private readonly handleIpcEvent = (event: IpcMainEvent, payload: VoiceHostMessage): void => {
-    if (!this.window || this.window.isDestroyed() || event.sender.id !== this.window.webContents.id) {
+    const activeWindow = [this.window, this.pendingWindow].find(
+      (candidate) =>
+        candidate &&
+        !candidate.isDestroyed() &&
+        event.sender.id === candidate.webContents.id
+    );
+    if (!activeWindow) {
       return;
     }
 
@@ -191,6 +240,7 @@ export class VoiceHostWindowController {
       this.logger.info("voice-host", `message:${payload?.type ?? "unknown"}`);
     }
     if (payload?.type === "host-ready") {
+      this.readyWindowId = event.sender.id;
       this.resolveReady?.();
       this.resolveReady = null;
     }

@@ -54,6 +54,9 @@ interface ConsoleChatPaneProps {
   recording: boolean;
   transcribing: boolean;
   micButtonLabel: string;
+  realtimeVoiceButtonDisabled: boolean;
+  realtimeVoiceButtonLabel: string;
+  realtimeVoiceButtonLoading: boolean;
   stoppingRequest: boolean;
   voiceSession: VoiceSessionState | null;
   companionModeState: CompanionModeState | null;
@@ -220,6 +223,9 @@ export function ConsoleChatPane({
   recording,
   transcribing,
   micButtonLabel,
+  realtimeVoiceButtonDisabled,
+  realtimeVoiceButtonLabel,
+  realtimeVoiceButtonLoading,
   stoppingRequest,
   voiceSession,
   companionModeState,
@@ -306,8 +312,16 @@ export function ConsoleChatPane({
             size="sm"
             type="button"
             onClick={() => void toggleVoiceSession()}
+            disabled={realtimeVoiceButtonDisabled}
           >
-            {voiceSession?.sessionId ? "停止实时语音" : "启动实时语音"}
+            {realtimeVoiceButtonLoading ? (
+              <>
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                {realtimeVoiceButtonLabel}
+              </>
+            ) : (
+              realtimeVoiceButtonLabel
+            )}
           </Button>
           <Button
             variant="outline"

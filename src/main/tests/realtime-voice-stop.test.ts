@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ChatAttachment, VoiceSessionEvent } from "@shared/types";
+import type { VoiceSessionState } from "@shared/types";
 import { RealtimeVoiceService } from "../services/realtime-voice.js";
 import { createVoiceSessionState, reduceVoiceSessionState } from "../services/realtime-voice-state.js";
 import type { VoiceActivityDetector } from "../services/realtime-voice-vad.js";
@@ -252,8 +253,68 @@ test("realtime voice: startSession waits for async VAD warmup before starting mi
     }))
   );
 
-  await startPromise;
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(steps, ["create-vad", "start-capture"]);
+
+  await service.handleHostMessage({
+    type: "capture-started"
+  });
+  await service.handleHostMessage({
+    type: "pcm-frame",
+    pcm: Array.from(Buffer.alloc(3200)),
+    sampleRate: 16_000
+  });
+  await startPromise;
+});
+
+test("realtime voice: free mode startSession waits for the first pcm frame before entering listening", async () => {
+  const commands: VoiceHostCommand[] = [];
+  const service = createService({
+    createVad: async () =>
+      createFakeVad(async () => ({
+        probability: 0,
+        speechStarted: false,
+        speechEnded: false,
+        speaking: false
+      }))
+  });
+
+  service.host = {
+    send: async (command: VoiceHostCommand) => {
+      commands.push(command);
+    }
+  };
+
+  let resolved = false;
+  const startPromise = service.startSession({
+    mode: "free"
+  }).then((state: VoiceSessionState) => {
+    resolved = true;
+    return state;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(commands.map((command) => command.type), ["start-capture"]);
+  assert.equal(service.state.phase, "idle");
+  assert.equal(resolved, false);
+
+  await service.handleHostMessage({
+    type: "capture-started"
+  });
+  assert.equal(service.state.phase, "idle");
+  assert.equal(resolved, false);
+
+  await service.handleHostMessage({
+    type: "pcm-frame",
+    pcm: Array.from(Buffer.alloc(3200)),
+    sampleRate: 16_000
+  });
+  const started = await startPromise;
+
+  assert.equal(resolved, true);
+  assert.equal(started.phase, "listening");
+  assert.equal(service.state.phase, "listening");
 });
 
 test("realtime voice: free mode speech start opens ASR and pushes the triggering chunk", async () => {

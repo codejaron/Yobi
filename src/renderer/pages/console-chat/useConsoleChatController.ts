@@ -42,7 +42,10 @@ import {
   type ConsoleChatHistoryState
 } from "@shared/console-chat-history";
 import { getConsoleComposerKeyAction } from "@shared/console-chat-composer";
-import { shouldDisableConsoleMicButton } from "@shared/console-chat-voice";
+import {
+  getRealtimeVoiceToggleButtonState,
+  shouldDisableConsoleMicButton
+} from "@shared/console-chat-voice";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
 import {
@@ -85,6 +88,9 @@ export interface ConsoleChatController {
   inputDisabled: boolean;
   micButtonDisabled: boolean;
   micButtonLabel: string;
+  realtimeVoiceButtonDisabled: boolean;
+  realtimeVoiceButtonLabel: string;
+  realtimeVoiceButtonLoading: boolean;
   stoppingRequest: boolean;
   voiceSession: VoiceSessionState | null;
   companionModeState: CompanionModeState | null;
@@ -235,6 +241,7 @@ export function useConsoleChatController(): ConsoleChatController {
   const [approvalIndex, setApprovalIndex] = useState(0);
   const [stoppingRequestId, setStoppingRequestId] = useState<string | null>(null);
   const [voiceSession, setVoiceSession] = useState<VoiceSessionState | null>(null);
+  const [realtimeVoiceStarting, setRealtimeVoiceStarting] = useState(false);
   const [companionModeState, setCompanionModeState] = useState<CompanionModeState | null>(null);
   const [pendingVoiceContext, setPendingVoiceContext] = useState<VoiceInputContext | null>(null);
 
@@ -714,7 +721,7 @@ export function useConsoleChatController(): ConsoleChatController {
   }, [historyLoaded]);
 
   const toggleVoiceSession = useCallback(async () => {
-    if (!historyLoaded) {
+    if (!historyLoaded || realtimeVoiceStarting) {
       return;
     }
 
@@ -723,15 +730,20 @@ export function useConsoleChatController(): ConsoleChatController {
       return;
     }
 
-    const started = await window.companion.startVoiceSession({
-      mode: "free"
-    });
-    applyVoiceSessionEvent({
-      type: "state",
-      state: started,
-      timestamp: new Date().toISOString()
-    });
-  }, [applyVoiceSessionEvent, historyLoaded, voiceSession?.sessionId]);
+    setRealtimeVoiceStarting(true);
+    try {
+      const started = await window.companion.startVoiceSession({
+        mode: "free"
+      });
+      applyVoiceSessionEvent({
+        type: "state",
+        state: started,
+        timestamp: new Date().toISOString()
+      });
+    } finally {
+      setRealtimeVoiceStarting(false);
+    }
+  }, [applyVoiceSessionEvent, historyLoaded, realtimeVoiceStarting, voiceSession?.sessionId]);
 
   const interruptVoiceSession = useCallback(async () => {
     await window.companion.interruptVoiceSession({
@@ -1064,6 +1076,13 @@ export function useConsoleChatController(): ConsoleChatController {
     busy
   });
   const micButtonLabel = transcribing ? "识别中" : recording ? "结束" : "语音";
+  const realtimeVoiceButtonState = getRealtimeVoiceToggleButtonState({
+    sessionActive: Boolean(voiceSession?.sessionId),
+    starting: realtimeVoiceStarting
+  });
+  const realtimeVoiceButtonDisabled = !historyLoaded || realtimeVoiceButtonState.disabled;
+  const realtimeVoiceButtonLabel = realtimeVoiceButtonState.label;
+  const realtimeVoiceButtonLoading = realtimeVoiceButtonState.loading;
   const stoppingRequest = stoppingRequestId !== null && stoppingRequestId === activeRequestId;
 
   return {
@@ -1091,6 +1110,9 @@ export function useConsoleChatController(): ConsoleChatController {
     inputDisabled,
     micButtonDisabled,
     micButtonLabel,
+    realtimeVoiceButtonDisabled,
+    realtimeVoiceButtonLabel,
+    realtimeVoiceButtonLoading,
     stoppingRequest,
     voiceSession,
     companionModeState,

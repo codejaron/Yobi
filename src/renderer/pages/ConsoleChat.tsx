@@ -25,6 +25,9 @@ export function ConsoleChatPage() {
     inputDisabled,
     micButtonDisabled,
     micButtonLabel,
+    realtimeVoiceButtonDisabled,
+    realtimeVoiceButtonLabel,
+    realtimeVoiceButtonLoading,
     stoppingRequest,
     voiceSession,
     companionModeState,
@@ -82,6 +85,9 @@ export function ConsoleChatPage() {
         recording={recording}
         transcribing={transcribing}
         micButtonLabel={micButtonLabel}
+        realtimeVoiceButtonDisabled={realtimeVoiceButtonDisabled}
+        realtimeVoiceButtonLabel={realtimeVoiceButtonLabel}
+        realtimeVoiceButtonLoading={realtimeVoiceButtonLoading}
         stoppingRequest={stoppingRequest}
         voiceSession={voiceSession}
         companionModeState={companionModeState}

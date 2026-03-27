@@ -123,6 +123,12 @@ export class RealtimeVoiceService {
   private llmVisibleText = "";
   private playedAssistantText = "";
   private assistantCommitPersisted = false;
+  private pendingCaptureStart:
+    | {
+        promise: Promise<"started" | "error">;
+        resolve: (result: "started" | "error") => void;
+      }
+    | null = null;
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
     this.host = new VoiceHostWindowController(input.logger);
@@ -156,6 +162,7 @@ export class RealtimeVoiceService {
 
   stop(): void {
     void this.stopSession();
+    this.finishAwaitingCaptureStart("error");
     this.host.close();
     this.disposeVad();
   }
@@ -226,19 +233,30 @@ export class RealtimeVoiceService {
       mode,
       target
     });
-    this.applyState({
-      type: "session-started"
-    });
     this.resetSpeechTracking();
 
     if (mode === "free") {
       await this.ensureVadReady();
-      await this.host.send({
-        type: "start-capture",
-        aecEnabled: config.realtimeVoice.aecEnabled
-      });
+      const captureStart = this.beginAwaitingCaptureStart();
+      try {
+        await this.host.send({
+          type: "start-capture",
+          aecEnabled: config.realtimeVoice.aecEnabled
+        });
+      } catch (error) {
+        this.finishAwaitingCaptureStart("error");
+        throw error;
+      }
+
+      if ((await captureStart) !== "started") {
+        await this.notifyStatusChange();
+        return this.getState();
+      }
     }
 
+    this.applyState({
+      type: "session-started"
+    });
     await this.notifyStatusChange();
     return this.getState();
   }
@@ -251,6 +269,7 @@ export class RealtimeVoiceService {
     }
 
     await this.abortActiveResponse("system");
+    this.finishAwaitingCaptureStart("error");
     await this.host.send({
       type: "stop-capture"
     }).catch(() => undefined);
@@ -621,6 +640,7 @@ export class RealtimeVoiceService {
 
   private async handleHostMessage(message: VoiceHostMessage): Promise<void> {
     if (message.type === "pcm-frame") {
+      this.finishAwaitingCaptureStart("started");
       const chunk = Buffer.from(message.pcm);
       await this.handlePcmFrame(chunk, message.sampleRate);
       return;
@@ -635,6 +655,7 @@ export class RealtimeVoiceService {
     }
 
     if (message.type === "capture-error") {
+      this.finishAwaitingCaptureStart("error");
       this.input.logger.warn("realtime-voice", "capture:error", undefined, new Error(message.message));
       this.fail(message.message);
       return;
@@ -1106,6 +1127,32 @@ export class RealtimeVoiceService {
   private beginPlaybackGeneration(): number {
     this.playbackGeneration += 1;
     return this.playbackGeneration;
+  }
+
+  private beginAwaitingCaptureStart(): Promise<"started" | "error"> {
+    if (this.pendingCaptureStart) {
+      return this.pendingCaptureStart.promise;
+    }
+
+    let resolve!: (result: "started" | "error") => void;
+    const promise = new Promise<"started" | "error">((res) => {
+      resolve = res;
+    });
+    this.pendingCaptureStart = {
+      promise,
+      resolve
+    };
+    return promise;
+  }
+
+  private finishAwaitingCaptureStart(result: "started" | "error"): void {
+    const pending = this.pendingCaptureStart;
+    if (!pending) {
+      return;
+    }
+
+    this.pendingCaptureStart = null;
+    pending.resolve(result);
   }
 
   private isPlaybackGenerationActive(
