@@ -74,8 +74,8 @@ export const KERNEL_RUNTIME_DEFAULTS: KernelRuntimeConfig = {
     quietIntervalMs: 10 * 60_000
   },
   buffer: {
-    maxMessages: 200,
-    lowWatermark: 140
+    maxMessages: 120,
+    lowWatermark: 80
   },
   queue: {
     maxConcurrent: 1,
