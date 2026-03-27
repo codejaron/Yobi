@@ -8,7 +8,8 @@ test("getConsoleComposerKeyAction: Enter submits when no approval is pending", (
       key: "Enter",
       shiftKey: false,
       pendingApproval: false,
-      isComposing: false
+      isComposing: false,
+      slashMenuOpen: false
     }),
     "submit"
   );
@@ -20,7 +21,8 @@ test("getConsoleComposerKeyAction: Shift+Enter keeps newline behavior", () => {
       key: "Enter",
       shiftKey: true,
       pendingApproval: false,
-      isComposing: false
+      isComposing: false,
+      slashMenuOpen: false
     }),
     "none"
   );
@@ -32,7 +34,8 @@ test("getConsoleComposerKeyAction: composing text should not submit on Enter", (
       key: "Enter",
       shiftKey: false,
       pendingApproval: false,
-      isComposing: true
+      isComposing: true,
+      slashMenuOpen: false
     }),
     "none"
   );
@@ -44,7 +47,8 @@ test("getConsoleComposerKeyAction: approval shortcuts override normal composer b
       key: "ArrowUp",
       shiftKey: false,
       pendingApproval: true,
-      isComposing: false
+      isComposing: false,
+      slashMenuOpen: true
     }),
     "approval-up"
   );
@@ -54,7 +58,8 @@ test("getConsoleComposerKeyAction: approval shortcuts override normal composer b
       key: "ArrowDown",
       shiftKey: false,
       pendingApproval: true,
-      isComposing: false
+      isComposing: false,
+      slashMenuOpen: true
     }),
     "approval-down"
   );
@@ -64,8 +69,55 @@ test("getConsoleComposerKeyAction: approval shortcuts override normal composer b
       key: "Enter",
       shiftKey: true,
       pendingApproval: true,
-      isComposing: false
+      isComposing: false,
+      slashMenuOpen: true
     }),
     "approval-confirm"
+  );
+});
+
+test("getConsoleComposerKeyAction: slash menu shortcuts override submit behavior", () => {
+  assert.equal(
+    getConsoleComposerKeyAction({
+      key: "ArrowUp",
+      shiftKey: false,
+      pendingApproval: false,
+      isComposing: false,
+      slashMenuOpen: true
+    }),
+    "slash-up"
+  );
+
+  assert.equal(
+    getConsoleComposerKeyAction({
+      key: "ArrowDown",
+      shiftKey: false,
+      pendingApproval: false,
+      isComposing: false,
+      slashMenuOpen: true
+    }),
+    "slash-down"
+  );
+
+  assert.equal(
+    getConsoleComposerKeyAction({
+      key: "Enter",
+      shiftKey: false,
+      pendingApproval: false,
+      isComposing: false,
+      slashMenuOpen: true
+    }),
+    "slash-confirm"
+  );
+
+  assert.equal(
+    getConsoleComposerKeyAction({
+      key: "Escape",
+      shiftKey: false,
+      pendingApproval: false,
+      isComposing: false,
+      slashMenuOpen: true
+    }),
+    "slash-close"
   );
 });

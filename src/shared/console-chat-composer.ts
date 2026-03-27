@@ -3,13 +3,18 @@ export type ConsoleComposerKeyAction =
   | "submit"
   | "approval-up"
   | "approval-down"
-  | "approval-confirm";
+  | "approval-confirm"
+  | "slash-up"
+  | "slash-down"
+  | "slash-confirm"
+  | "slash-close";
 
 export function getConsoleComposerKeyAction(input: {
   key: string;
   shiftKey: boolean;
   pendingApproval: boolean;
   isComposing: boolean;
+  slashMenuOpen: boolean;
 }): ConsoleComposerKeyAction {
   if (input.pendingApproval) {
     if (input.key === "ArrowUp") {
@@ -28,6 +33,26 @@ export function getConsoleComposerKeyAction(input: {
   }
 
   if (input.isComposing) {
+    return "none";
+  }
+
+  if (input.slashMenuOpen) {
+    if (input.key === "ArrowUp") {
+      return "slash-up";
+    }
+
+    if (input.key === "ArrowDown") {
+      return "slash-down";
+    }
+
+    if (input.key === "Enter") {
+      return "slash-confirm";
+    }
+
+    if (input.key === "Escape") {
+      return "slash-close";
+    }
+
     return "none";
   }
 

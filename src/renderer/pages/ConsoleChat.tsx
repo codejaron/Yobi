@@ -1,7 +1,14 @@
+import type { AppConfig } from "@shared/types";
 import { ConsoleChatPane } from "@renderer/pages/console-chat/ConsoleChatPane";
 import { useConsoleChatController } from "@renderer/pages/console-chat/useConsoleChatController";
 
-export function ConsoleChatPage() {
+export function ConsoleChatPage({
+  config,
+  setConfig
+}: {
+  config: AppConfig;
+  setConfig: (next: AppConfig) => void;
+}) {
   const {
     messages,
     draft,
@@ -48,8 +55,17 @@ export function ConsoleChatPage() {
     handleComposerDrop,
     handleComposerDragOver,
     toggleMicRecording,
-    submitApproval
-  } = useConsoleChatController();
+    submitApproval,
+    slashMenuOpen,
+    slashItems,
+    slashSelectedIndex,
+    setSlashSelectedIndex,
+    executeSlashItem,
+    slashFeedback
+  } = useConsoleChatController({
+    config,
+    setConfig
+  });
 
   return (
     <div className="h-full min-h-0">
@@ -80,6 +96,12 @@ export function ConsoleChatPage() {
         onRemoveAttachment={removeComposerAttachment}
         onComposerDrop={handleComposerDrop}
         onComposerDragOver={handleComposerDragOver}
+        slashMenuOpen={slashMenuOpen}
+        slashItems={slashItems}
+        slashSelectedIndex={slashSelectedIndex}
+        setSlashSelectedIndex={setSlashSelectedIndex}
+        executeSlashItem={executeSlashItem}
+        slashFeedback={slashFeedback}
         toggleMicRecording={toggleMicRecording}
         micButtonDisabled={micButtonDisabled}
         recording={recording}

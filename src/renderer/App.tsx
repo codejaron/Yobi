@@ -400,7 +400,7 @@ export default function App() {
     if (activePage === "console") {
       return (
         <Suspense fallback={loading}>
-          <ConsoleChatPage />
+          <ConsoleChatPage config={config} setConfig={setConfig} />
         </Suspense>
       );
     }

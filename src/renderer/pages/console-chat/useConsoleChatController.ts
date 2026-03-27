@@ -1,16 +1,27 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type {
+  AppConfig,
   CompanionModeEvent,
   CompanionModeState,
   CommandApprovalDecision,
   ConsoleChatAttachmentInput,
   ConsoleRunEventV2,
   HistoryMessage,
+  SkillCatalogItem,
   VoiceInputContext,
   VoiceSessionEvent,
   VoiceSessionState
 } from "@shared/types";
+import {
+  buildConsoleSlashCommandItems,
+  filterConsoleSlashCommandItems,
+  getConsoleSlashQuery,
+  getNextConsoleSlashIndex,
+  isConsoleSlashDraft,
+  type ConsoleSlashCommandItem,
+  type ConsoleSlashFeedback
+} from "@shared/console-chat-slash";
 import {
   applyVoiceSessionEventToConsoleChatLiveVoiceState,
   createConsoleChatLiveVoiceState,
@@ -114,6 +125,12 @@ export interface ConsoleChatController {
   handleComposerDragOver: (event: DragEvent<HTMLFormElement>) => void;
   toggleMicRecording: () => void;
   submitApproval: (decision: CommandApprovalDecision) => Promise<void>;
+  slashMenuOpen: boolean;
+  slashItems: ConsoleSlashCommandItem[];
+  slashSelectedIndex: number;
+  setSlashSelectedIndex: (index: number) => void;
+  executeSlashItem: (itemId?: string) => Promise<void>;
+  slashFeedback: ConsoleSlashFeedback | null;
 }
 
 function createStreamingAssistantMessage(requestId: string): ConsoleMessage {
@@ -223,7 +240,10 @@ function createTransientVoiceMessage(message: ConsoleChatLiveVoiceMessage): Cons
   };
 }
 
-export function useConsoleChatController(): ConsoleChatController {
+export function useConsoleChatController(input: {
+  config: AppConfig;
+  setConfig: (next: AppConfig) => void;
+}): ConsoleChatController {
   const [historyState, setHistoryState] = useState<ConsoleChatHistoryState<ConsoleMessage>>(() =>
     resetConsoleChatHistoryState()
   );
@@ -245,6 +265,9 @@ export function useConsoleChatController(): ConsoleChatController {
   const [realtimeVoiceStarting, setRealtimeVoiceStarting] = useState(false);
   const [companionModeState, setCompanionModeState] = useState<CompanionModeState | null>(null);
   const [pendingVoiceContext, setPendingVoiceContext] = useState<VoiceInputContext | null>(null);
+  const [installedSkills, setInstalledSkills] = useState<SkillCatalogItem[]>([]);
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+  const [slashFeedback, setSlashFeedback] = useState<ConsoleSlashFeedback | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
@@ -260,11 +283,29 @@ export function useConsoleChatController(): ConsoleChatController {
       }
     | null
   >(null);
+  const slashFeedbackTimeoutRef = useRef<number | null>(null);
 
   const messages = historyState.items;
   const historyHasMore = historyState.hasMore;
   const historyNextCursor = historyState.nextCursor;
   const historyLoadError = historyState.loadError;
+  const slashQuery = useMemo(() => getConsoleSlashQuery(draft), [draft]);
+  const slashMenuOpen = historyLoaded && pendingApproval === null && isConsoleSlashDraft(draft);
+  const slashCommands = useMemo(
+    () =>
+      buildConsoleSlashCommandItems({
+        config: input.config,
+        skills: installedSkills
+      }),
+    [input.config, installedSkills]
+  );
+  const slashItems = useMemo(
+    () =>
+      slashMenuOpen
+        ? filterConsoleSlashCommandItems(slashCommands, slashQuery)
+        : [],
+    [slashCommands, slashMenuOpen, slashQuery]
+  );
 
   const pushAssistantError = useCallback((message: string) => {
     setHistoryState((current) => ({
@@ -296,6 +337,134 @@ export function useConsoleChatController(): ConsoleChatController {
       }));
     },
     []
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void window.companion
+      .listSkills()
+      .then((skills) => {
+        if (!cancelled) {
+          setInstalledSkills(skills);
+        }
+      })
+      .catch((error) => {
+        console.warn("[console-chat] listSkills failed:", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setSlashSelectedIndex(0);
+  }, [slashMenuOpen, slashQuery]);
+
+  useEffect(() => {
+    setSlashSelectedIndex((current) => {
+      if (slashItems.length === 0) {
+        return 0;
+      }
+
+      return current >= slashItems.length ? slashItems.length - 1 : current;
+    });
+  }, [slashItems.length]);
+
+  useEffect(() => {
+    return () => {
+      if (slashFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(slashFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const showSlashFeedback = useCallback((feedback: ConsoleSlashFeedback) => {
+    if (slashFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(slashFeedbackTimeoutRef.current);
+    }
+
+    setSlashFeedback(feedback);
+    slashFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setSlashFeedback(null);
+      slashFeedbackTimeoutRef.current = null;
+    }, 2600);
+  }, []);
+
+  const executeSlashItem = useCallback(
+    async (itemId?: string) => {
+      const selected =
+        itemId !== undefined
+          ? slashItems.find((item) => item.id === itemId)
+          : slashItems[slashSelectedIndex];
+
+      if (!selected) {
+        if (slashMenuOpen) {
+          setDraft("");
+          showSlashFeedback({
+            tone: "warn",
+            message: "没有匹配命令"
+          });
+        }
+        inputRef.current?.focus();
+        return;
+      }
+
+      setDraft("");
+      inputRef.current?.focus();
+
+      if (selected.action.type === "toggle-proactive") {
+        input.setConfig({
+          ...input.config,
+          proactive: {
+            ...input.config.proactive,
+            enabled: selected.action.nextEnabled
+          }
+        });
+        showSlashFeedback(selected.action.feedback);
+        return;
+      }
+
+      if (selected.action.type === "toggle-pet") {
+        input.setConfig({
+          ...input.config,
+          pet: {
+            ...input.config.pet,
+            enabled: selected.action.nextEnabled
+          }
+        });
+        showSlashFeedback(selected.action.feedback);
+        return;
+      }
+
+      try {
+        const updated = await window.companion.setSkillEnabled({
+          skillId: selected.action.skillId,
+          enabled: selected.action.nextEnabled
+        });
+        setInstalledSkills((current) => {
+          if (current.some((item) => item.id === updated.id)) {
+            return current.map((item) => (item.id === updated.id ? updated : item));
+          }
+
+          return [...current, updated];
+        });
+        showSlashFeedback(selected.action.feedback);
+      } catch (error) {
+        showSlashFeedback({
+          tone: "warn",
+          message: error instanceof Error ? error.message : "切换 skill 失败"
+        });
+      }
+    },
+    [
+      input,
+      slashItems,
+      slashMenuOpen,
+      slashSelectedIndex,
+      showSlashFeedback
+    ]
   );
 
   const handleChatEvent = useCallback(
@@ -939,6 +1108,11 @@ export function useConsoleChatController(): ConsoleChatController {
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
 
+      if (slashMenuOpen) {
+        await executeSlashItem();
+        return;
+      }
+
       const text = draft.trim();
       if (!historyLoaded || (!text && composerAttachments.length === 0) || activeRequestId) {
         return;
@@ -1013,9 +1187,11 @@ export function useConsoleChatController(): ConsoleChatController {
       activeRequestId,
       composerAttachments,
       draft,
+      executeSlashItem,
       historyLoaded,
       pendingVoiceContext,
       pushAssistantError,
+      slashMenuOpen,
       taskMode
     ]
   );
@@ -1045,7 +1221,8 @@ export function useConsoleChatController(): ConsoleChatController {
         key: event.key,
         shiftKey: event.shiftKey,
         pendingApproval: pendingApproval !== null,
-        isComposing: event.nativeEvent.isComposing
+        isComposing: event.nativeEvent.isComposing,
+        slashMenuOpen
       });
 
       if (action === "approval-up") {
@@ -1070,12 +1247,40 @@ export function useConsoleChatController(): ConsoleChatController {
         return;
       }
 
+      if (action === "slash-up") {
+        event.preventDefault();
+        setSlashSelectedIndex((current) =>
+          getNextConsoleSlashIndex(current, -1, slashItems.length)
+        );
+        return;
+      }
+
+      if (action === "slash-down") {
+        event.preventDefault();
+        setSlashSelectedIndex((current) =>
+          getNextConsoleSlashIndex(current, 1, slashItems.length)
+        );
+        return;
+      }
+
+      if (action === "slash-confirm") {
+        event.preventDefault();
+        void executeSlashItem();
+        return;
+      }
+
+      if (action === "slash-close") {
+        event.preventDefault();
+        setDraft("");
+        return;
+      }
+
       if (action === "submit") {
         event.preventDefault();
         event.currentTarget.form?.requestSubmit();
       }
     },
-    [approvalIndex, pendingApproval, submitApproval]
+    [approvalIndex, executeSlashItem, pendingApproval, slashItems.length, slashMenuOpen, submitApproval]
   );
 
   const busy = activeRequestId !== null;
@@ -1147,6 +1352,12 @@ export function useConsoleChatController(): ConsoleChatController {
     handleComposerDrop,
     handleComposerDragOver,
     toggleMicRecording,
-    submitApproval
+    submitApproval,
+    slashMenuOpen,
+    slashItems,
+    slashSelectedIndex,
+    setSlashSelectedIndex,
+    executeSlashItem,
+    slashFeedback
   };
 }

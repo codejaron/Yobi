@@ -6,7 +6,9 @@ import type {
   VoiceInputContext,
   VoiceSessionState
 } from "@shared/types";
+import type { ConsoleSlashCommandItem, ConsoleSlashFeedback } from "@shared/console-chat-slash";
 import { FileText, Loader2, Mic, Paperclip, Square, X } from "lucide-react";
+import { cn } from "@renderer/lib/utils";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Switch } from "@renderer/components/ui/switch";
@@ -49,6 +51,12 @@ interface ConsoleChatPaneProps {
   onRemoveAttachment: (attachmentId: string) => void;
   onComposerDrop: (event: DragEvent<HTMLFormElement>) => void;
   onComposerDragOver: (event: DragEvent<HTMLFormElement>) => void;
+  slashMenuOpen: boolean;
+  slashItems: ConsoleSlashCommandItem[];
+  slashSelectedIndex: number;
+  setSlashSelectedIndex: (index: number) => void;
+  executeSlashItem: (itemId?: string) => Promise<void>;
+  slashFeedback: ConsoleSlashFeedback | null;
   toggleMicRecording: () => void;
   micButtonDisabled: boolean;
   recording: boolean;
@@ -93,6 +101,10 @@ function formatAttachmentSize(size: number): string {
   }
 
   return `${size} B`;
+}
+
+function slashGroupLabel(group: ConsoleSlashCommandItem["group"]): string {
+  return group === "skills" ? "Skills" : "快捷开关";
 }
 
 const attachmentPreviewCache = new Map<string, string | null>();
@@ -218,6 +230,12 @@ export function ConsoleChatPane({
   onRemoveAttachment,
   onComposerDrop,
   onComposerDragOver,
+  slashMenuOpen,
+  slashItems,
+  slashSelectedIndex,
+  setSlashSelectedIndex,
+  executeSlashItem,
+  slashFeedback,
   toggleMicRecording,
   micButtonDisabled,
   recording,
@@ -458,6 +476,64 @@ export function ConsoleChatPane({
                 ))}
               </div>
             </div>
+          ) : slashMenuOpen ? (
+            <div className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_20px_48px_rgba(15,23,42,0.28)]">
+              <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Slash 命令</p>
+                  <p className="text-xs text-muted-foreground">↑↓ 切换 · Enter 执行 · Esc 关闭</p>
+                </div>
+                <Badge className="status-badge status-badge--neutral">/{draft.trimStart().slice(1).trim() || "..."}</Badge>
+              </div>
+              <div className="max-h-72 overflow-y-auto p-2">
+                {slashItems.length > 0 ? (
+                  slashItems.map((item, index) => {
+                    const previous = slashItems[index - 1];
+                    const showGroupTitle = index === 0 || previous?.group !== item.group;
+
+                    return (
+                      <div key={item.id} className="space-y-1">
+                        {showGroupTitle ? (
+                          <p className="px-2 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {slashGroupLabel(item.group)}
+                          </p>
+                        ) : null}
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setSlashSelectedIndex(index)}
+                          onClick={() => {
+                            void executeSlashItem(item.id);
+                          }}
+                          className={cn(
+                            "flex w-full items-start justify-between gap-3 rounded-xl border border-transparent bg-card px-3 py-2 text-left transition",
+                            slashSelectedIndex === index
+                              ? "border-border/80 bg-secondary text-foreground"
+                              : "hover:bg-secondary"
+                          )}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">{item.label}</p>
+                            <p className="truncate text-xs text-muted-foreground">{item.description}</p>
+                          </div>
+                          <Badge
+                            className={
+                              item.currentEnabled
+                                ? "status-badge status-badge--success"
+                                : "status-badge status-badge--neutral"
+                            }
+                          >
+                            {item.currentEnabled ? "已开启" : "已关闭"}
+                          </Badge>
+                        </button>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="px-3 py-6 text-sm text-muted-foreground">没有匹配命令</p>
+                )}
+              </div>
+            </div>
           ) : null}
 
           <form
@@ -571,6 +647,18 @@ export function ConsoleChatPane({
           </form>
           {micHint ? (
             <p className="mt-2 text-xs text-muted-foreground">{micHint}</p>
+          ) : null}
+          {slashFeedback ? (
+            <p
+              className={cn(
+                "mt-2 text-xs",
+                slashFeedback.tone === "warn"
+                  ? "text-[hsl(var(--status-warn-foreground))]"
+                  : "text-muted-foreground"
+              )}
+            >
+              {slashFeedback.message}
+            </p>
           ) : null}
         </div>
       </div>
