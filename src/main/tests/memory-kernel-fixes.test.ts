@@ -273,6 +273,181 @@ test("memory: allows empty assistant message when toolTrace is present and exclu
   }
 });
 
+test("listHistoryByCursor: returns the latest page with an opaque cursor token", async () => {
+  const paths = await createTempPaths("yobi-history-cursor-latest-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    for (let index = 1; index <= 75; index += 1) {
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "user",
+        text: `消息-${index}`,
+        metadata: { channel: "console" }
+      });
+    }
+
+    const page = await memory.listHistoryByCursor({
+      threadId: "main",
+      resourceId: "main",
+      limit: 50
+    });
+
+    assert.equal(page.items.length, 50);
+    assert.equal(page.items[0]?.text, "消息-26");
+    assert.equal(page.items.at(-1)?.text, "消息-75");
+    assert.equal(page.hasMore, true);
+    assert.equal(typeof page.nextCursor, "string");
+    assert.notEqual(page.nextCursor, page.items[0]?.id ?? null);
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("listHistoryByCursor: paginates across buffer and archive without overlap", async () => {
+  const paths = await createTempPaths("yobi-history-cursor-archive-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    for (let index = 1; index <= 230; index += 1) {
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "user",
+        text: `消息-${index}`,
+        metadata: { channel: "console" }
+      });
+    }
+
+    const collected: string[] = [];
+    const seenIds = new Set<string>();
+    let cursor: string | undefined;
+    let pageCount = 0;
+    while (true) {
+      const page = await memory.listHistoryByCursor({
+        threadId: "main",
+        resourceId: "main",
+        limit: 50,
+        beforeId: cursor
+      });
+      pageCount += 1;
+      for (const item of page.items) {
+        assert.equal(seenIds.has(item.id), false);
+        seenIds.add(item.id);
+        collected.push(item.text);
+      }
+      if (!page.hasMore) {
+        break;
+      }
+      cursor = page.nextCursor ?? undefined;
+      assert.ok(cursor);
+    }
+
+    assert.equal(pageCount, 5);
+    assert.equal(collected.length, 230);
+    assert.equal(collected[0], "消息-181");
+    assert.equal(collected[49], "消息-230");
+    assert.equal(collected[50], "消息-131");
+    assert.equal(collected[149], "消息-130");
+    assert.equal(collected[150], "消息-31");
+    assert.equal(collected.at(-1), "消息-30");
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("listHistoryByCursor: stale buffer cursor falls back safely after compaction", async () => {
+  const paths = await createTempPaths("yobi-history-cursor-fallback-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    for (let index = 1; index <= 170; index += 1) {
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "user",
+        text: `消息-${index}`,
+        metadata: { channel: "console" }
+      });
+    }
+
+    const firstPage = await memory.listHistoryByCursor({
+      threadId: "main",
+      resourceId: "main",
+      limit: 50
+    });
+    const staleCursor = firstPage.nextCursor;
+
+    for (let index = 171; index <= 262; index += 1) {
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "user",
+        text: `消息-${index}`,
+        metadata: { channel: "console" }
+      });
+    }
+
+    const secondPage = await memory.listHistoryByCursor({
+      threadId: "main",
+      resourceId: "main",
+      limit: 50,
+      beforeId: staleCursor ?? undefined
+    });
+
+    assert.equal(secondPage.items.length, 50);
+    assert.equal(secondPage.items[0]?.text, "消息-71");
+    assert.equal(secondPage.items.at(-1)?.text, "消息-120");
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
+test("listHistoryByCursor: invalid cursor does not throw and returns an empty page", async () => {
+  const paths = await createTempPaths("yobi-history-cursor-invalid-");
+  let memory: YobiMemory | null = null;
+  try {
+    const config = cloneConfig();
+    memory = new YobiMemory(paths, () => config);
+    await memory.init();
+
+    for (let index = 1; index <= 20; index += 1) {
+      await memory.rememberMessage({
+        threadId: "main",
+        resourceId: "main",
+        role: "user",
+        text: `消息-${index}`,
+        metadata: { channel: "console" }
+      });
+    }
+
+    const page = await memory.listHistoryByCursor({
+      threadId: "main",
+      resourceId: "main",
+      limit: 50,
+      beforeId: "not-a-real-cursor"
+    });
+
+    assert.deepEqual(page, {
+      items: [],
+      hasMore: false,
+      nextCursor: null
+    });
+  } finally {
+    await cleanupMemoryPaths(paths, memory);
+  }
+});
+
 test("memory: only replays the latest attachment-bearing user message as media", async () => {
   const paths = await createTempPaths("yobi-history-attachments-active-");
   let memory: YobiMemory | null = null;

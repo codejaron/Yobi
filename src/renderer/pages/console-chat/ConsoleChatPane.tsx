@@ -26,6 +26,8 @@ interface ConsoleChatPaneProps {
   busy: boolean;
   clearingHistory: boolean;
   historyLoaded: boolean;
+  historyLoadingMore: boolean;
+  historyLoadError: string | null;
   messages: ConsoleMessage[];
   chatListRef: RefObject<HTMLDivElement | null>;
   chatBottomRef: RefObject<HTMLDivElement | null>;
@@ -190,6 +192,8 @@ export function ConsoleChatPane({
   busy,
   clearingHistory,
   historyLoaded,
+  historyLoadingMore,
+  historyLoadError,
   messages,
   chatListRef,
   chatBottomRef,
@@ -357,50 +361,61 @@ export function ConsoleChatPane({
               暂无对话记录，发一条消息开始聊天吧。
             </p>
           ) : (
-            messages.map((item) => (
-              <div
-                key={item.id}
-                className={
-                  item.role === "user"
-                    ? "ml-auto flex max-w-[80%] flex-col items-end"
-                    : "mr-auto flex max-w-[88%] flex-col items-start"
-                }
-              >
-                {item.role === "assistant" && item.source !== "yobi" ? (
-                  <AssistantProcessView message={item} />
-                ) : null}
-                {item.role === "user" ? (
-                  <div className="w-fit rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
-                    {item.attachments && item.attachments.length > 0 ? (
-                      <div className="mb-3 grid gap-2">
-                        {item.attachments.map((attachment) => (
-                          <AttachmentPreviewCard key={attachment.id} attachment={attachment} />
-                        ))}
-                      </div>
-                    ) : null}
-                    {item.text ? (
-                      <p className="whitespace-pre-wrap leading-relaxed">{item.text}</p>
-                    ) : null}
-                  </div>
-                ) : item.role === "assistant" && item.source === "yobi" ? (
-                  <div
-                    className={`w-fit rounded-2xl border px-4 py-3 text-sm ${
-                      item.state === "error"
-                        ? "status-surface status-surface--danger"
-                        : "status-surface status-surface--neutral"
-                    }`}
-                  >
-                    {item.source === "yobi" ? (
-                      <div className="mb-2 flex items-center gap-2">
-                        <Badge className="status-badge status-badge--info">Yobi</Badge>
-                        <span className="text-[11px] text-muted-foreground">后台主动消息</span>
-                      </div>
-                    ) : null}
-                    {item.text.trim() ? <MarkdownContent variant="chat" markdown={item.text} /> : null}
-                  </div>
-                ) : null}
-              </div>
-            ))
+            <>
+              {historyLoadingMore ? (
+                <p className="px-3 py-1 text-center text-xs text-muted-foreground">
+                  正在加载更早消息...
+                </p>
+              ) : historyLoadError ? (
+                <p className="px-3 py-1 text-center text-xs text-muted-foreground">
+                  {historyLoadError}
+                </p>
+              ) : null}
+              {messages.map((item) => (
+                <div
+                  key={item.id}
+                  className={
+                    item.role === "user"
+                      ? "ml-auto flex max-w-[80%] flex-col items-end"
+                      : "mr-auto flex max-w-[88%] flex-col items-start"
+                  }
+                >
+                  {item.role === "assistant" && item.source !== "yobi" ? (
+                    <AssistantProcessView message={item} />
+                  ) : null}
+                  {item.role === "user" ? (
+                    <div className="w-fit rounded-2xl bg-primary px-4 py-3 text-sm text-primary-foreground">
+                      {item.attachments && item.attachments.length > 0 ? (
+                        <div className="mb-3 grid gap-2">
+                          {item.attachments.map((attachment) => (
+                            <AttachmentPreviewCard key={attachment.id} attachment={attachment} />
+                          ))}
+                        </div>
+                      ) : null}
+                      {item.text ? (
+                        <p className="whitespace-pre-wrap leading-relaxed">{item.text}</p>
+                      ) : null}
+                    </div>
+                  ) : item.role === "assistant" && item.source === "yobi" ? (
+                    <div
+                      className={`w-fit rounded-2xl border px-4 py-3 text-sm ${
+                        item.state === "error"
+                          ? "status-surface status-surface--danger"
+                          : "status-surface status-surface--neutral"
+                      }`}
+                    >
+                      {item.source === "yobi" ? (
+                        <div className="mb-2 flex items-center gap-2">
+                          <Badge className="status-badge status-badge--info">Yobi</Badge>
+                          <span className="text-[11px] text-muted-foreground">后台主动消息</span>
+                        </div>
+                      ) : null}
+                      {item.text.trim() ? <MarkdownContent variant="chat" markdown={item.text} /> : null}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </>
           )}
           <div ref={chatBottomRef} />
         </div>

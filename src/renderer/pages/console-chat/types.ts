@@ -39,7 +39,7 @@ export interface PendingApproval {
 export type ConsoleSkillsCatalogState = SkillsCatalogSummary;
 export type ConsoleActivatedSkill = SkillActivatedEventPayload;
 
-export const CONSOLE_HISTORY_INITIAL_LIMIT = 1_000;
+export const CONSOLE_HISTORY_PAGE_SIZE = 50;
 
 export const APPROVAL_OPTIONS: Array<{ decision: CommandApprovalDecision; label: string }> = [
   { decision: "allow-once", label: "同意一次" },

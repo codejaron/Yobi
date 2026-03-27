@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, RefObject, UIEvent } from "react";
 import type {
   CompanionModeEvent,
@@ -27,14 +27,27 @@ import {
   createAssistantTurnProcess,
   hasAssistantVisibleContent
 } from "@shared/tool-trace";
-import { getNextConsoleChatAutoFollowState } from "@shared/console-chat-scroll";
+import {
+  getNextConsoleChatAutoFollowState,
+  getPrependedConsoleChatScrollTop,
+  shouldAutoLoadOlderConsoleChatHistory,
+  shouldLoadOlderConsoleChatHistory
+} from "@shared/console-chat-scroll";
+import {
+  applyConsoleChatHistoryLoadError,
+  prependConsoleChatHistoryPage,
+  replaceConsoleChatHistoryPage,
+  resetConsoleChatHistoryState,
+  type ConsoleChatHistoryPage,
+  type ConsoleChatHistoryState
+} from "@shared/console-chat-history";
 import { getConsoleComposerKeyAction } from "@shared/console-chat-composer";
 import { shouldDisableConsoleMicButton } from "@shared/console-chat-voice";
 import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
 import {
   APPROVAL_OPTIONS,
-  CONSOLE_HISTORY_INITIAL_LIMIT,
+  CONSOLE_HISTORY_PAGE_SIZE,
   appendRecognizedText,
   historyRoleToMessageRole,
   toConsoleAttachmentView
@@ -63,6 +76,8 @@ export interface ConsoleChatController {
   approvalIndex: number;
   setApprovalIndex: (index: number) => void;
   historyLoaded: boolean;
+  historyLoadingMore: boolean;
+  historyLoadError: string | null;
   clearingHistory: boolean;
   busy: boolean;
   recording: boolean;
@@ -127,6 +142,20 @@ function createHistoryMessage(item: HistoryMessage): ConsoleMessage {
   };
 }
 
+function toConsoleChatHistoryPage(page: {
+  items: HistoryMessage[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}): ConsoleChatHistoryPage<ConsoleMessage> {
+  return {
+    items: page.items
+      .filter((item) => item.role === "user" || item.role === "assistant")
+      .map((item) => createHistoryMessage(item)),
+    hasMore: page.hasMore,
+    nextCursor: page.nextCursor
+  };
+}
+
 function createAssistantErrorMessage(message: string): ConsoleMessage {
   return {
     id: makeClientId("assistant"),
@@ -188,8 +217,11 @@ function createTransientVoiceMessage(message: ConsoleChatLiveVoiceMessage): Cons
 }
 
 export function useConsoleChatController(): ConsoleChatController {
-  const [messages, setMessages] = useState<ConsoleMessage[]>([]);
+  const [historyState, setHistoryState] = useState<ConsoleChatHistoryState<ConsoleMessage>>(() =>
+    resetConsoleChatHistoryState()
+  );
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [draft, setDraft] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ConsoleAttachmentView[]>([]);
@@ -212,30 +244,48 @@ export function useConsoleChatController(): ConsoleChatController {
   const autoFollowRef = useRef(true);
   const recorderRef = useRef<Pcm16Recorder | null>(null);
   const liveVoiceStateRef = useRef(createConsoleChatLiveVoiceState());
+  const pendingHistoryScrollRestoreRef = useRef<
+    | {
+        strategy: "preserve-anchor" | "stick-bottom";
+        previousScrollTop: number;
+        previousScrollHeight: number;
+      }
+    | null
+  >(null);
+
+  const messages = historyState.items;
+  const historyHasMore = historyState.hasMore;
+  const historyNextCursor = historyState.nextCursor;
+  const historyLoadError = historyState.loadError;
 
   const pushAssistantError = useCallback((message: string) => {
-    setMessages((current) => [...current, createAssistantErrorMessage(message)]);
+    setHistoryState((current) => ({
+      ...current,
+      items: [...current.items, createAssistantErrorMessage(message)]
+    }));
   }, []);
 
   const upsertAssistantMessage = useCallback(
     (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage) => {
-      setMessages((current) =>
-        upsertAssistantConsoleChatFeedMessage(
-          current,
+      setHistoryState((current) => ({
+        ...current,
+        items: upsertAssistantConsoleChatFeedMessage(
+          current.items,
           requestId,
           updater,
           createStreamingAssistantMessage
         )
-      );
+      }));
     },
     []
   );
 
   const updateAssistantMessageIfPresent = useCallback(
     (requestId: string, updater: (current: ConsoleMessage) => ConsoleMessage | null) => {
-      setMessages((current) =>
-        updateAssistantConsoleChatFeedMessageIfPresent(current, requestId, updater)
-      );
+      setHistoryState((current) => ({
+        ...current,
+        items: updateAssistantConsoleChatFeedMessageIfPresent(current.items, requestId, updater)
+      }));
     },
     []
   );
@@ -314,18 +364,21 @@ export function useConsoleChatController(): ConsoleChatController {
       }
 
       if (event.type === "external-assistant-message") {
-        setMessages((current) => [
+        setHistoryState((current) => ({
           ...current,
-          {
-            id: event.messageId,
-            requestId: event.requestId,
-            role: "assistant",
-            text: event.text,
-            state: "done",
-            source: event.source,
-            process: createAssistantTurnProcess()
-          }
-        ]);
+          items: [
+            ...current.items,
+            {
+              id: event.messageId,
+              requestId: event.requestId,
+              role: "assistant",
+              text: event.text,
+              state: "done",
+              source: event.source,
+              process: createAssistantTurnProcess()
+            }
+          ]
+        }));
         return;
       }
 
@@ -371,21 +424,68 @@ export function useConsoleChatController(): ConsoleChatController {
     [updateAssistantMessageIfPresent, upsertAssistantMessage]
   );
 
+  const applyHistoryPage = useCallback(
+    (
+      page: {
+        items: HistoryMessage[];
+        hasMore: boolean;
+        nextCursor: string | null;
+      },
+      mode: "replace" | "prepend"
+    ) => {
+      const nextPage = toConsoleChatHistoryPage(page);
+      setHistoryState((current) =>
+        mode === "replace" ? replaceConsoleChatHistoryPage(nextPage) : prependConsoleChatHistoryPage(current, nextPage)
+      );
+    },
+    []
+  );
+
   const loadLatestHistory = useCallback(async () => {
     try {
       const page = await window.companion.listConsoleHistory({
-        limit: CONSOLE_HISTORY_INITIAL_LIMIT
+        limit: CONSOLE_HISTORY_PAGE_SIZE
       });
-
-      setMessages(
-        page.items
-          .filter((item) => item.role === "user" || item.role === "assistant")
-          .map((item) => createHistoryMessage(item))
-      );
+      applyHistoryPage(page, "replace");
+      setHistoryLoadingMore(false);
     } finally {
       setHistoryLoaded(true);
     }
-  }, []);
+  }, [applyHistoryPage]);
+
+  const loadOlderHistory = useCallback(
+    async (reason: "scroll" | "fill") => {
+      if (!historyLoaded || historyLoadingMore || !historyHasMore || !historyNextCursor) {
+        return;
+      }
+
+      const node = chatListRef.current;
+      if (node) {
+        pendingHistoryScrollRestoreRef.current = {
+          strategy: reason === "scroll" ? "preserve-anchor" : "stick-bottom",
+          previousScrollTop: node.scrollTop,
+          previousScrollHeight: node.scrollHeight
+        };
+      }
+
+      setHistoryLoadingMore(true);
+      try {
+        const page = await window.companion.listConsoleHistory({
+          cursor: historyNextCursor,
+          limit: CONSOLE_HISTORY_PAGE_SIZE
+        });
+        applyHistoryPage(page, "prepend");
+      } catch {
+        pendingHistoryScrollRestoreRef.current = null;
+        setHistoryState((current) =>
+          applyConsoleChatHistoryLoadError(current, "历史加载失败，继续上滑重试")
+        );
+      } finally {
+        setHistoryLoadingMore(false);
+      }
+    },
+    [applyHistoryPage, historyHasMore, historyLoaded, historyLoadingMore, historyNextCursor]
+  );
 
   const checkSttAvailability = useCallback(async (): Promise<{
     ready: boolean;
@@ -507,12 +607,13 @@ export function useConsoleChatController(): ConsoleChatController {
     }
 
     liveVoiceStateRef.current = nextVoiceState;
-    setMessages((current) =>
-      reconcileTransientConsoleChatFeedMessages(
-        current,
+    setHistoryState((current) => ({
+      ...current,
+      items: reconcileTransientConsoleChatFeedMessages(
+        current.items,
         nextVoiceState.messages.map((message) => createTransientVoiceMessage(message))
       )
-    );
+    }));
   }, []);
 
   const clearHistory = useCallback(async () => {
@@ -529,7 +630,9 @@ export function useConsoleChatController(): ConsoleChatController {
     try {
       await window.companion.clearHistory();
       liveVoiceStateRef.current = createConsoleChatLiveVoiceState();
-      setMessages([]);
+      pendingHistoryScrollRestoreRef.current = null;
+      setHistoryState(resetConsoleChatHistoryState());
+      setHistoryLoadingMore(false);
       setComposerAttachments([]);
       setPendingApproval(null);
     } finally {
@@ -543,12 +646,23 @@ export function useConsoleChatController(): ConsoleChatController {
         return;
       }
 
+      const metrics = readScrollMetrics(event.currentTarget);
       autoFollowRef.current = getNextConsoleChatAutoFollowState({
         type: "user-scroll",
-        metrics: readScrollMetrics(event.currentTarget)
+        metrics
       });
+      if (
+        shouldLoadOlderConsoleChatHistory({
+          historyLoaded,
+          hasMore: historyHasMore,
+          loadingOlder: historyLoadingMore,
+          metrics
+        })
+      ) {
+        void loadOlderHistory("scroll");
+      }
     },
-    []
+    [historyHasMore, historyLoaded, historyLoadingMore, loadOlderHistory]
   );
 
   useEffect(() => {
@@ -640,6 +754,26 @@ export function useConsoleChatController(): ConsoleChatController {
     void loadLatestHistory();
   }, [loadLatestHistory]);
 
+  useLayoutEffect(() => {
+    const pendingRestore = pendingHistoryScrollRestoreRef.current;
+    const node = chatListRef.current;
+    if (!pendingRestore || !node) {
+      return;
+    }
+
+    pendingHistoryScrollRestoreRef.current = null;
+    if (pendingRestore.strategy === "preserve-anchor") {
+      node.scrollTop = getPrependedConsoleChatScrollTop({
+        previousScrollTop: pendingRestore.previousScrollTop,
+        previousScrollHeight: pendingRestore.previousScrollHeight,
+        nextScrollHeight: node.scrollHeight
+      });
+      return;
+    }
+
+    node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+  }, [messages]);
+
   useEffect(() => {
     if (!historyLoaded) {
       return;
@@ -658,6 +792,24 @@ export function useConsoleChatController(): ConsoleChatController {
 
     chatBottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [messages]);
+
+  useEffect(() => {
+    const node = chatListRef.current;
+    if (!node) {
+      return;
+    }
+
+    if (
+      shouldAutoLoadOlderConsoleChatHistory({
+        historyLoaded,
+        hasMore: historyHasMore,
+        loadingOlder: historyLoadingMore,
+        metrics: readScrollMetrics(node)
+      })
+    ) {
+      void loadOlderHistory("fill");
+    }
+  }, [historyHasMore, historyLoaded, historyLoadingMore, loadOlderHistory, messages]);
 
   useEffect(() => {
     if (!pendingApproval) {
@@ -779,17 +931,20 @@ export function useConsoleChatController(): ConsoleChatController {
         type: "submit-message"
       });
       const localRequestId = makeClientId("request-local");
-      setMessages((current) => [
+      setHistoryState((current) => ({
         ...current,
-        {
-          id: makeClientId("user"),
-          requestId: localRequestId,
-          role: "user",
-          text,
-          state: "done",
-          attachments: attachments.map(({ input, ...attachment }) => attachment)
-        }
-      ]);
+        items: [
+          ...current.items,
+          {
+            id: makeClientId("user"),
+            requestId: localRequestId,
+            role: "user",
+            text,
+            state: "done",
+            attachments: attachments.map(({ input, ...attachment }) => attachment)
+          }
+        ]
+      }));
 
       try {
         const requestPayload = buildConsoleChatRequestPayload({
@@ -803,23 +958,27 @@ export function useConsoleChatController(): ConsoleChatController {
           : await window.companion.sendConsoleChat(requestPayload);
         setActiveRequestId(started.requestId);
         setPendingVoiceContext(null);
-        setMessages((current) => {
+        setHistoryState((current) => {
           if (
-            current.some(
+            current.items.some(
               (item) => item.requestId === started.requestId && item.role === "assistant"
             )
           ) {
             return current;
           }
 
-          return [...current, createStreamingAssistantMessage(started.requestId)];
+          return {
+            ...current,
+            items: [...current.items, createStreamingAssistantMessage(started.requestId)]
+          };
         });
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "提交请求失败，请稍后重试";
-        setMessages((current) =>
-          current.filter((item) => item.requestId !== localRequestId)
-        );
+        setHistoryState((current) => ({
+          ...current,
+          items: current.items.filter((item) => item.requestId !== localRequestId)
+        }));
         setDraft(text);
         setComposerAttachments(attachments);
         pushAssistantError(message);
@@ -923,6 +1082,8 @@ export function useConsoleChatController(): ConsoleChatController {
     approvalIndex,
     setApprovalIndex,
     historyLoaded,
+    historyLoadingMore,
+    historyLoadError,
     clearingHistory,
     busy,
     recording,

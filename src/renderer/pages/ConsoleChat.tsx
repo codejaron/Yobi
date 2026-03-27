@@ -16,6 +16,8 @@ export function ConsoleChatPage() {
     approvalIndex,
     setApprovalIndex,
     historyLoaded,
+    historyLoadingMore,
+    historyLoadError,
     clearingHistory,
     busy,
     recording,
@@ -52,6 +54,8 @@ export function ConsoleChatPage() {
         busy={busy}
         clearingHistory={clearingHistory}
         historyLoaded={historyLoaded}
+        historyLoadingMore={historyLoadingMore}
+        historyLoadError={historyLoadError}
         messages={messages}
         chatListRef={chatListRef}
         chatBottomRef={chatBottomRef}

@@ -46,6 +46,20 @@ interface CursorHistoryInput extends MemoryResourceContext {
   limit?: number;
 }
 
+type HistoryCursorSource = "buffer" | "archive";
+
+interface PersistedHistoryCursor {
+  version: 1;
+  source: HistoryCursorSource;
+  beforeId: string;
+  fileName?: string;
+}
+
+interface HistoryCursorEntry {
+  row: BufferMessage;
+  cursor: PersistedHistoryCursor;
+}
+
 export interface RelevantFactMatch extends SemanticFactMatch {
   finalScore: number;
   textScore: number;
@@ -127,6 +141,65 @@ function toHistoryMessage(message: BufferMessage): HistoryMessage {
     timestamp: message.ts,
     meta: Object.keys(meta).length > 0 ? meta : undefined
   };
+}
+
+function isPersistedHistoryRow(message: BufferMessage): boolean {
+  return message.role === "user" || message.role === "assistant";
+}
+
+function createBufferHistoryCursor(beforeId: string): PersistedHistoryCursor {
+  return {
+    version: 1,
+    source: "buffer",
+    beforeId
+  };
+}
+
+function createArchiveHistoryCursor(beforeId: string, fileName: string): PersistedHistoryCursor {
+  return {
+    version: 1,
+    source: "archive",
+    beforeId,
+    fileName
+  };
+}
+
+function encodeHistoryCursor(cursor: PersistedHistoryCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeHistoryCursor(token: string): PersistedHistoryCursor | null {
+  try {
+    const decoded = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as Partial<PersistedHistoryCursor>;
+    if (decoded.version !== 1) {
+      return null;
+    }
+    if (decoded.source !== "buffer" && decoded.source !== "archive") {
+      return null;
+    }
+    if (typeof decoded.beforeId !== "string" || !decoded.beforeId.trim()) {
+      return null;
+    }
+    if (decoded.source === "archive") {
+      if (typeof decoded.fileName !== "string" || !decoded.fileName.endsWith(".jsonl")) {
+        return null;
+      }
+      return {
+        version: 1,
+        source: "archive",
+        beforeId: decoded.beforeId,
+        fileName: decoded.fileName
+      };
+    }
+
+    return {
+      version: 1,
+      source: "buffer",
+      beforeId: decoded.beforeId
+    };
+  } catch {
+    return null;
+  }
 }
 
 export class YobiMemory {
@@ -241,17 +314,11 @@ export class YobiMemory {
   }> {
     await this.init();
     const limit = Math.max(1, Math.min(10_000, input.limit ?? 20));
-    const all = (await this.listAllMessages())
-      .filter((item) => item.role === "user" || item.role === "assistant")
-      .map((item) => toHistoryMessage(item));
+    const requestedEntries = input.beforeId
+      ? await this.collectHistoryEntriesBeforeCursor(input.beforeId, limit + 1)
+      : await this.collectLatestHistoryEntries(limit + 1);
 
-    let base = all;
-    if (input.beforeId) {
-      const index = all.findIndex((item) => item.id === input.beforeId);
-      base = index >= 0 ? all.slice(0, index) : all;
-    }
-
-    if (base.length === 0) {
+    if (requestedEntries.length === 0) {
       return {
         items: [],
         hasMore: false,
@@ -259,13 +326,12 @@ export class YobiMemory {
       };
     }
 
-    const startIndex = Math.max(0, base.length - limit);
-    const items = base.slice(startIndex);
-    const hasMore = startIndex > 0;
+    const hasMore = requestedEntries.length > limit;
+    const visibleEntries = hasMore ? requestedEntries.slice(0, limit) : requestedEntries;
     return {
-      items,
+      items: visibleEntries.map((entry) => toHistoryMessage(entry.row)).reverse(),
       hasMore,
-      nextCursor: hasMore ? items[0]?.id ?? null : null
+      nextCursor: hasMore ? encodeHistoryCursor(visibleEntries[visibleEntries.length - 1]!.cursor) : null
     };
   }
 
@@ -643,6 +709,181 @@ export class YobiMemory {
     return this.bufferStore;
   }
 
+  private async collectLatestHistoryEntries(limit: number): Promise<HistoryCursorEntry[]> {
+    const collected: HistoryCursorEntry[] = [];
+    this.appendHistoryEntriesFromRowsDescending({
+      collected,
+      rows: this.bufferStore.listAll(),
+      source: "buffer",
+      limit
+    });
+    if (collected.length >= limit) {
+      return collected;
+    }
+
+    const archiveFiles = await this.listArchiveFileNamesDescending();
+    for (const fileName of archiveFiles) {
+      const rows = await this.readArchiveMessagesFromFile(fileName);
+      this.appendHistoryEntriesFromRowsDescending({
+        collected,
+        rows,
+        source: "archive",
+        fileName,
+        limit
+      });
+      if (collected.length >= limit) {
+        break;
+      }
+    }
+
+    return collected;
+  }
+
+  private async collectHistoryEntriesBeforeCursor(cursorToken: string, limit: number): Promise<HistoryCursorEntry[]> {
+    const cursor = decodeHistoryCursor(cursorToken);
+    if (!cursor) {
+      return [];
+    }
+
+    const primary =
+      cursor.source === "buffer"
+        ? await this.collectHistoryEntriesBeforeBufferCursor(cursor, limit)
+        : await this.collectHistoryEntriesBeforeArchiveCursor(cursor, limit);
+    if (primary !== null) {
+      return primary;
+    }
+
+    return this.collectHistoryEntriesByScanningBeforeId(cursor.beforeId, limit);
+  }
+
+  private async collectHistoryEntriesBeforeBufferCursor(
+    cursor: PersistedHistoryCursor,
+    limit: number
+  ): Promise<HistoryCursorEntry[] | null> {
+    const rows = this.bufferStore.listAll();
+    const anchorIndex = rows.findIndex((row) => row.id === cursor.beforeId);
+    if (anchorIndex < 0) {
+      return null;
+    }
+
+    const collected: HistoryCursorEntry[] = [];
+    this.appendHistoryEntriesFromRowsDescending({
+      collected,
+      rows,
+      source: "buffer",
+      limit,
+      startIndex: anchorIndex - 1
+    });
+    if (collected.length >= limit) {
+      return collected;
+    }
+
+    const archiveFiles = await this.listArchiveFileNamesDescending();
+    for (const fileName of archiveFiles) {
+      const archiveRows = await this.readArchiveMessagesFromFile(fileName);
+      this.appendHistoryEntriesFromRowsDescending({
+        collected,
+        rows: archiveRows,
+        source: "archive",
+        fileName,
+        limit
+      });
+      if (collected.length >= limit) {
+        break;
+      }
+    }
+
+    return collected;
+  }
+
+  private async collectHistoryEntriesBeforeArchiveCursor(
+    cursor: PersistedHistoryCursor,
+    limit: number
+  ): Promise<HistoryCursorEntry[] | null> {
+    const fileName = cursor.fileName;
+    if (!fileName) {
+      return null;
+    }
+
+    const archiveFiles = await this.listArchiveFileNamesDescending();
+    const fileIndex = archiveFiles.indexOf(fileName);
+    if (fileIndex < 0) {
+      return null;
+    }
+
+    const collected: HistoryCursorEntry[] = [];
+    for (let index = fileIndex; index < archiveFiles.length; index += 1) {
+      const currentFile = archiveFiles[index]!;
+      const rows = await this.readArchiveMessagesFromFile(currentFile);
+      let startIndex = rows.length - 1;
+      if (index === fileIndex) {
+        const anchorIndex = rows.findIndex((row) => row.id === cursor.beforeId);
+        if (anchorIndex < 0) {
+          return null;
+        }
+        startIndex = anchorIndex - 1;
+      }
+      this.appendHistoryEntriesFromRowsDescending({
+        collected,
+        rows,
+        source: "archive",
+        fileName: currentFile,
+        limit,
+        startIndex
+      });
+      if (collected.length >= limit) {
+        break;
+      }
+    }
+
+    return collected;
+  }
+
+  private async collectHistoryEntriesByScanningBeforeId(beforeId: string, limit: number): Promise<HistoryCursorEntry[]> {
+    let foundAnchor = false;
+    const collected: HistoryCursorEntry[] = [];
+
+    const bufferRows = this.bufferStore.listAll();
+    for (let index = bufferRows.length - 1; index >= 0 && collected.length < limit; index -= 1) {
+      const row = bufferRows[index]!;
+      if (!foundAnchor) {
+        foundAnchor = row.id === beforeId;
+        continue;
+      }
+      if (!isPersistedHistoryRow(row)) {
+        continue;
+      }
+      collected.push({
+        row,
+        cursor: createBufferHistoryCursor(row.id)
+      });
+    }
+
+    const archiveFiles = await this.listArchiveFileNamesDescending();
+    for (const fileName of archiveFiles) {
+      if (collected.length >= limit) {
+        break;
+      }
+      const rows = await this.readArchiveMessagesFromFile(fileName);
+      for (let index = rows.length - 1; index >= 0 && collected.length < limit; index -= 1) {
+        const row = rows[index]!;
+        if (!foundAnchor) {
+          foundAnchor = row.id === beforeId;
+          continue;
+        }
+        if (!isPersistedHistoryRow(row)) {
+          continue;
+        }
+        collected.push({
+          row,
+          cursor: createArchiveHistoryCursor(row.id, fileName)
+        });
+      }
+    }
+
+    return foundAnchor ? collected : [];
+  }
+
   private async listAllMessages(): Promise<BufferMessage[]> {
     const archiveRows = await this.listArchiveMessages();
     const bufferRows = this.bufferStore.listAll();
@@ -650,24 +891,59 @@ export class YobiMemory {
   }
 
   private async listArchiveMessages(): Promise<BufferMessage[]> {
+    const files = (await this.listArchiveFileNamesDescending()).slice().reverse();
+    const rows: BufferMessage[] = [];
+    for (const fileName of files) {
+      rows.push(...(await this.readArchiveMessagesFromFile(fileName)));
+    }
+    return rows;
+  }
+
+  private async listArchiveFileNamesDescending(): Promise<string[]> {
     const exists = await fileExists(this.paths.sessionArchiveDir);
     if (!exists) {
       return [];
     }
-    const files = (await fs.readdir(this.paths.sessionArchiveDir))
+
+    return (await fs.readdir(this.paths.sessionArchiveDir))
       .filter((name) => name.endsWith(".jsonl"))
-      .sort((a, b) => a.localeCompare(b));
+      .sort((left, right) => right.localeCompare(left));
+  }
+
+  private async readArchiveMessagesFromFile(fileName: string): Promise<BufferMessage[]> {
+    const data = await readJsonlFile<BufferMessage>(path.join(this.paths.sessionArchiveDir, fileName));
     const rows: BufferMessage[] = [];
-    for (const fileName of files) {
-      const data = await readJsonlFile<BufferMessage>(path.join(this.paths.sessionArchiveDir, fileName));
-      for (const row of data) {
-        const normalized = normalizeBufferMessage(row);
-        if (normalized) {
-          rows.push(normalized);
-        }
+    for (const row of data) {
+      const normalized = normalizeBufferMessage(row);
+      if (normalized) {
+        rows.push(normalized);
       }
     }
     return rows;
+  }
+
+  private appendHistoryEntriesFromRowsDescending(input: {
+    collected: HistoryCursorEntry[];
+    rows: BufferMessage[];
+    source: HistoryCursorSource;
+    limit: number;
+    fileName?: string;
+    startIndex?: number;
+  }): void {
+    const startIndex = input.startIndex ?? input.rows.length - 1;
+    for (let index = startIndex; index >= 0 && input.collected.length < input.limit; index -= 1) {
+      const row = input.rows[index];
+      if (!row || !isPersistedHistoryRow(row)) {
+        continue;
+      }
+      input.collected.push({
+        row,
+        cursor:
+          input.source === "buffer"
+            ? createBufferHistoryCursor(row.id)
+            : createArchiveHistoryCursor(row.id, input.fileName!)
+      });
+    }
   }
 
   private async clearArchiveFiles(): Promise<void> {
