@@ -1924,7 +1924,7 @@ export function CognitionDebugPage() {
     }
   }, [activeBottomTab, activeLogCount, activeLogScope, clearLogsStatus, refreshCognitionPanels, startPlaybackFromEntry]);
   const selectedLogDetails = selectedLog ? (
-    <div className="space-y-2 text-xs text-slate-700">
+    <div className="space-y-2 text-xs text-foreground/85">
       <div className="grid gap-2 sm:grid-cols-2">
         <div>时间：{formatTime(selectedLog.timestamp)}</div>
         <div>触发：{selectedLog.trigger_type}</div>
@@ -1950,29 +1950,29 @@ export function CognitionDebugPage() {
       {selectedLog.bubble_summary ? <div>泡：{selectedLog.bubble_summary}</div> : null}
       {selectedLog.expression_text ? <div>表达：{selectedLog.expression_text}</div> : null}
       {selectedRoundRows.length > 0 ? (
-        <details className="rounded-md border border-border/60 bg-white/70 px-2 py-1">
-          <summary className="cursor-pointer select-none font-medium text-slate-900">
+        <details className="rounded-md border border-border/60 bg-card/70 px-2 py-1">
+          <summary className="cursor-pointer select-none font-medium text-foreground">
             三阶段详情（每轮 Top）
           </summary>
           <div className="mt-2 space-y-2">
             {selectedRoundRows.map((round) => (
-              <div key={`selected-round-${selectedLog.timestamp}-${round.depth}`} className="rounded-md border border-border/50 bg-white/80 p-2">
-                <div className="font-medium text-slate-900">Round {round.depth}</div>
-                <div className="mt-1 text-slate-700">Propagation: {round.propagation}</div>
-                <div className="text-slate-700">Inhibition: {round.inhibition}</div>
-                <div className="text-slate-700">Sigmoid: {round.sigmoid}</div>
-                {round.trimmed ? <div className="text-slate-700">Trimmed: {round.trimmed}</div> : null}
+              <div key={`selected-round-${selectedLog.timestamp}-${round.depth}`} className="rounded-md border border-border/50 bg-background/50 p-2">
+                <div className="font-medium text-foreground">Round {round.depth}</div>
+                <div className="mt-1 text-foreground/80">Propagation: {round.propagation}</div>
+                <div className="text-foreground/80">Inhibition: {round.inhibition}</div>
+                <div className="text-foreground/80">Sigmoid: {round.sigmoid}</div>
+                {round.trimmed ? <div className="text-foreground/80">Trimmed: {round.trimmed}</div> : null}
               </div>
             ))}
           </div>
         </details>
       ) : null}
       {selectedLog.hebbian_log ? (
-        <details className="rounded-md border border-border/60 bg-white/70 px-2 py-1">
-          <summary className="cursor-pointer select-none font-medium text-slate-900">
+        <details className="rounded-md border border-border/60 bg-card/70 px-2 py-1">
+          <summary className="cursor-pointer select-none font-medium text-foreground">
             Hebbian 更新
           </summary>
-          <div className="mt-2 space-y-2 text-slate-700">
+          <div className="mt-2 space-y-2 text-foreground/80">
             <div>
               本轮更新 {selectedLog.hebbian_log.edges_updated} 条边 | 强化 {selectedLog.hebbian_log.edges_strengthened} |
               弱化 {selectedLog.hebbian_log.edges_weakened} | 归一化触发 {selectedLog.hebbian_log.normalization_triggered_nodes} 节点
@@ -1983,7 +1983,7 @@ export function CognitionDebugPage() {
               {formatNumeric(selectedLog.hebbian_log.min_weight_after)}
             </div>
             <div>
-              <div className="font-medium text-slate-900">最大强化 Top 3</div>
+              <div className="font-medium text-foreground">最大强化 Top 3</div>
               {selectedLog.hebbian_log.top_strengthened.length > 0 ? (
                 selectedLog.hebbian_log.top_strengthened.map((change, index) => (
                   <div key={`selected-strengthened-${index}`}>
@@ -1997,7 +1997,7 @@ export function CognitionDebugPage() {
               )}
             </div>
             <div>
-              <div className="font-medium text-slate-900">最大弱化 Top 3</div>
+              <div className="font-medium text-foreground">最大弱化 Top 3</div>
               {selectedLog.hebbian_log.top_weakened.length > 0 ? (
                 selectedLog.hebbian_log.top_weakened.map((change, index) => (
                   <div key={`selected-weakened-${index}`}>
@@ -2014,7 +2014,7 @@ export function CognitionDebugPage() {
         </details>
       ) : null}
       {selectedLog.graph_stats ? (
-        <div className="rounded-md border border-border/60 bg-slate-50/80 px-2 py-2 text-slate-700">
+        <div className="rounded-md border border-border/60 bg-background/60 px-2 py-2 text-foreground/80">
           图统计：avg={formatNumeric(selectedLog.graph_stats.avg_weight)} median=
           {formatNumeric(selectedLog.graph_stats.median_weight)} std=
           {formatNumeric(selectedLog.graph_stats.std_weight)} min=
@@ -2023,11 +2023,11 @@ export function CognitionDebugPage() {
         </div>
       ) : null}
       {selectedLog.broadcast_result ? (
-        <details className="rounded-md border border-amber-300 bg-amber-50/70 px-2 py-1">
-          <summary className="cursor-pointer select-none font-medium text-amber-950">
+        <details className="status-surface status-surface--warn rounded-md px-2 py-1">
+          <summary className="cursor-pointer select-none font-medium">
             全局广播
           </summary>
-          <div className="mt-2 space-y-2 text-slate-700">
+          <div className="mt-2 space-y-2 text-foreground/85">
             <div>广播 ID：{selectedLog.broadcast_result.broadcast_id}</div>
             <div>快照节点数：{selectedLog.broadcast_result.packet.activation_snapshot.length}</div>
             <div>
@@ -2035,7 +2035,13 @@ export function CognitionDebugPage() {
               {formatNumeric(selectedLog.broadcast_result.packet.emotion_at_broadcast.arousal)}
             </div>
             {selectedLog.broadcast_result.hebbian_report ? (
-              <div className={selectedLog.broadcast_result.hebbian_report.overlap_warning ? "rounded-md border border-amber-400 bg-amber-100 px-2 py-2" : ""}>
+              <div
+                className={
+                  selectedLog.broadcast_result.hebbian_report.overlap_warning
+                    ? "status-surface status-surface--warn rounded-md px-2 py-2"
+                    : ""
+                }
+              >
                 Hebbian：更新 {selectedLog.broadcast_result.hebbian_report.updated_edges_count} 条边，最大单 tick delta{" "}
                 {formatNumeric(selectedLog.broadcast_result.hebbian_report.max_single_tick_delta)}
                 {selectedLog.broadcast_result.hebbian_report.overlap_warning ? " · overlap warning" : ""}
@@ -2066,7 +2072,7 @@ export function CognitionDebugPage() {
               </div>
             ) : null}
             {selectedLog.broadcast_result.errors.length > 0 ? (
-              <div className="rounded-md border border-rose-300 bg-rose-50 px-2 py-2">
+              <div className="status-surface status-surface--danger rounded-md px-2 py-2">
                 {selectedLog.broadcast_result.errors.map((error, index) => (
                   <div key={`broadcast-error-${index}`}>
                     {error.module_name}: {error.message}
@@ -2083,13 +2089,13 @@ export function CognitionDebugPage() {
   );
   const timelinePanel = (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-border/60 bg-white/75 p-4">
+      <div className="rounded-2xl border border-border/60 bg-card/75 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-foreground">扩散时间线</div>
             <div className="text-xs text-muted-foreground">点击圆点即可回放该轮扩散，并在下方查看详情。</div>
           </div>
-          <div className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+          <div className="rounded-full bg-secondary/70 px-2.5 py-1 text-xs text-secondary-foreground">
             {logDots.length} 条
           </div>
         </div>
@@ -2099,7 +2105,7 @@ export function CognitionDebugPage() {
             x2={timelineWidth}
             y1={timelineHeight / 2}
             y2={timelineHeight / 2}
-            stroke="#E5E7EB"
+            stroke="hsl(var(--border))"
             strokeWidth={2}
           />
           {logDots.map((log, index) => {
@@ -2129,7 +2135,7 @@ export function CognitionDebugPage() {
                   key={`${log.timestamp}-${index}`}
                   points={starPoints}
                   fill={timelineColor(log)}
-                  stroke="#7c5e10"
+                  stroke="hsl(var(--status-warn-border))"
                   strokeWidth={1}
                   {...commonProps}
                 />
@@ -2148,7 +2154,7 @@ export function CognitionDebugPage() {
           })}
         </svg>
       </div>
-      <div className="rounded-2xl border border-border/60 bg-white/75 p-4">
+      <div className="rounded-2xl border border-border/60 bg-card/75 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="text-sm font-semibold text-foreground">当前详情</div>
           <div className="text-xs text-muted-foreground">
@@ -2166,7 +2172,7 @@ export function CognitionDebugPage() {
           <div className="text-sm font-semibold text-foreground">扩散评估记录</div>
           <div className="text-xs text-muted-foreground">每次手动扩散都会记录参数、每跳命中与表达结果。</div>
         </div>
-        <div className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+        <div className="rounded-full bg-secondary/70 px-2.5 py-1 text-xs text-secondary-foreground">
           {experimentLogs.length} 条
         </div>
       </div>
@@ -2182,7 +2188,7 @@ export function CognitionDebugPage() {
                 setSelectedLog(entry);
                 startPlaybackFromEntry(entry);
               }}
-              className="w-full rounded-2xl border border-border/70 bg-white/70 p-3 text-left transition hover:border-cyan-300 hover:bg-cyan-50/40"
+              className="w-full rounded-2xl border border-border/70 bg-card/70 p-3 text-left transition hover:border-primary/60 hover:bg-secondary/40"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-semibold text-foreground">
@@ -2190,28 +2196,28 @@ export function CognitionDebugPage() {
                 </div>
                 <div className="text-xs text-muted-foreground">{formatTime(entry.timestamp)}</div>
               </div>
-              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-600">
-                <span className="rounded-full bg-slate-100 px-2 py-1">S {formatNumeric(entry.config_snapshot?.spreading_factor)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">δ {formatNumeric(entry.config_snapshot?.retention_delta)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">ρ {formatNumeric(entry.config_snapshot?.temporal_decay_rho)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">T {formatNumeric(entry.config_snapshot?.diffusion_max_depth, 0)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">Expr {formatNumeric(entry.config_snapshot?.expression_activation_threshold)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">η {formatNumeric(entry.config_snapshot?.hebbian_learning_rate)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">Decay {formatNumeric(entry.config_snapshot?.passive_decay_rate, 3)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-1">RW {formatNumeric(entry.config_snapshot?.random_walk_probability)}</span>
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-secondary-foreground">
+                <span className="rounded-full bg-secondary/70 px-2 py-1">S {formatNumeric(entry.config_snapshot?.spreading_factor)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">δ {formatNumeric(entry.config_snapshot?.retention_delta)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">ρ {formatNumeric(entry.config_snapshot?.temporal_decay_rho)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">T {formatNumeric(entry.config_snapshot?.diffusion_max_depth, 0)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">Expr {formatNumeric(entry.config_snapshot?.expression_activation_threshold)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">η {formatNumeric(entry.config_snapshot?.hebbian_learning_rate)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">Decay {formatNumeric(entry.config_snapshot?.passive_decay_rate, 3)}</span>
+                <span className="rounded-full bg-secondary/70 px-2 py-1">RW {formatNumeric(entry.config_snapshot?.random_walk_probability)}</span>
               </div>
-              <div className="mt-3 grid gap-2 text-xs text-slate-700 md:grid-cols-[1.2fr_1fr_1fr]">
+              <div className="mt-3 grid gap-2 text-xs text-foreground/85 md:grid-cols-[1.2fr_1fr_1fr]">
                 <div>
-                  <div className="font-medium text-slate-900">Seeds</div>
+                  <div className="font-medium text-foreground">Seeds</div>
                   <div>{entry.seeds.map((seed) => displayNodeLabel(seed.label)).join(" · ") || "无"}</div>
                 </div>
                 <div>
-                  <div className="font-medium text-slate-900">结果</div>
+                  <div className="font-medium text-foreground">结果</div>
                   <div>激活 {entry.activated_count ?? 0} 个 · 峰值 {formatNumeric(entry.activation_peak)}</div>
                   <div>泡 {entry.bubble_passed_filter ? "通过" : "未通过"} · 表达 {entry.expression_produced ? "有" : "无"}</div>
                 </div>
                 <div>
-                  <div className="font-medium text-slate-900">Top</div>
+                  <div className="font-medium text-foreground">Top</div>
                   <div>
                     {entry.top_activated
                       .slice(0, 3)
@@ -2221,7 +2227,7 @@ export function CognitionDebugPage() {
                 </div>
               </div>
               {entry.expression_text ? (
-                <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                <div className="status-surface status-surface--success mt-3 rounded-xl px-3 py-2 text-xs">
                   表达：{entry.expression_text}
                 </div>
               ) : null}
@@ -2238,7 +2244,7 @@ export function CognitionDebugPage() {
           <div className="text-sm font-semibold text-foreground">图诊断</div>
           <div className="text-xs text-muted-foreground">边权重分布与最新图统计。</div>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-white/80 p-3">
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
           <svg width="100%" height="150" viewBox="0 0 520 150" preserveAspectRatio="none">
             {weightHistogram.map((bin) => {
               const barWidth = 520 / Math.max(1, weightHistogram.length);
@@ -2255,25 +2261,31 @@ export function CognitionDebugPage() {
                     opacity={0.92}
                   />
                   {bin.index < weightHistogram.length - 1 ? null : (
-                    <text x={bin.index * barWidth + barWidth / 2} y={143} textAnchor="middle" fontSize="10" fill="#475569">
+                    <text
+                      x={bin.index * barWidth + barWidth / 2}
+                      y={143}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fill="hsl(var(--muted-foreground))"
+                    >
                       1.00
                     </text>
                   )}
                 </g>
               );
             })}
-            <line x1={0} x2={520} y1={128} y2={128} stroke="#CBD5E1" strokeWidth={1.5} />
-            <text x={0} y={143} fontSize="10" fill="#475569">
+            <line x1={0} x2={520} y1={128} y2={128} stroke="hsl(var(--border))" strokeWidth={1.5} />
+            <text x={0} y={143} fontSize="10" fill="hsl(var(--muted-foreground))">
               0.00
             </text>
-            <text x={260} y={143} fontSize="10" fill="#475569" textAnchor="middle">
+            <text x={260} y={143} fontSize="10" fill="hsl(var(--muted-foreground))" textAnchor="middle">
               权重 bins
             </text>
           </svg>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
-          <div className="font-medium text-slate-900">统计</div>
-          <div className="mt-2 space-y-1 text-slate-700">
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-3 text-sm">
+          <div className="font-medium text-foreground">统计</div>
+          <div className="mt-2 space-y-1 text-foreground/80">
             <div>mean: {formatNumeric(latestGraphLog?.graph_stats?.avg_weight ?? weightStats.mean)}</div>
             <div>median: {formatNumeric(latestGraphLog?.graph_stats?.median_weight ?? weightStats.median)}</div>
             <div>std: {formatNumeric(latestGraphLog?.graph_stats?.std_weight ?? weightStats.std)}</div>
@@ -2292,31 +2304,31 @@ export function CognitionDebugPage() {
           <div className="text-sm font-semibold text-foreground">认知状态</div>
           <div className="text-xs text-muted-foreground">情绪、预测编码与注意力焦点。</div>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-white/80 p-3">
-          <div className="text-sm font-medium text-slate-900">当前情绪</div>
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+          <div className="text-sm font-medium text-foreground">当前情绪</div>
           <div className="mt-2 grid gap-3 sm:grid-cols-[120px_1fr]">
-            <div className="rounded-2xl border border-border/60 bg-slate-50/70 p-3">
+            <div className="rounded-2xl border border-border/60 bg-background/55 p-3">
               <svg width="100%" height="120" viewBox="0 0 160 120">
                 <defs>
                   <radialGradient id="drawerRussellBg" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%" stopColor="#e2e8f0" />
-                    <stop offset="100%" stopColor="#f8fafc" />
+                    <stop offset="0%" stopColor="hsl(var(--secondary))" />
+                    <stop offset="100%" stopColor="hsl(var(--background))" />
                   </radialGradient>
                 </defs>
-                <circle cx="60" cy="60" r="45" fill="url(#drawerRussellBg)" stroke="#cbd5e1" strokeWidth="1.5" />
-                <line x1="15" y1="60" x2="105" y2="60" stroke="#94a3b8" strokeDasharray="3 3" />
-                <line x1="60" y1="15" x2="60" y2="105" stroke="#94a3b8" strokeDasharray="3 3" />
+                <circle cx="60" cy="60" r="45" fill="url(#drawerRussellBg)" stroke="hsl(var(--border))" strokeWidth="1.5" />
+                <line x1="15" y1="60" x2="105" y2="60" stroke="hsl(var(--muted-foreground) / 0.55)" strokeDasharray="3 3" />
+                <line x1="60" y1="15" x2="60" y2="105" stroke="hsl(var(--muted-foreground) / 0.55)" strokeDasharray="3 3" />
                 <circle
                   cx={60 + clamp((emotionSnapshot?.valence ?? 0.1), -1, 1) * 40}
                   cy={60 - clamp(((emotionSnapshot?.arousal ?? 0.3) * 2) - 1, -1, 1) * 40}
                   r={5}
-                  fill="#06b6d4"
-                  stroke="#0f172a"
+                  fill="hsl(var(--primary))"
+                  stroke="hsl(var(--background))"
                   strokeWidth="1.2"
                 />
               </svg>
             </div>
-            <div className="space-y-1 text-sm text-slate-700">
+            <div className="space-y-1 text-sm text-foreground/85">
               <div>V: {formatSigned(emotionSnapshot?.valence)}</div>
               <div>A: {formatNumeric(emotionSnapshot?.arousal)}</div>
               <div>来源: {emotionSnapshot?.source ?? "--"}</div>
@@ -2327,15 +2339,15 @@ export function CognitionDebugPage() {
             </div>
           </div>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
-          <div className="font-medium text-slate-900">预测编码</div>
-          <div className="mt-2 space-y-1 text-slate-700">
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-3 text-sm">
+          <div className="font-medium text-foreground">预测编码</div>
+          <div className="mt-2 space-y-1 text-foreground/85">
             {predictionSnapshot?.warming_up ? (
-              <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+              <div className="status-surface status-surface--warn rounded-xl px-3 py-2">
                 预测编码预热中 ({predictionWarmupProgress ?? "--"})
               </div>
             ) : (
-              <div className="rounded-xl border border-cyan-300 bg-cyan-50 px-3 py-2 text-cyan-900">
+              <div className="status-surface status-surface--info rounded-xl px-3 py-2">
                 预测编码已启用
               </div>
             )}
@@ -2345,9 +2357,9 @@ export function CognitionDebugPage() {
             <div>熟悉节点: {familiarNodeLabels.length > 0 ? familiarNodeLabels.join(" · ") : "无"}</div>
           </div>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
-          <div className="font-medium text-slate-900">注意力焦点</div>
-          <div className="mt-2 space-y-1 text-slate-700">
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-3 text-sm">
+          <div className="font-medium text-foreground">注意力焦点</div>
+          <div className="mt-2 space-y-1 text-foreground/85">
             <div>max_focus_nodes: {attentionSnapshot?.max_focus_nodes ?? "--"}</div>
             <div>focus_seed_energy: {formatNumeric(attentionSnapshot?.focus_seed_energy)}</div>
             <div>
@@ -2369,20 +2381,20 @@ export function CognitionDebugPage() {
           <div className="text-sm font-semibold text-foreground">系统事件</div>
           <div className="text-xs text-muted-foreground">广播历史与最近一次睡眠整合。</div>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
-          <div className="font-medium text-slate-900">广播历史</div>
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-3 text-sm">
+          <div className="font-medium text-foreground">广播历史</div>
           <div className="mt-2 space-y-2">
             {effectiveBroadcastHistory.length > 0 ? (
               effectiveBroadcastHistory
                 .slice()
                 .reverse()
                 .map((item) => (
-                  <div key={item.broadcast_id} className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2">
+                  <div key={item.broadcast_id} className="status-surface status-surface--warn rounded-xl px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="font-medium text-slate-900">{item.bubble_summary || item.bubble_id}</div>
-                      <div className="text-xs text-slate-600">{formatTime(item.timestamp)}</div>
+                      <div className="font-medium text-foreground">{item.bubble_summary || item.bubble_id}</div>
+                      <div className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</div>
                     </div>
-                    <div className="mt-1 text-xs text-slate-700">
+                    <div className="mt-1 text-xs text-foreground/85">
                       模块: {item.modules_updated.join(" · ") || "无"} {item.has_errors ? "· 有错误" : ""}
                       {item.overlap_warning ? " · overlap warning" : ""}
                     </div>
@@ -2394,20 +2406,20 @@ export function CognitionDebugPage() {
           </div>
         </div>
         {(configState?.consolidation.enabled ?? true) ? (
-          <div className="rounded-2xl border border-border/60 bg-white/80 p-3 text-sm">
-            <div className="font-medium text-slate-900">睡眠整合</div>
-            <div className="mt-2 space-y-2 text-slate-700">
+          <div className="rounded-2xl border border-border/60 bg-card/80 p-3 text-sm">
+            <div className="font-medium text-foreground">睡眠整合</div>
+            <div className="mt-2 space-y-2 text-foreground/85">
               {consolidationReport ? (
-                <div className="rounded-xl border border-cyan-200 bg-cyan-50/70 px-3 py-3">
+                <div className="status-surface status-surface--info rounded-xl px-3 py-3">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="font-medium text-slate-900">
+                    <div className="font-medium text-foreground">
                       {consolidationReport.trigger} · {consolidationReport.interrupted ? "未完成" : "完成"}
                     </div>
-                    <div className="text-xs text-slate-600">
+                    <div className="text-xs text-muted-foreground">
                       {toEpochMs(consolidationReport.completed_at) ? formatTime(toEpochMs(consolidationReport.completed_at)!) : "--"}
                     </div>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-700">
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-foreground/85">
                     <span>耗时 {consolidationReport.duration_ms} ms</span>
                     <span>回放 {consolidationReport.replay_report.replayedCount}</span>
                     <span>抽象节点 {consolidationReport.gist_report.abstractNodesCreated}</span>
@@ -2420,21 +2432,21 @@ export function CognitionDebugPage() {
               {consolidationHistory.length > 0 ? (
                 <div className="space-y-2">
                   {consolidationHistory.slice(0, 3).map((item) => (
-                    <div key={`${item.started_at}-${item.trigger}`} className="rounded-xl border border-border/60 bg-slate-50/80 px-3 py-2">
+                    <div key={`${item.started_at}-${item.trigger}`} className="rounded-xl border border-border/60 bg-background/60 px-3 py-2">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="font-medium text-slate-900">{item.trigger}</div>
-                        <div className="text-xs text-slate-600">
+                        <div className="font-medium text-foreground">{item.trigger}</div>
+                        <div className="text-xs text-muted-foreground">
                           {toEpochMs(item.completed_at) ? formatTime(toEpochMs(item.completed_at)!) : "--"}
                         </div>
                       </div>
-                      <div className="mt-1 text-xs text-slate-700">
+                      <div className="mt-1 text-xs text-foreground/85">
                         回放 {item.replay_report.replayedCount} · 摘要 {item.gist_report.abstractNodesCreated} · 迁移 {item.archive_report.migratedCount}
                       </div>
                     </div>
                   ))}
                 </div>
               ) : null}
-              <div className="rounded-xl border border-border/60 bg-slate-50/80 px-3 py-2 text-xs">
+              <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-2 text-xs text-foreground/85">
                 冷区月份：{archiveStats?.oldestMonth ?? "--"} → {archiveStats?.newestMonth ?? "--"}
               </div>
             </div>
@@ -2454,10 +2466,10 @@ export function CognitionDebugPage() {
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             {overviewItems.map((item) => (
-              <div key={item.label} className="rounded-2xl border border-border/60 bg-white/75 px-4 py-3">
+              <div key={item.label} className="rounded-2xl border border-border/60 bg-card/75 px-4 py-3">
                 <div className="text-xs text-muted-foreground">{item.label}</div>
                 <div className="mt-1 text-lg font-semibold text-foreground">{item.value}</div>
-                <div className="mt-1 text-xs text-slate-600">{item.detail}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{item.detail}</div>
               </div>
             ))}
           </div>
@@ -2514,37 +2526,35 @@ export function CognitionDebugPage() {
                 </div>
                 {manualStatus !== "idle" || consolidationStatus !== "idle" ? (
                   <div className="flex flex-wrap gap-3 text-xs">
-                    {manualStatus === "success" ? <span className="text-emerald-700">手动触发完成</span> : null}
-                    {manualStatus === "error" ? <span className="text-rose-700">手动触发失败</span> : null}
-                    {consolidationStatus === "success" ? <span className="text-emerald-700">整合完成</span> : null}
-                    {consolidationStatus === "error" ? <span className="text-rose-700">整合失败</span> : null}
+                    {manualStatus === "success" ? <span className="text-[hsl(var(--status-success-foreground))]">手动触发完成</span> : null}
+                    {manualStatus === "error" ? <span className="text-[hsl(var(--status-danger-foreground))]">手动触发失败</span> : null}
+                    {consolidationStatus === "success" ? <span className="text-[hsl(var(--status-success-foreground))]">整合完成</span> : null}
+                    {consolidationStatus === "error" ? <span className="text-[hsl(var(--status-danger-foreground))]">整合失败</span> : null}
                   </div>
                 ) : null}
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-4">
-                <div
-                  className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-100 to-white p-4 shadow-lg"
-                >
-                  <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-full bg-slate-950/70 px-3 py-1.5 text-xs text-cyan-50 shadow">
+                <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-card via-card to-background p-4 shadow-lg">
+                  <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-full bg-background/90 px-3 py-1.5 text-xs text-foreground shadow">
                     <span>{Math.round(graphViewport.scale * 100)}%</span>
-                    <span className="text-cyan-100/70">滚轮缩放 · 拖拽平移</span>
+                    <span className="text-muted-foreground">滚轮缩放 · 拖拽平移</span>
                     <button
                       type="button"
                       onClick={handleResetGraphViewport}
-                      className="rounded-full border border-cyan-100/25 px-2 py-0.5 text-[11px] transition hover:bg-cyan-100/10"
+                      className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] transition hover:bg-secondary/50"
                     >
                       重置
                     </button>
                   </div>
                   {activeRoundLabel ? (
-                    <div className="absolute bottom-4 left-4 z-10 rounded-full bg-slate-950/85 px-3 py-1 text-xs font-medium text-cyan-100 shadow">
+                    <div className="absolute bottom-4 left-4 z-10 rounded-full bg-background/95 px-3 py-1 text-xs font-medium text-foreground shadow">
                       {activeRoundLabel}
                     </div>
                   ) : null}
                   <div
-                    className="relative h-[24rem] overflow-hidden rounded-2xl bg-slate-900 md:h-[30rem] xl:h-[36rem]"
+                    className="relative h-[24rem] overflow-hidden rounded-2xl bg-background md:h-[30rem] xl:h-[36rem]"
                     ref={containerRef}
                   >
                     <canvas
@@ -2565,7 +2575,7 @@ export function CognitionDebugPage() {
                     />
                     {hoveredNode && tooltipPosition ? (
                       <div
-                        className="pointer-events-none absolute z-20 max-w-xs rounded-lg bg-slate-900/90 px-3 py-2 text-xs text-white"
+                        className="pointer-events-none absolute z-20 max-w-xs rounded-lg border border-border/60 bg-card/95 px-3 py-2 text-xs text-foreground shadow-lg"
                         style={{ left: tooltipPosition.x + 12, top: tooltipPosition.y + 12 }}
                       >
                         <div className="font-semibold">{hoveredNode.content}</div>
@@ -2578,7 +2588,7 @@ export function CognitionDebugPage() {
                   </div>
                 </div>
 
-                <div className="overflow-hidden rounded-3xl border border-border/60 bg-white/55">
+                <div className="overflow-hidden rounded-3xl border border-border/60 bg-card/55">
                   <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2">
                       {bottomTabMeta.map((tab) => (
@@ -2590,7 +2600,7 @@ export function CognitionDebugPage() {
                             "rounded-full border px-3 py-1.5 text-sm transition",
                             activeBottomTab === tab.id
                               ? "border-primary bg-primary text-primary-foreground"
-                              : "border-border/70 bg-white/75 text-foreground hover:bg-secondary/60"
+                              : "border-border/70 bg-card/75 text-foreground hover:bg-secondary/60"
                           )}
                         >
                           {tab.label}
@@ -2645,7 +2655,7 @@ export function CognitionDebugPage() {
 
       {isParameterModalOpen ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4"
           onMouseDown={(event) => {
             if (event.target !== event.currentTarget) {
               return;
@@ -2674,7 +2684,7 @@ export function CognitionDebugPage() {
                     所有改动先保存在弹层草稿中，点击“应用”后再一次性提交。
                   </p>
                 </div>
-                <div className="rounded-full border border-border/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
+                <div className="rounded-full border border-border/60 bg-secondary/60 px-3 py-1 text-xs text-secondary-foreground">
                   {hasDraftChanges ? "有未应用修改" : "当前配置未改动"}
                 </div>
               </div>
@@ -2685,10 +2695,10 @@ export function CognitionDebugPage() {
                 const isExpanded = expandedParameterGroup === group.id;
                 const groupSummary = groupSummaryText(group.id, parameterModalConfig);
                 return (
-                  <section key={group.id} className="overflow-hidden rounded-2xl border border-border/60 bg-white/70">
+                  <section key={group.id} className="overflow-hidden rounded-2xl border border-border/60 bg-card/70">
                     <button
                       type="button"
-                      className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-slate-50/80"
+                      className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-background/60"
                       aria-expanded={isExpanded}
                       onClick={() => {
                         setExpandedParameterGroup((current) => (current === group.id ? null : group.id));
@@ -2699,13 +2709,13 @@ export function CognitionDebugPage() {
                           <div className="text-sm font-semibold text-foreground">{group.title}</div>
                           <div className="text-xs text-muted-foreground">{group.description}</div>
                         </div>
-                        <div className="rounded-full border border-border/60 bg-white/80 px-2.5 py-1 text-xs text-slate-700">
+                        <div className="rounded-full border border-border/60 bg-secondary/60 px-2.5 py-1 text-xs text-secondary-foreground">
                           {isExpanded ? "收起" : "展开"}
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {groupSummary.map((item) => (
-                          <span key={`${group.id}-${item}`} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                          <span key={`${group.id}-${item}`} className="rounded-full bg-secondary/70 px-2.5 py-1 text-xs text-secondary-foreground">
                             {item}
                           </span>
                         ))}
@@ -2713,13 +2723,13 @@ export function CognitionDebugPage() {
                     </button>
 
                     {isExpanded ? (
-                      <div className="border-t border-border/60 bg-slate-50/60 px-4 py-4">
+                      <div className="border-t border-border/60 bg-background/60 px-4 py-4">
                         {group.id === "quick_toggles" ? (
                           <div className="space-y-3">
                             {toggleDefinitions.map((toggle) => (
                               <label
                                 key={toggle.id}
-                                className="flex items-start gap-3 rounded-2xl border border-border/60 bg-white/85 px-4 py-3 text-sm"
+                                className="flex items-start gap-3 rounded-2xl border border-border/60 bg-card/85 px-4 py-3 text-sm"
                               >
                                 <input
                                   type="checkbox"
@@ -2729,7 +2739,7 @@ export function CognitionDebugPage() {
                                 />
                                 <span className="space-y-1">
                                   <span className="block font-medium text-foreground">{toggle.compactLabel}</span>
-                                  <span className="block text-xs text-slate-600">{toggle.description}</span>
+                                  <span className="block text-xs text-muted-foreground">{toggle.description}</span>
                                   <span className="block text-[11px] text-muted-foreground">{toggle.referenceText}</span>
                                 </span>
                               </label>
@@ -2742,13 +2752,13 @@ export function CognitionDebugPage() {
                               .map((slider) => {
                                 const value = slider.state(parameterModalConfig);
                                 return (
-                                  <div key={slider.id} className="rounded-2xl border border-border/60 bg-white/85 px-4 py-3">
+                                  <div key={slider.id} className="rounded-2xl border border-border/60 bg-card/85 px-4 py-3">
                                     <div className="flex items-start justify-between gap-4">
                                       <div className="space-y-1">
                                         <div className="text-sm font-medium text-foreground">{slider.compactLabel}</div>
-                                        <div className="text-xs text-slate-600">{slider.description}</div>
+                                        <div className="text-xs text-muted-foreground">{slider.description}</div>
                                       </div>
-                                      <div className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-800">
+                                      <div className="rounded-full bg-secondary/70 px-2.5 py-1 text-xs font-semibold text-secondary-foreground">
                                         {slider.summaryFormatter(value)}
                                       </div>
                                     </div>
@@ -2774,12 +2784,12 @@ export function CognitionDebugPage() {
               })}
 
               {hasDraftChanges ? (
-                <div className="rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-3 text-xs text-amber-950">
+                <div className="status-surface status-surface--warn rounded-2xl px-4 py-3 text-xs">
                   当前有未应用修改。为避免误关，按 `Esc` 或点击遮罩不会关闭弹层。
                 </div>
               ) : null}
               {parameterApplyError ? (
-                <div className="rounded-2xl border border-rose-300 bg-rose-50/80 px-4 py-3 text-sm text-rose-900">
+                <div className="status-surface status-surface--danger rounded-2xl px-4 py-3 text-sm">
                   {parameterApplyError}
                 </div>
               ) : null}
