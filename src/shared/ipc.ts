@@ -67,6 +67,12 @@ export interface ConsoleChatRequestInput {
   taskMode?: boolean;
 }
 
+export interface AudioCaptureSegmentResult {
+  pcm16Base64: string;
+  durationMs: number;
+  sampleRate: number;
+}
+
 export interface CompanionApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(config: AppConfig): Promise<AppConfig>;
@@ -131,6 +137,10 @@ export interface CompanionApi {
   sendConsoleChat(input: ConsoleChatRequestInput): Promise<{ requestId: string }>;
   sendConsoleChatWithVoice(input: ConsoleChatRequestInput): Promise<{ requestId: string }>;
   stopConsoleChat(requestId: string): Promise<{ accepted: boolean }>;
+  warmupAudioCapture(): Promise<{ ready: boolean }>;
+  startAudioCaptureSegment(): Promise<void>;
+  stopAudioCaptureSegment(): Promise<AudioCaptureSegmentResult>;
+  cancelAudioCaptureSegment(): Promise<{ accepted: boolean }>;
   transcribeVoice(input: {
     pcm16Base64: string;
     sampleRate: number;

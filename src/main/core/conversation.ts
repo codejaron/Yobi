@@ -109,9 +109,36 @@ function getToolOnlyTimelineBlocks(blocks: AssistantTimelineBlock[]): AssistantT
 }
 
 function normalizeErrorMessage(error: unknown, fallback: string): string {
+  const extractStructuredFailureMessage = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (!trimmed.toLowerCase().includes("type validation failed")) {
+      return null;
+    }
+
+    const lower = trimmed.toLowerCase();
+    if (
+      lower.includes("concurrency limit exceeded") ||
+      lower.includes("rate_limit_error") ||
+      lower.includes("rate limit") ||
+      lower.includes("429")
+    ) {
+      return "模型并发已达上限，请稍后重试。";
+    }
+
+    if (lower.includes("insufficient_quota") || lower.includes("quota exceeded")) {
+      return "模型额度不足，请检查配额后重试。";
+    }
+
+    return "模型服务返回了异常响应，请稍后重试。";
+  };
+
   if (error instanceof Error) {
     const message = error.message.trim();
-    return message || fallback;
+    if (!message) {
+      return fallback;
+    }
+
+    return extractStructuredFailureMessage(message) ?? message;
   }
 
   if (typeof error === "string") {
@@ -120,15 +147,31 @@ function normalizeErrorMessage(error: unknown, fallback: string): string {
   }
 
   if (typeof error === "object" && error !== null) {
+    const asRecord = error as Record<string, unknown>;
+    const nestedError =
+      typeof asRecord.error === "object" && asRecord.error !== null
+        ? (asRecord.error as Record<string, unknown>)
+        : null;
+    const nestedType = typeof nestedError?.type === "string" ? nestedError.type.toLowerCase() : "";
+    const nestedMessage = typeof nestedError?.message === "string" ? nestedError.message.trim() : "";
+
+    if (
+      nestedType.includes("rate_limit") ||
+      nestedMessage.toLowerCase().includes("concurrency limit exceeded") ||
+      nestedMessage.toLowerCase().includes("rate limit")
+    ) {
+      return "模型并发已达上限，请稍后重试。";
+    }
+
     const message = "message" in error && typeof error.message === "string" ? error.message.trim() : "";
     if (message) {
-      return message;
+      return extractStructuredFailureMessage(message) ?? message;
     }
 
     try {
       const serialized = JSON.stringify(error);
       if (serialized && serialized !== "{}") {
-        return serialized;
+        return extractStructuredFailureMessage(serialized) ?? serialized;
       }
     } catch {
       // Ignore serialization failures and fall back to the generic copy.
@@ -555,7 +598,11 @@ export class ConversationEngine {
           streamAborted = true;
           lastStreamError = lastStreamError || "LLM 回复已中断。";
         } else {
-          throw error;
+          streamFailed = true;
+          lastStreamError = normalizeErrorMessage(error, "LLM 调用失败，请稍后重试。");
+          logger.warn("conversation", "stream-iteration-failed", {
+            message: lastStreamError
+          }, error);
         }
       }
     } finally {

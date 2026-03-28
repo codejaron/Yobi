@@ -24,6 +24,7 @@ import { RealtimeVoiceService } from "@main/services/realtime-voice";
 import { GlobalPetPushToTalkService } from "@main/services/global-ptt";
 import { SystemPermissionsService } from "@main/services/system-permissions";
 import { PetService } from "@main/services/pet-service";
+import { NativeAudioCaptureService } from "@main/services/native-audio-capture";
 import { ApprovalGuard } from "@main/tools/guard/approval";
 import { DefaultToolRegistry } from "@main/tools/registry";
 import { TokenStatsStore } from "@main/services/token/token-stats-store";
@@ -89,6 +90,7 @@ export interface RuntimeRegistry {
   keepAwake: KeepAwakeService;
   pet: PetWindowController;
   realtimeVoice: RealtimeVoiceService;
+  nativeAudioCapture: NativeAudioCaptureService;
   globalPtt: GlobalPetPushToTalkService;
   systemPermissionsService: SystemPermissionsService;
   petService: PetService;
@@ -198,6 +200,9 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     () => configStore.getConfig(),
     voiceService
   );
+  const nativeAudioCapture = new NativeAudioCaptureService({
+    logger
+  });
   const keepAwake = new KeepAwakeService();
   const pet = new PetWindowController();
   const realtimeVoice = new RealtimeVoiceService({
@@ -218,7 +223,8 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     },
     onStatusChange: () => {
       void callbackBridge.emitStatus();
-    }
+    },
+    captureService: nativeAudioCapture
   });
   const globalPtt = new GlobalPetPushToTalkService();
   const systemPermissionsService = new SystemPermissionsService({
@@ -234,6 +240,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     voiceRouter,
     realtimeVoice,
     globalPtt,
+    nativeAudioCapture,
     systemPermissionsService,
     channelRouter,
     primaryResourceId: input.resourceId,
@@ -355,6 +362,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     keepAwake,
     pet,
     realtimeVoice,
+    nativeAudioCapture,
     globalPtt,
     systemPermissionsService,
     petService,

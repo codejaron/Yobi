@@ -278,6 +278,10 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       }
     ) => runtime.transcribeVoiceInput(payload)
   );
+  ipcMain.handle("audio:capture:warmup", () => runtime.warmupAudioCapture());
+  ipcMain.handle("audio:capture:start-segment", () => runtime.startAudioCaptureSegment());
+  ipcMain.handle("audio:capture:stop-segment", () => runtime.stopAudioCaptureSegment());
+  ipcMain.handle("audio:capture:cancel-segment", () => runtime.cancelAudioCaptureSegment());
   ipcMain.handle("voice:session:get", () => runtime.getVoiceSessionState());
   ipcMain.handle("voice:session:start", (_, payload) => runtime.startVoiceSession(payload));
   ipcMain.handle("voice:session:stop", () => runtime.stopVoiceSession());

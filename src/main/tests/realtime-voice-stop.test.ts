@@ -26,6 +26,13 @@ function createService(overrides?: {
   voiceRouter?: Partial<ConstructorParameters<typeof RealtimeVoiceService>[0]["voiceRouter"]>;
   createVad?: ConstructorParameters<typeof RealtimeVoiceService>[0]["createVad"];
   getConfig?: ConstructorParameters<typeof RealtimeVoiceService>[0]["getConfig"];
+  captureService?: {
+    isNativeSupported?: () => boolean;
+    startStream?: () => Promise<void>;
+    stopStream?: () => Promise<void>;
+    onPcmFrame?: (listener: (frame: { pcm: Buffer; sampleRate: number }) => void) => () => void;
+    stop?: () => Promise<void> | void;
+  };
 }) {
   const service = new RealtimeVoiceService({
     paths: {} as never,
@@ -83,11 +90,86 @@ function createService(overrides?: {
     },
     onRecordUserActivity: async () => undefined,
     onAssistantMessage: async () => undefined,
-    onStatusChange: async () => undefined
+    onStatusChange: async () => undefined,
+    captureService: overrides?.captureService as never
   } as ConstructorParameters<typeof RealtimeVoiceService>[0]);
 
   return service as any;
 }
+
+test("realtime voice: free mode startSession uses native capture service instead of host capture", async () => {
+  const steps: string[] = [];
+  const service = createService({
+    createVad: async () => {
+      steps.push("create-vad");
+      return createFakeVad(async () => ({
+        probability: 0,
+        speechStarted: false,
+        speechEnded: false,
+        speaking: false
+      }));
+    },
+    captureService: {
+      isNativeSupported: () => true,
+      onPcmFrame: () => () => undefined,
+      startStream: async () => {
+        steps.push("start-stream");
+      },
+      stopStream: async () => {
+        steps.push("stop-stream");
+      }
+    }
+  });
+
+  service.host = {
+    send: async (command: VoiceHostCommand) => {
+      steps.push(command.type);
+    }
+  };
+
+  const started = await service.startSession({
+    mode: "free"
+  });
+
+  assert.equal(started.phase, "listening");
+  assert.equal(service.state.phase, "listening");
+  assert.deepEqual(steps, ["create-vad", "start-stream"]);
+});
+
+test("realtime voice: ptt hold uses native capture service instead of host capture", async () => {
+  const steps: string[] = [];
+  const service = createService({
+    captureService: {
+      isNativeSupported: () => true,
+      onPcmFrame: () => () => undefined,
+      startStream: async () => {
+        steps.push("start-stream");
+      },
+      stopStream: async () => {
+        steps.push("stop-stream");
+      }
+    }
+  });
+
+  service.host = {
+    send: async (command: VoiceHostCommand) => {
+      steps.push(command.type);
+    }
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "ptt",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  await service.handlePttPhase("down");
+  await service.handlePttPhase("up");
+
+  assert.deepEqual(steps, ["start-stream", "stop-stream"]);
+});
 
 function createFakeVad(
   processChunk: VoiceActivityDetector["processChunk"]

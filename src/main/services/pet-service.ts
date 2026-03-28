@@ -1,7 +1,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { app } from "electron";
+import { createRequire } from "node:module";
 import type {
   AppConfig,
   ChatAttachment,
@@ -28,6 +28,9 @@ import { shouldPublishEmotionState } from "@main/pet/emotion-state-sync";
 import { shouldUseUnifiedRealtimeVoice } from "@main/services/pet-voice-mode";
 import type { VoiceSessionEvent, VoiceSessionPhase } from "@shared/types";
 import { resolveAssistantSpeechRoute } from "@main/services/assistant-speech-policy";
+import type { NativeAudioCaptureBackend } from "@main/services/native-audio-capture";
+
+const require = createRequire(import.meta.url);
 
 interface PetServiceInput {
   paths: CompanionPaths;
@@ -37,6 +40,7 @@ interface PetServiceInput {
   voiceRouter: VoiceProviderRouter;
   realtimeVoice: RealtimeVoiceService;
   globalPtt: GlobalPetPushToTalkService;
+  nativeAudioCapture?: Pick<NativeAudioCaptureBackend, "isNativeSupported" | "warmup" | "prepare">;
   systemPermissionsService: SystemPermissionsService;
   channelRouter: ChannelRouter;
   primaryResourceId: string;
@@ -54,6 +58,7 @@ export class PetService {
   private lastPublishedAtMs = 0;
   private lastVoicePhase: VoiceSessionPhase = "idle";
   private captureCompanionSpeechContext: (() => Promise<ChatAttachment[]>) | null = null;
+  private nativeCaptureWarmupPromise: Promise<void> | null = null;
 
   constructor(private readonly input: PetServiceInput) {
     this.captureCompanionSpeechContext = input.captureCompanionSpeechContext ?? null;
@@ -240,16 +245,26 @@ export class PetService {
     }
 
     const companionAttachments = await this.captureCompanionSpeechContext?.().catch(() => []) ?? [];
-    const replied = await this.chatFromPet(
-      text,
-      transcribed.metadata
-        ? {
-            provider: this.input.getConfig().voice.asrProvider,
-            metadata: transcribed.metadata
-          }
-        : undefined,
-      companionAttachments
-    );
+    let replied: { replyText: string };
+    try {
+      replied = await this.chatFromPet(
+        text,
+        transcribed.metadata
+          ? {
+              provider: this.input.getConfig().voice.asrProvider,
+              metadata: transcribed.metadata
+            }
+          : undefined,
+        companionAttachments
+      );
+    } catch (error) {
+      return {
+        sent: false,
+        text,
+        metadata: transcribed.metadata,
+        message: error instanceof Error ? error.message.trim() || "语音处理失败，请稍后重试。" : "语音处理失败，请稍后重试。"
+      };
+    }
     return {
       sent: true,
       text,
@@ -273,7 +288,7 @@ export class PetService {
 
     const modelDir = path.isAbsolute(modelDirInput)
       ? modelDirInput
-      : path.join(app.getAppPath(), modelDirInput);
+      : path.join(resolveElectronAppPath(), modelDirInput);
 
     if (!existsSync(modelDir)) {
       this.input.pet.close();
@@ -330,8 +345,12 @@ export class PetService {
     }
 
     try {
+      void this.warmupGlobalPttCapture();
       await this.input.globalPtt.start({
         hotkey: this.input.getConfig().ptt.hotkey,
+        onPrepare: () => {
+          void this.prepareGlobalPttCapture();
+        },
         onPhase: (phase) => {
           void this.handleGlobalPetPushToTalkPhase(phase);
         }
@@ -435,6 +454,42 @@ export class PetService {
     this.input.pet.emitEvent({
       type: "ptt",
       state: "stop"
+    });
+  }
+
+  private warmupGlobalPttCapture(): Promise<void> {
+    const capture = this.input.nativeAudioCapture;
+    if (capture?.isNativeSupported() !== true || typeof capture.warmup !== "function") {
+      return Promise.resolve();
+    }
+
+    if (this.nativeCaptureWarmupPromise) {
+      return this.nativeCaptureWarmupPromise;
+    }
+
+    const promise = capture
+      .warmup()
+      .catch((error) => {
+        logger.warn("pet-service", "global-ptt-native-warmup-failed", undefined, error);
+      })
+      .finally(() => {
+        if (this.nativeCaptureWarmupPromise === promise) {
+          this.nativeCaptureWarmupPromise = null;
+        }
+      });
+
+    this.nativeCaptureWarmupPromise = promise;
+    return promise;
+  }
+
+  private prepareGlobalPttCapture(): Promise<void> {
+    const capture = this.input.nativeAudioCapture;
+    if (capture?.isNativeSupported() !== true || typeof capture.prepare !== "function") {
+      return this.warmupGlobalPttCapture();
+    }
+
+    return capture.prepare().catch((error) => {
+      logger.warn("pet-service", "global-ptt-native-prepare-failed", undefined, error);
     });
   }
 
@@ -598,6 +653,15 @@ export class PetService {
       });
     }
   }
+}
+
+function resolveElectronAppPath(): string {
+  if (!process.versions.electron) {
+    return process.cwd();
+  }
+
+  const electron = require("electron") as { app?: { getAppPath?: () => string } };
+  return electron.app?.getAppPath?.() ?? process.cwd();
 }
 
 function cloneEmotionalState(state: EmotionalState): EmotionalState {

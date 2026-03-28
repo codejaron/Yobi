@@ -128,6 +128,18 @@ const api = {
   stopConsoleChat(requestId) {
     return ipcRenderer.invoke('console:chat:stop', { requestId });
   },
+  warmupAudioCapture() {
+    return ipcRenderer.invoke('audio:capture:warmup');
+  },
+  startAudioCaptureSegment() {
+    return ipcRenderer.invoke('audio:capture:start-segment');
+  },
+  stopAudioCaptureSegment() {
+    return ipcRenderer.invoke('audio:capture:stop-segment');
+  },
+  cancelAudioCaptureSegment() {
+    return ipcRenderer.invoke('audio:capture:cancel-segment');
+  },
   transcribeVoice(input) {
     return ipcRenderer.invoke('voice:transcribe', input);
   },

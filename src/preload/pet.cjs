@@ -7,6 +7,18 @@ const petApi = {
   transcribeAndSendFromPet(input) {
     return ipcRenderer.invoke('pet:voice:transcribe-and-send', input);
   },
+  warmupSegmentCapture() {
+    return ipcRenderer.invoke('audio:capture:warmup');
+  },
+  startSegmentCapture() {
+    return ipcRenderer.invoke('audio:capture:start-segment');
+  },
+  stopSegmentCapture() {
+    return ipcRenderer.invoke('audio:capture:stop-segment');
+  },
+  cancelSegmentCapture() {
+    return ipcRenderer.invoke('audio:capture:cancel-segment');
+  },
   moveWindowBy(input) {
     ipcRenderer.send('pet:window:move-by', input);
   },

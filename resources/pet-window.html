@@ -499,7 +499,13 @@
         return btoa(binary);
       };
 
-      const createPcm16Recorder = () => {
+      const isNativeCaptureUnsupported = (error) => {
+        const message =
+          error && typeof error === "object" && "message" in error ? String(error.message) : String(error ?? "");
+        return /unsupported|不支持/i.test(message);
+      };
+
+      const createBrowserPcm16Recorder = () => {
         let stream = null;
         let audioContext = null;
         let sourceNode = null;
@@ -609,6 +615,113 @@
           },
           async cancel() {
             await teardown(false);
+          }
+        };
+      };
+
+      const createPcm16Recorder = () => {
+        const browserRecorder = createBrowserPcm16Recorder();
+        let backend = null;
+        let nativeRecording = false;
+        let startPromise = null;
+        let pendingBackend = null;
+
+        if (petBridge && typeof petBridge.warmupSegmentCapture === "function") {
+          Promise.resolve(petBridge.warmupSegmentCapture()).catch(() => undefined);
+        }
+
+        return {
+          isRecording() {
+            if (pendingBackend === "native") {
+              return true;
+            }
+
+            if (pendingBackend === "browser") {
+              return true;
+            }
+
+            if (backend === "native") {
+              return nativeRecording;
+            }
+
+            return browserRecorder.isRecording();
+          },
+          async start() {
+            if (backend) {
+              return;
+            }
+
+            if (startPromise) {
+              return startPromise;
+            }
+
+            startPromise = (async () => {
+              if (
+                petBridge &&
+                typeof petBridge.startSegmentCapture === "function" &&
+                typeof petBridge.stopSegmentCapture === "function"
+              ) {
+                try {
+                  pendingBackend = "native";
+                  await petBridge.startSegmentCapture();
+                  backend = "native";
+                  nativeRecording = true;
+                  return;
+                } catch (error) {
+                  if (!isNativeCaptureUnsupported(error)) {
+                    throw error;
+                  }
+                }
+              }
+
+              pendingBackend = "browser";
+              await browserRecorder.start();
+              backend = "browser";
+            })().finally(() => {
+              startPromise = null;
+              pendingBackend = null;
+            });
+
+            return startPromise;
+          },
+          async stop(outputRate = 16000) {
+            if (startPromise) {
+              await startPromise.catch(() => undefined);
+            }
+
+            const activeBackend = backend;
+            backend = null;
+            if (activeBackend === "native") {
+              nativeRecording = false;
+              return petBridge.stopSegmentCapture();
+            }
+
+            if (!activeBackend) {
+              return {
+                pcm16Base64: "",
+                sampleRate: outputRate,
+                durationMs: 0
+              };
+            }
+
+            return browserRecorder.stop(outputRate);
+          },
+          async cancel() {
+            if (startPromise) {
+              await startPromise.catch(() => undefined);
+            }
+
+            const activeBackend = backend;
+            backend = null;
+            if (activeBackend === "native") {
+              nativeRecording = false;
+              if (petBridge && typeof petBridge.cancelSegmentCapture === "function") {
+                await petBridge.cancelSegmentCapture();
+              }
+              return;
+            }
+
+            await browserRecorder.cancel();
           }
         };
       };

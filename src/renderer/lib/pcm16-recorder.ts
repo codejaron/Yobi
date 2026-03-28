@@ -4,6 +4,15 @@ interface Pcm16Capture {
   sampleRate: number;
 }
 
+export async function warmupPcm16Recorder(): Promise<void> {
+  await window.companion.warmupAudioCapture();
+}
+
+function isNativeCaptureUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /unsupported|不支持/i.test(message);
+}
+
 function mergeChunks(chunks: Float32Array[]): Float32Array {
   if (chunks.length === 0) {
     return new Float32Array(0);
@@ -78,7 +87,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export class Pcm16Recorder {
+class BrowserPcm16Recorder {
   private stream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
@@ -200,5 +209,128 @@ export class Pcm16Recorder {
       sampleRate,
       elapsedMs
     };
+  }
+}
+
+class NativeSegmentRecorder {
+  private recording = false;
+  private startPromise: Promise<void> | null = null;
+
+  isRecording(): boolean {
+    return this.recording || this.startPromise !== null;
+  }
+
+  async start(): Promise<void> {
+    if (this.recording) {
+      return;
+    }
+
+    if (this.startPromise) {
+      return this.startPromise;
+    }
+
+    const promise = window.companion
+      .startAudioCaptureSegment()
+      .then(() => {
+        this.recording = true;
+      })
+      .finally(() => {
+        this.startPromise = null;
+      });
+
+    this.startPromise = promise;
+    return promise;
+  }
+
+  async stop(_outputRate = 16_000): Promise<Pcm16Capture> {
+    await this.startPromise?.catch(() => undefined);
+    if (!this.recording) {
+      return {
+        pcm16Base64: "",
+        durationMs: 0,
+        sampleRate: 16_000
+      };
+    }
+
+    const captured = await window.companion.stopAudioCaptureSegment();
+    this.recording = false;
+    return captured;
+  }
+
+  async cancel(): Promise<void> {
+    await this.startPromise?.catch(() => undefined);
+    if (!this.recording) {
+      return;
+    }
+
+    await window.companion.cancelAudioCaptureSegment();
+    this.recording = false;
+  }
+}
+
+export class Pcm16Recorder {
+  private backend: BrowserPcm16Recorder | NativeSegmentRecorder | null = null;
+  private pendingBackend: BrowserPcm16Recorder | NativeSegmentRecorder | null = null;
+  private startPromise: Promise<void> | null = null;
+
+  isRecording(): boolean {
+    return this.backend?.isRecording() ?? this.pendingBackend?.isRecording() ?? false;
+  }
+
+  async start(): Promise<void> {
+    if (this.backend) {
+      return;
+    }
+
+    if (this.startPromise) {
+      return this.startPromise;
+    }
+
+    const promise = (async () => {
+      try {
+        const nativeRecorder = new NativeSegmentRecorder();
+        this.pendingBackend = nativeRecorder;
+        await nativeRecorder.start();
+        this.backend = nativeRecorder;
+        return;
+      } catch (error) {
+        if (!isNativeCaptureUnsupported(error)) {
+          throw error;
+        }
+      }
+
+      const browserRecorder = new BrowserPcm16Recorder();
+      this.pendingBackend = browserRecorder;
+      await browserRecorder.start();
+      this.backend = browserRecorder;
+    })().finally(() => {
+      this.startPromise = null;
+      this.pendingBackend = null;
+    });
+
+    this.startPromise = promise;
+    return promise;
+  }
+
+  async stop(outputRate = 16_000): Promise<Pcm16Capture> {
+    await this.startPromise?.catch(() => undefined);
+    const backend = this.backend;
+    this.backend = null;
+    if (!backend) {
+      return {
+        pcm16Base64: "",
+        durationMs: 0,
+        sampleRate: outputRate
+      };
+    }
+
+    return backend.stop(outputRate);
+  }
+
+  async cancel(): Promise<void> {
+    await this.startPromise?.catch(() => undefined);
+    const backend = this.backend;
+    this.backend = null;
+    await backend?.cancel();
   }
 }

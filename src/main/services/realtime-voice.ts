@@ -25,6 +25,7 @@ import {
 } from "./realtime-voice-vad";
 import { VoiceHostWindowController, type VoiceHostMessage } from "./voice-host-window";
 import { VoiceProviderRouter, type StreamingAsrSession, type StreamingTtsSession } from "./voice-router";
+import type { NativeAudioCaptureBackend } from "./native-audio-capture";
 
 interface RealtimeVoiceServiceInput {
   paths: CompanionPaths;
@@ -50,6 +51,7 @@ interface RealtimeVoiceServiceInput {
     config: VoiceActivityDetectorConfig;
     logger: AppLogger;
   }) => Promise<VoiceActivityDetector>;
+  captureService?: NativeAudioCaptureBackend;
 }
 
 function nowIso(): string {
@@ -88,6 +90,7 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
 
 export class RealtimeVoiceService {
   private readonly host: VoiceHostWindowController;
+  private readonly captureService: NativeAudioCaptureBackend | null;
   private readonly listeners = new Set<(event: VoiceSessionEvent) => void>();
   private assistantReplyHook:
     | ((input: {
@@ -134,6 +137,7 @@ export class RealtimeVoiceService {
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
     this.host = new VoiceHostWindowController(input.logger);
+    this.captureService = input.captureService ?? null;
     this.captureCompanionSpeechStartContext = input.captureCompanionSpeechStartContext ?? null;
     this.captureCompanionSpeechRecapture = input.captureCompanionSpeechRecapture ?? null;
     this.state = createEmptyVoiceState(this.input.getConfig().realtimeVoice.mode);
@@ -142,11 +146,21 @@ export class RealtimeVoiceService {
         this.fail(error instanceof Error ? error.message : "实时语音处理失败");
       });
     });
+    this.captureService?.onPcmFrame((frame) => {
+      void this.handlePcmFrame(frame.pcm, frame.sampleRate).catch((error) => {
+        this.fail(error instanceof Error ? error.message : "实时语音处理失败");
+      });
+    });
   }
 
   start(): void {
     const config = this.input.getConfig();
     this.state = createEmptyVoiceState(config.realtimeVoice.mode);
+    if (this.shouldUseNativeCapture()) {
+      void this.captureService?.warmup?.().catch((error) => {
+        this.input.logger.warn("realtime-voice", "native-capture-warmup-failed", undefined, error);
+      });
+    }
     void this.ensureVadReady().catch((error) => {
       this.input.logger.warn("realtime-voice", "vad-warmup-failed", undefined, error);
     });
@@ -167,6 +181,7 @@ export class RealtimeVoiceService {
     this.finishAwaitingCaptureStart("error");
     this.host.close();
     this.disposeVad();
+    void this.captureService?.stop().catch(() => undefined);
   }
 
   setAssistantReplyHook(
@@ -239,20 +254,24 @@ export class RealtimeVoiceService {
 
     if (mode === "free") {
       await this.ensureVadReady();
-      const captureStart = this.beginAwaitingCaptureStart();
-      try {
-        await this.host.send({
-          type: "start-capture",
-          aecEnabled: config.realtimeVoice.aecEnabled
-        });
-      } catch (error) {
-        this.finishAwaitingCaptureStart("error");
-        throw error;
-      }
+      if (this.shouldUseNativeCapture()) {
+        await this.captureService?.startStream();
+      } else {
+        const captureStart = this.beginAwaitingCaptureStart();
+        try {
+          await this.host.send({
+            type: "start-capture",
+            aecEnabled: config.realtimeVoice.aecEnabled
+          });
+        } catch (error) {
+          this.finishAwaitingCaptureStart("error");
+          throw error;
+        }
 
-      if ((await captureStart) !== "started") {
-        await this.notifyStatusChange();
-        return this.getState();
+        if ((await captureStart) !== "started") {
+          await this.notifyStatusChange();
+          return this.getState();
+        }
       }
     }
 
@@ -272,9 +291,13 @@ export class RealtimeVoiceService {
 
     await this.abortActiveResponse("system");
     this.finishAwaitingCaptureStart("error");
-    await this.host.send({
-      type: "stop-capture"
-    }).catch(() => undefined);
+    if (this.shouldUseNativeCapture()) {
+      await this.captureService?.stopStream().catch(() => undefined);
+    } else {
+      await this.host.send({
+        type: "stop-capture"
+      }).catch(() => undefined);
+    }
     await this.host.send({
       type: "clear-playback"
     }).catch(() => undefined);
@@ -322,14 +345,22 @@ export class RealtimeVoiceService {
     }
 
     if (mode === "free") {
-      await this.host.send({
-        type: "start-capture",
-        aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
-      });
+      if (this.shouldUseNativeCapture()) {
+        await this.captureService?.startStream();
+      } else {
+        await this.host.send({
+          type: "start-capture",
+          aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
+        });
+      }
     } else if (!this.pttHeld) {
-      await this.host.send({
-        type: "stop-capture"
-      }).catch(() => undefined);
+      if (this.shouldUseNativeCapture()) {
+        await this.captureService?.stopStream().catch(() => undefined);
+      } else {
+        await this.host.send({
+          type: "stop-capture"
+        }).catch(() => undefined);
+      }
     }
 
     return this.getState();
@@ -354,10 +385,14 @@ export class RealtimeVoiceService {
       this.pttHeld = true;
       this.resetSpeechTracking();
       await this.beginSpeech();
-      await this.host.send({
-        type: "start-capture",
-        aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
-      });
+      if (this.shouldUseNativeCapture()) {
+        await this.captureService?.startStream();
+      } else {
+        await this.host.send({
+          type: "start-capture",
+          aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
+        });
+      }
       return;
     }
 
@@ -366,10 +401,18 @@ export class RealtimeVoiceService {
     }
 
     this.pttHeld = false;
-    await this.host.send({
-      type: "stop-capture"
-    }).catch(() => undefined);
+    if (this.shouldUseNativeCapture()) {
+      await this.captureService?.stopStream().catch(() => undefined);
+    } else {
+      await this.host.send({
+        type: "stop-capture"
+      }).catch(() => undefined);
+    }
     await this.finishSpeech();
+  }
+
+  private shouldUseNativeCapture(): boolean {
+    return this.captureService?.isNativeSupported() === true;
   }
 
   async speakText(text: string): Promise<void> {

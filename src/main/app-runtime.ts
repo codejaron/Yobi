@@ -23,6 +23,7 @@ import {
   type VoiceSessionTarget,
   type VoiceTranscriptionResult
 } from "@shared/types";
+import type { AudioCaptureSegmentResult } from "@shared/ipc";
 import type { ProviderModelListResult } from "@shared/provider-catalog";
 import type {
   ActivationLogEntry,
@@ -99,6 +100,7 @@ export class CompanionRuntime {
   private readonly consoleChannel: RuntimeRegistry["consoleChannel"];
   private readonly voiceRouter: RuntimeRegistry["voiceRouter"];
   private readonly realtimeVoice: RuntimeRegistry["realtimeVoice"];
+  private readonly nativeAudioCapture: RuntimeRegistry["nativeAudioCapture"];
   private readonly pet: RuntimeRegistry["pet"];
   private readonly petService: RuntimeRegistry["petService"];
   private readonly systemPermissionsService: RuntimeRegistry["systemPermissionsService"];
@@ -136,6 +138,7 @@ export class CompanionRuntime {
     this.consoleChannel = registry.consoleChannel;
     this.voiceRouter = registry.voiceRouter;
     this.realtimeVoice = registry.realtimeVoice;
+    this.nativeAudioCapture = registry.nativeAudioCapture;
     this.pet = registry.pet;
     this.petService = registry.petService;
     this.systemPermissionsService = registry.systemPermissionsService;
@@ -300,6 +303,7 @@ export class CompanionRuntime {
     await this.stopFeishu();
     await this.stopQQ();
     await this.telegram.stop();
+    await this.nativeAudioCapture.stop().catch(() => undefined);
     this.logger.info("runtime", "stop:complete");
   }
 
@@ -743,6 +747,25 @@ export class CompanionRuntime {
     sampleRate?: number;
   }): Promise<VoiceTranscriptionResult> {
     return this.petService.transcribeVoiceInput(input);
+  }
+
+  async startAudioCaptureSegment(): Promise<void> {
+    await this.nativeAudioCapture.startSegment();
+  }
+
+  async warmupAudioCapture(): Promise<{ ready: boolean }> {
+    await this.nativeAudioCapture.warmup();
+    return {
+      ready: true
+    };
+  }
+
+  async stopAudioCaptureSegment(): Promise<AudioCaptureSegmentResult> {
+    return this.nativeAudioCapture.stopSegment();
+  }
+
+  async cancelAudioCaptureSegment(): Promise<{ accepted: boolean }> {
+    return this.nativeAudioCapture.cancelSegment();
   }
 
   async transcribeAndSendFromPet(input: {

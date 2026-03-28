@@ -7,8 +7,9 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "prebuild": "npm run prebuild:live2d-core && npm run prebuild:sensevoice-assets && npm run prebuild:mac-screen-capture-helper",
+    "prebuild": "npm run prebuild:live2d-core && npm run prebuild:sensevoice-assets && npm run prebuild:mac-screen-capture-helper && npm run prebuild:native-audio-helper",
     "prebuild:mac-screen-capture-helper": "node build/build-mac-screen-capture-helper.mjs",
+    "prebuild:native-audio-helper": "node build/build-native-audio-helper.mjs",
     "prebuild:live2d-core": "node build/prebuild-live2d-core.mjs",
     "prebuild:sensevoice-assets": "node build/prebuild-sensevoice-assets.mjs",
     "build:sensevoice-backend": "node build/build-sensevoice-backend.mjs",
@@ -96,6 +97,13 @@
       {
         "from": "resources/mac-screen-capture/bin",
         "to": "mac-screen-capture/bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/native-audio/bin",
+        "to": "native-audio/bin",
         "filter": [
           "**/*"
         ]

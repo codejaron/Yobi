@@ -27,10 +27,13 @@ Thumbs.db
 resources/models/
 resources/openclaw-runtime/
 resources/sensevoice/
-resources/mac-screen-capture/bin/*
+resources/mac-screen-capture/bin/**
 !resources/mac-screen-capture/bin/.gitkeep
+resources/native-audio/bin/**
+!resources/native-audio/bin/.gitkeep
 resources/live2dcubismcore.min.js
 resources/vendor/*.min.js
 resources/vendor/live2dcubismcore.min.js
+native/audio-helper/target/
 
 fbank_lfr_cmvn_feature.json

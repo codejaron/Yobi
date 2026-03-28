@@ -58,7 +58,7 @@ import {
   shouldDisableConsoleMicButton,
   toggleCompanionModeWithVoiceSessionSync
 } from "@shared/console-chat-voice";
-import { Pcm16Recorder } from "@renderer/lib/pcm16-recorder";
+import { Pcm16Recorder, warmupPcm16Recorder } from "@renderer/lib/pcm16-recorder";
 import { makeClientId } from "@renderer/pages/chat-utils";
 import {
   APPROVAL_OPTIONS,
@@ -306,6 +306,10 @@ export function useConsoleChatController(input: {
         : [],
     [slashCommands, slashMenuOpen, slashQuery]
   );
+
+  useEffect(() => {
+    void warmupPcm16Recorder().catch(() => undefined);
+  }, []);
 
   const pushAssistantError = useCallback((message: string) => {
     setHistoryState((current) => ({

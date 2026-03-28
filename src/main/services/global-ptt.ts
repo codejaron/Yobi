@@ -6,6 +6,7 @@ export type GlobalPttPhase = "down" | "up";
 interface GlobalPttStartInput {
   hotkey: string;
   onPhase: (phase: GlobalPttPhase) => void;
+  onPrepare?: () => void;
 }
 
 interface UiohookKeyboardEvent {
@@ -238,9 +239,11 @@ function loadUiohook(): UiohookLike {
 export class GlobalPetPushToTalkService {
   private hook: UiohookLike | null = null;
   private onPhase: ((phase: GlobalPttPhase) => void) | null = null;
+  private onPrepare: (() => void) | null = null;
   private currentHotkey: GlobalHotkeyConfig | null = null;
   private primaryKeyPressed = false;
   private comboActive = false;
+  private prepareActive = false;
   private readonly handleKeyDown = (event: UiohookKeyboardEvent) => {
     this.handleEvent(event, true);
   };
@@ -250,6 +253,7 @@ export class GlobalPetPushToTalkService {
 
   async start(input: GlobalPttStartInput): Promise<void> {
     this.onPhase = input.onPhase;
+    this.onPrepare = input.onPrepare ?? null;
 
     const parsed = parseHotkey(input.hotkey);
     if (this.hook && this.currentHotkey?.signature === parsed.signature) {
@@ -267,6 +271,7 @@ export class GlobalPetPushToTalkService {
     this.currentHotkey = parsed;
     this.primaryKeyPressed = false;
     this.comboActive = false;
+    this.prepareActive = false;
   }
 
   stop(): void {
@@ -277,6 +282,8 @@ export class GlobalPetPushToTalkService {
 
     this.primaryKeyPressed = false;
     this.currentHotkey = null;
+    this.onPrepare = null;
+    this.prepareActive = false;
 
     if (!this.hook) {
       return;
@@ -320,6 +327,14 @@ export class GlobalPetPushToTalkService {
       this.primaryKeyPressed = isKeyDown;
     }
 
+    const modifierPrimed = this.hasAnyRequiredModifier(event, hotkey);
+    if (isKeyDown && modifierPrimed && !this.prepareActive) {
+      this.prepareActive = true;
+      this.safeEmitPrepare();
+    } else if (!modifierPrimed && !this.comboActive) {
+      this.prepareActive = false;
+    }
+
     const active = this.primaryKeyPressed && this.matchesModifiers(event, hotkey);
     if (active === this.comboActive) {
       return;
@@ -327,6 +342,15 @@ export class GlobalPetPushToTalkService {
 
     this.comboActive = active;
     this.safeEmitPhase(active ? "down" : "up");
+  }
+
+  private hasAnyRequiredModifier(event: UiohookKeyboardEvent, hotkey: GlobalHotkeyConfig): boolean {
+    return (
+      (hotkey.alt && asBoolean(event.altKey)) ||
+      (hotkey.ctrl && asBoolean(event.ctrlKey)) ||
+      (hotkey.shift && asBoolean(event.shiftKey)) ||
+      (hotkey.meta && asBoolean(event.metaKey))
+    );
   }
 
   private matchesModifiers(event: UiohookKeyboardEvent, hotkey: GlobalHotkeyConfig): boolean {
@@ -354,6 +378,14 @@ export class GlobalPetPushToTalkService {
       this.onPhase?.(phase);
     } catch (error) {
       logger.warn("global-ptt", "phase-listener-failed", undefined, error);
+    }
+  }
+
+  private safeEmitPrepare(): void {
+    try {
+      this.onPrepare?.();
+    } catch (error) {
+      logger.warn("global-ptt", "prepare-listener-failed", undefined, error);
     }
   }
 }
