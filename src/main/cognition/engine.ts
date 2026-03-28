@@ -133,6 +133,11 @@ interface DialogueIngestInput {
   chatId?: string;
 }
 
+interface DialogueTranscriptEntry {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export class CognitionEngine {
   private static readonly EMBEDDING_PROBE_TEXT = "认知图 embedding probe";
 
@@ -146,6 +151,7 @@ export class CognitionEngine {
   private embeddingRepairPromise: Promise<void> | null = null;
   private recentDialogueResidue: string[] = [];
   private lastDialogueTime: number | null = null;
+  private pendingDialogueRounds: DialogueIngestInput[] = [];
   private emotionState: EmotionStateManager | null = null;
   private predictionEngine: PredictionEngine | null = null;
   private attentionSchema: AttentionSchema | null = null;
@@ -183,51 +189,7 @@ export class CognitionEngine {
     if (!normalizedAssistant && !normalizedUser) {
       return;
     }
-
-    const appConfig = this.input.getConfig();
-    const prompt = buildDialogueExtractionPrompt({
-      channel: input.channel,
-      chatId: input.chatId ?? null,
-      user: normalizedUser,
-      assistant: normalizedAssistant,
-      nowIso: new Date().toISOString()
-    });
-    const result = await generateStructuredJson({
-      model: this.modelFactory.getCognitionModel(),
-      providerOptions: resolveOpenAIStoreOption(appConfig, "cognition"),
-      schema: combinedExtractionSchema,
-      maxAttempts: 3,
-      prompt
-    });
-    reportCognitionTokenUsage({
-      usage: result.usage,
-      inputText: prompt,
-      outputText: result.text
-    });
-
-    const parsed = result.object as CombinedDialogueExtractionDraft;
     const now = Date.now();
-    await applyCombinedExtraction({
-      paths: this.input.paths,
-      graph: this.requireGraph(),
-      channel: input.channel,
-      draft: parsed,
-      cognitionConfig: this.requireConfig(),
-      nowMs: now,
-      memory: {
-        embedText: (text) => this.input.memory.embedText(text),
-        getFactsStore: () => {
-          if (!this.input.memory.getFactsStore) {
-            throw new Error("facts store unavailable");
-          }
-          return this.input.memory.getFactsStore();
-        },
-        syncFactEmbeddings: async (facts) => {
-          await this.input.memory.syncFactEmbeddings?.(facts);
-        }
-      }
-    });
-    this.requireGraph().serialize();
     const residue = [normalizedUser, normalizedAssistant]
       .filter((value) => value.length > 0)
       .join("\n");
@@ -237,8 +199,21 @@ export class CognitionEngine {
         this.recentDialogueResidue.shift();
       }
       this.lastDialogueTime = now;
-      this.queueEmotionAnalysis(residue);
     }
+
+    this.pendingDialogueRounds.push({
+      channel: input.channel,
+      chatId: input.chatId,
+      userText: normalizedUser,
+      assistantText: normalizedAssistant
+    });
+    if (this.pendingDialogueRounds.length < this.getDialogueBatchRounds()) {
+      return;
+    }
+
+    const roundsToProcess = [...this.pendingDialogueRounds];
+    await this.processDialogueBatch(roundsToProcess);
+    this.pendingDialogueRounds = [];
   }
 
   async buildReplyMemoryBlock(text: string): Promise<string> {
@@ -729,15 +704,134 @@ export class CognitionEngine {
       );
     });
   }
+
+  protected async processDialogueBatch(
+    rounds: Array<{ userText?: string; assistantText: string; channel?: string; chatId?: string }>
+  ): Promise<void> {
+    const normalizedRounds = rounds
+      .map((round) => ({
+        channel: typeof round.channel === "string" && round.channel.trim() ? round.channel : "console",
+        chatId: typeof round.chatId === "string" ? round.chatId : undefined,
+        userText: round.userText?.trim() ?? "",
+        assistantText: round.assistantText.trim()
+      }))
+      .filter((round) => round.userText.length > 0 || round.assistantText.length > 0);
+    if (normalizedRounds.length === 0) {
+      return;
+    }
+
+    const transcript = normalizedRounds.flatMap<DialogueTranscriptEntry>((round) => {
+      const entries: DialogueTranscriptEntry[] = [];
+      if (round.userText.length > 0) {
+        entries.push({
+          role: "user",
+          text: round.userText
+        });
+      }
+      if (round.assistantText.length > 0) {
+        entries.push({
+          role: "assistant",
+          text: round.assistantText
+        });
+      }
+      return entries;
+    });
+    const latestRound = normalizedRounds[normalizedRounds.length - 1]!;
+    const latestUserMessage =
+      [...transcript].reverse().find((entry) => entry.role === "user")?.text
+      ?? latestRound.assistantText;
+
+    const appConfig = this.input.getConfig();
+    const prompt = buildDialogueExtractionPrompt({
+      channel: latestRound.channel,
+      chatId: latestRound.chatId ?? null,
+      transcript,
+      latestUserMessage,
+      nowIso: new Date().toISOString()
+    });
+    const result = await generateStructuredJson({
+      model: this.modelFactory.getCognitionModel(),
+      providerOptions: resolveOpenAIStoreOption(appConfig, "cognition"),
+      schema: combinedExtractionSchema,
+      maxAttempts: 3,
+      prompt
+    });
+    reportCognitionTokenUsage({
+      usage: result.usage,
+      inputText: prompt,
+      outputText: result.text
+    });
+
+    const parsed = result.object as CombinedDialogueExtractionDraft;
+    const now = Date.now();
+    await applyCombinedExtraction({
+      paths: this.input.paths,
+      graph: this.requireGraph(),
+      channel: latestRound.channel,
+      draft: parsed,
+      cognitionConfig: this.requireConfig(),
+      nowMs: now,
+      memory: {
+        embedText: (text) => this.input.memory.embedText(text),
+        getFactsStore: () => {
+          if (!this.input.memory.getFactsStore) {
+            throw new Error("facts store unavailable");
+          }
+          return this.input.memory.getFactsStore();
+        },
+        syncFactEmbeddings: async (facts) => {
+          await this.input.memory.syncFactEmbeddings?.(facts);
+        }
+      }
+    });
+    this.requireGraph().serialize();
+    this.queueEmotionAnalysis(transcript.map((entry) => entry.text).join("\n"));
+  }
+
+  private getDialogueBatchRounds(): number {
+    const configured = this.input.getConfig().memory.cognitionBatchRounds;
+    if (!Number.isFinite(configured)) {
+      return 10;
+    }
+    return Math.max(1, Math.min(50, Math.floor(configured)));
+  }
 }
 
 export function buildDialogueExtractionPrompt(input: {
   channel: string;
   chatId: string | null;
-  user: string;
-  assistant: string;
+  transcript?: DialogueTranscriptEntry[];
+  latestUserMessage?: string;
+  user?: string;
+  assistant?: string;
   nowIso: string;
 }): string {
+  const transcript = (input.transcript && input.transcript.length > 0
+    ? input.transcript
+    : [
+        ...(input.user?.trim()
+          ? [
+              {
+                role: "user" as const,
+                text: input.user.trim()
+              }
+            ]
+          : []),
+        ...(input.assistant?.trim()
+          ? [
+              {
+                role: "assistant" as const,
+                text: input.assistant.trim()
+              }
+            ]
+          : [])
+      ]).filter((entry) => entry.text.length > 0);
+  const latestUserMessage =
+    input.latestUserMessage?.trim()
+    || [...transcript].reverse().find((entry) => entry.role === "user")?.text
+    || transcript[transcript.length - 1]?.text
+    || "";
+
   return [
     "Extract sentence-level facts, structured fact_operations, and a memory graph from the dialogue below.",
     "Return exactly one JSON object with the keys facts, fact_operations, and graph.",
@@ -809,8 +903,8 @@ export function buildDialogueExtractionPrompt(input: {
       {
         channel: input.channel,
         chat_id: input.chatId,
-        user: input.user,
-        assistant: input.assistant,
+        latest_user_message: latestUserMessage,
+        transcript,
         now_iso: input.nowIso
       },
       null,

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { AppConfig } from "@shared/types";
+import { DEFAULT_CONFIG, type AppConfig } from "@shared/types";
 import {
   DEFAULT_COGNITION_CONFIG,
   type CognitionConfig,
@@ -330,6 +330,70 @@ test("CognitionEngine swallows emotion analysis failures and logs emotion_analys
 
     assert.equal(warnings[0]?.event, "emotion_analysis_skipped");
     assert.equal(warnings[0]?.reason, "boom");
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
+test("CognitionEngine batches dialogue ingestion by configured round count", async () => {
+  const paths = await createTempPaths("yobi-cognition-batch-rounds-");
+  try {
+    await ensureKernelBootstrap(paths);
+
+    const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as AppConfig;
+    config.memory.cognitionBatchRounds = 10;
+
+    class TestCognitionEngine extends CognitionEngine {
+      readonly batches: Array<Array<{ userText: string; assistantText: string }>> = [];
+
+      protected override async processDialogueBatch(
+        rounds: Array<{ userText?: string; assistantText: string }>
+      ): Promise<void> {
+        this.batches.push(
+          rounds.map((round) => ({
+            userText: round.userText ?? "",
+            assistantText: round.assistantText
+          }))
+        );
+      }
+    }
+
+    const engine = new TestCognitionEngine({
+      paths,
+      getConfig: () => config,
+      memory: {
+        embedText: async () => [],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      conversation: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never
+    });
+
+    for (let index = 1; index <= 9; index += 1) {
+      await engine.ingestDialogue({
+        channel: "console",
+        userText: `用户第 ${index} 轮`,
+        assistantText: `助手第 ${index} 轮`
+      });
+    }
+
+    assert.equal(engine.batches.length, 0);
+
+    await engine.ingestDialogue({
+      channel: "console",
+      userText: "用户第 10 轮",
+      assistantText: "助手第 10 轮"
+    });
+
+    assert.equal(engine.batches.length, 1);
+    assert.equal(engine.batches[0]?.length, 10);
+    assert.equal(engine.batches[0]?.[0]?.userText, "用户第 1 轮");
+    assert.equal(engine.batches[0]?.[9]?.assistantText, "助手第 10 轮");
   } finally {
     await cleanupPaths(paths);
   }

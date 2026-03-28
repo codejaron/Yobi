@@ -14,8 +14,17 @@ test("buildDialogueExtractionPrompt requires natural-language fields to follow t
   const prompt = buildDialogueExtractionPrompt({
     channel: "console",
     chatId: "chat-1",
-    user: "我最近总是加班，好累。",
-    assistant: "你最近压力很大。",
+    transcript: [
+      {
+        role: "user",
+        text: "我最近总是加班，好累。"
+      },
+      {
+        role: "assistant",
+        text: "你最近压力很大。"
+      }
+    ],
+    latestUserMessage: "我最近总是加班，好累。",
     nowIso: "2026-03-26T00:00:00.000Z"
   });
 
@@ -24,6 +33,37 @@ test("buildDialogueExtractionPrompt requires natural-language fields to follow t
   assert.match(prompt, /fact\.key should remain concise and stable across turns/i);
   assert.match(prompt, /Do not translate placeholders, proper names, product names, code, commands, file paths, version numbers, or quoted text/i);
   assert.match(prompt, /graph\.edges\[\]\.source_content\/target_content and graph\.entity_merges must reuse the exact node content or mention text/i);
+});
+
+test("buildDialogueExtractionPrompt accepts multi-round transcript input", () => {
+  const prompt = buildDialogueExtractionPrompt({
+    channel: "console",
+    chatId: "chat-1",
+    transcript: [
+      {
+        role: "user",
+        text: "第一轮：我最近在学 Spring。"
+      },
+      {
+        role: "assistant",
+        text: "听起来你在补后端技能树。"
+      },
+      {
+        role: "user",
+        text: "第二轮：最近还在看 Redis。"
+      },
+      {
+        role: "assistant",
+        text: "这两块放在一起很适合后端日常。"
+      }
+    ],
+    latestUserMessage: "第二轮：最近还在看 Redis。",
+    nowIso: "2026-03-26T00:00:00.000Z"
+  });
+
+  assert.match(prompt, /第一轮：我最近在学 Spring。/);
+  assert.match(prompt, /第二轮：最近还在看 Redis。/);
+  assert.match(prompt, /same language as the latest user message/i);
 });
 
 test("buildColdStartSeedPrompt keeps cold-start node content in the soul language", () => {

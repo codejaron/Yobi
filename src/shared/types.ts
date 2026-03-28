@@ -309,6 +309,7 @@ export const appConfigSchema = z
     memory: z
       .object({
         recentMessages: z.number().int().min(10).max(400).default(MEMORY_RUNTIME_DEFAULTS.recentMessages),
+        cognitionBatchRounds: z.number().int().min(1).max(50).default(10),
         embedding: z
           .object({
             enabled: z.boolean().default(true),
@@ -1490,6 +1491,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   memory: {
     recentMessages: MEMORY_RUNTIME_DEFAULTS.recentMessages,
+    cognitionBatchRounds: 10,
     embedding: {
       enabled: true,
       similarityThreshold: MEMORY_RUNTIME_DEFAULTS.embedding.similarityThreshold

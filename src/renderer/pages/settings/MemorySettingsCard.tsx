@@ -41,6 +41,9 @@ export function MemorySettingsCard({
   const semanticEnabled = config.memory.embedding.enabled;
   const showFallbackWarning = semanticEnabled && status?.embedder.mode === "bm25-only";
   const [recentMessagesDraft, setRecentMessagesDraft] = useState(() => String(config.memory.recentMessages));
+  const [cognitionBatchRoundsDraft, setCognitionBatchRoundsDraft] = useState(() =>
+    String(config.memory.cognitionBatchRounds)
+  );
   const [similarityThresholdDraft, setSimilarityThresholdDraft] = useState(() =>
     String(config.memory.embedding.similarityThreshold)
   );
@@ -48,6 +51,10 @@ export function MemorySettingsCard({
   useEffect(() => {
     setRecentMessagesDraft(String(config.memory.recentMessages));
   }, [config.memory.recentMessages]);
+
+  useEffect(() => {
+    setCognitionBatchRoundsDraft(String(config.memory.cognitionBatchRounds));
+  }, [config.memory.cognitionBatchRounds]);
 
   useEffect(() => {
     setSimilarityThresholdDraft(String(config.memory.embedding.similarityThreshold));
@@ -82,6 +89,21 @@ export function MemorySettingsCard({
           ...config.memory.embedding,
           similarityThreshold: nextValue
         }
+      }
+    });
+  };
+
+  const commitCognitionBatchRounds = () => {
+    const nextValue = toInt(cognitionBatchRoundsDraft, config.memory.cognitionBatchRounds, 1, 50);
+    setCognitionBatchRoundsDraft(String(nextValue));
+    if (nextValue === config.memory.cognitionBatchRounds) {
+      return;
+    }
+    setConfig({
+      ...config,
+      memory: {
+        ...config.memory,
+        cognitionBatchRounds: nextValue
       }
     });
   };
@@ -137,6 +159,22 @@ export function MemorySettingsCard({
                 }}
               />
               <p className="text-xs text-muted-foreground">如果 token 预算允许，最多从 recent buffer 里取这么多条消息参与组装。</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>认知图批量更新轮次</Label>
+              <Input
+                type="text"
+                inputMode="numeric"
+                value={cognitionBatchRoundsDraft}
+                onChange={(event) => setCognitionBatchRoundsDraft(event.target.value)}
+                onBlur={commitCognitionBatchRounds}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+              <p className="text-xs text-muted-foreground">轮次越多，消耗 token 越少，但认知系统更新越慢；轮次越少，认知系统更新越快，但更容易引入噪声。</p>
             </div>
             <div className="space-y-1.5">
               <Label>语义相似度阈值</Label>

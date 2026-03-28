@@ -311,6 +311,7 @@ test("ConfigStore: keeps only advanced memory tuning fields in persisted config"
     const persisted = JSON.parse(await fs.readFile(paths.configPath, "utf8")) as Record<string, any>;
 
     assert.equal(config.memory.recentMessages, DEFAULT_CONFIG.memory.recentMessages);
+    assert.equal(config.memory.cognitionBatchRounds, DEFAULT_CONFIG.memory.cognitionBatchRounds);
     assert.equal(config.memory.embedding.enabled, false);
     assert.equal(config.memory.embedding.similarityThreshold, 0.2);
     assert.equal("context" in config.memory, false);
@@ -318,6 +319,7 @@ test("ConfigStore: keeps only advanced memory tuning fields in persisted config"
     assert.equal("kernel" in config, false);
 
     assert.equal("context" in persisted.memory, false);
+    assert.equal(persisted.memory.cognitionBatchRounds, DEFAULT_CONFIG.memory.cognitionBatchRounds);
     assert.equal(persisted.memory.embedding.enabled, false);
     assert.equal("modelId" in persisted.memory.embedding, false);
     assert.equal("kernel" in persisted, false);
