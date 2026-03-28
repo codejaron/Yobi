@@ -31,6 +31,22 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: git config --global core.longpaths true
 
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native/audio-helper
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Setup MSVC developer shell
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
