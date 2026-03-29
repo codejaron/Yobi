@@ -35,5 +35,3 @@ resources/live2dcubismcore.min.js
 resources/vendor/*.min.js
 resources/vendor/live2dcubismcore.min.js
 native/audio-helper/target/
-
-fbank_lfr_cmvn_feature.json
