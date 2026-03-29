@@ -1,7 +1,10 @@
 import { Bot, InputFile } from "grammy";
+import path from "node:path";
 import type { AppConfig } from "@shared/types";
+import type { ChatMediaStore } from "@main/services/chat-media";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import { appLogger as logger } from "@main/runtime/singletons";
+import { readResponseBuffer, resolveInboundImageText } from "./inbound-media";
 
 interface TelegramChannelCallbacks {
   onStatusChange?: () => void;
@@ -12,7 +15,11 @@ export class TelegramChannel implements ChatChannel {
   private connected = false;
   private targetChatId = "";
 
-  constructor(private readonly getConfig: () => AppConfig, private readonly callbacks: TelegramChannelCallbacks = {}) {}
+  constructor(
+    private readonly getConfig: () => AppConfig,
+    private readonly chatMediaStore: ChatMediaStore,
+    private readonly callbacks: TelegramChannelCallbacks = {}
+  ) {}
 
   private shouldAcceptInboundChat(chatId: number): boolean {
     const expected = this.targetChatId;
@@ -77,14 +84,36 @@ export class TelegramChannel implements ChatChannel {
 
       const token = this.getConfig().telegram.botToken;
       const photoUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+      let attachments: InboundMessage["attachments"] = undefined;
+      try {
+        const response = await fetch(photoUrl);
+        const buffer = await readResponseBuffer(response);
+        attachments = [
+          await this.chatMediaStore.storeInboundImage({
+            channel: "telegram",
+            chatId: String(ctx.chat.id),
+            data: buffer,
+            filename: path.basename(filePath) || "telegram-photo"
+          })
+        ];
+      } catch (error) {
+        logger.warn("telegram", "inbound-photo-download-failed", { chatId: String(ctx.chat.id) }, error);
+      }
+
+      const text = resolveInboundImageText({
+        text: ctx.message.caption
+      });
+      if (!text && !attachments?.length) {
+        return;
+      }
 
       await onMessage({
         kind: "photo",
         chatId: String(ctx.chat.id),
-        text: ctx.message.caption ?? "用户发送了一张图片",
+        text,
         fromUserId: String(ctx.from?.id ?? "unknown"),
         sentAt: new Date(ctx.message.date * 1000).toISOString(),
-        photoUrl
+        attachments
       });
     });
 

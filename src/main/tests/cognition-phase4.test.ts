@@ -399,6 +399,98 @@ test("CognitionEngine batches dialogue ingestion by configured round count", asy
   }
 });
 
+test("CognitionEngine does not re-batch stale dialogue while a batch is still processing", async () => {
+  const paths = await createTempPaths("yobi-cognition-batch-serialization-");
+  try {
+    await ensureKernelBootstrap(paths);
+
+    const config = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as AppConfig;
+    config.memory.cognitionBatchRounds = 2;
+
+    let resolveFirstBatchStarted: () => void = () => {
+      throw new Error("missing first batch start resolver");
+    };
+    const firstBatchStarted = new Promise<void>((resolve) => {
+      resolveFirstBatchStarted = () => resolve();
+    });
+    let releaseFirstBatch: () => void = () => {
+      throw new Error("missing first batch release resolver");
+    };
+    const firstBatchGate = new Promise<void>((resolve) => {
+      releaseFirstBatch = () => resolve();
+    });
+
+    class TestCognitionEngine extends CognitionEngine {
+      readonly batches: string[][] = [];
+
+      protected override async processDialogueBatch(
+        rounds: Array<{ userText?: string; assistantText: string }>
+      ): Promise<void> {
+        this.batches.push(rounds.map((round) => round.assistantText));
+        if (this.batches.length === 1) {
+          resolveFirstBatchStarted();
+          await firstBatchGate;
+        }
+      }
+    }
+
+    const engine = new TestCognitionEngine({
+      paths,
+      getConfig: () => config,
+      memory: {
+        embedText: async () => [],
+        getProfile: async () => ({}) as never,
+        listHistoryByCursor: async () => ({ items: [] }) as never
+      },
+      conversation: {} as never,
+      logger: {
+        info() {},
+        warn() {},
+        error() {}
+      } as never
+    });
+
+    await engine.ingestDialogue({
+      channel: "console",
+      userText: "用户第 1 轮",
+      assistantText: "助手第 1 轮"
+    });
+
+    const secondRound = engine.ingestDialogue({
+      channel: "console",
+      userText: "用户第 2 轮",
+      assistantText: "助手第 2 轮"
+    });
+    await firstBatchStarted;
+
+    const thirdRound = engine.ingestDialogue({
+      channel: "console",
+      userText: "用户第 3 轮",
+      assistantText: "助手第 3 轮"
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(engine.batches.length, 1);
+    assert.deepEqual(engine.batches[0], ["助手第 1 轮", "助手第 2 轮"]);
+
+    releaseFirstBatch();
+    await Promise.all([secondRound, thirdRound]);
+
+    await engine.ingestDialogue({
+      channel: "console",
+      userText: "用户第 4 轮",
+      assistantText: "助手第 4 轮"
+    });
+
+    assert.deepEqual(engine.batches, [
+      ["助手第 1 轮", "助手第 2 轮"],
+      ["助手第 3 轮", "助手第 4 轮"]
+    ]);
+  } finally {
+    await cleanupPaths(paths);
+  }
+});
+
 test("CognitionEngine.start loads the bundled default graph without requiring a cognition model route", async () => {
   const paths = await createTempPaths("yobi-cognition-bundled-graph-");
   try {

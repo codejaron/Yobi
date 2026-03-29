@@ -78,3 +78,10 @@ export function supportsChatAttachment(config: AppConfig, attachment: Pick<ChatA
 
   return false;
 }
+
+export function supportsAllChatAttachments(
+  config: AppConfig,
+  attachments: Array<Pick<ChatAttachment, "kind" | "mimeType">>
+): boolean {
+  return attachments.length > 0 && attachments.every((attachment) => supportsChatAttachment(config, attachment));
+}

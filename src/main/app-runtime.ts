@@ -32,6 +32,7 @@ import type {
   ColdArchiveStats,
   ConsolidationReport
 } from "@shared/cognition";
+import { PRIMARY_RESOURCE_ID, PRIMARY_THREAD_ID } from "@shared/runtime-ids";
 import {
   type RuntimeInboundChannel
 } from "@main/storage/runtime-context-store";
@@ -65,9 +66,6 @@ interface HistoryQuery {
   limit?: number;
   offset?: number;
 }
-
-const PRIMARY_RESOURCE_ID = "primary-user";
-const PRIMARY_THREAD_ID = "primary-thread";
 
 interface ConsoleRequestHandle {
   abortController: AbortController;

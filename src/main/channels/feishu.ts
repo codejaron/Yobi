@@ -1,8 +1,10 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { AppConfig } from "@shared/types";
+import type { ChatMediaStore } from "@main/services/chat-media";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import { appLogger as logger } from "@main/runtime/singletons";
 import { FeishuStreamingSession } from "./feishu-streaming";
+import { readReadableStreamBuffer, resolveInboundImageText } from "./inbound-media";
 
 interface FeishuChannelCallbacks {
   onStatusChange?: () => void;
@@ -47,7 +49,11 @@ export class FeishuChannel implements ChatChannel {
   private readonly recentInboundIds = new Map<string, number>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly getConfig: () => AppConfig, private readonly callbacks: FeishuChannelCallbacks = {}) {}
+  constructor(
+    private readonly getConfig: () => AppConfig,
+    private readonly chatMediaStore: ChatMediaStore,
+    private readonly callbacks: FeishuChannelCallbacks = {}
+  ) {}
 
   async start(onMessage: (message: InboundMessage) => Promise<void>): Promise<void> {
     const { feishu } = this.getConfig();
@@ -259,6 +265,7 @@ export class FeishuChannel implements ChatChannel {
 
     let text = "";
     let photoUrl: string | undefined;
+    let attachments: InboundMessage["attachments"] = undefined;
     let kind: "text" | "photo" = "text";
     try {
       const content = JSON.parse(message.content ?? "{}") as Record<string, unknown>;
@@ -268,10 +275,36 @@ export class FeishuChannel implements ChatChannel {
         text = rawText.trim();
       } else if (messageType === "image") {
         kind = "photo";
-        text = "用户发送了一张图片";
         if (typeof content.image_key === "string" && content.image_key.trim()) {
           photoUrl = content.image_key.trim();
+          if (this.client && message.message_id?.trim()) {
+            try {
+              const resource = await this.client.im.v1.messageResource.get({
+                params: {
+                  type: "image"
+                },
+                path: {
+                  message_id: message.message_id.trim(),
+                  file_key: photoUrl
+                }
+              });
+              const buffer = await readReadableStreamBuffer(resource.getReadableStream());
+              attachments = [
+                await this.chatMediaStore.storeInboundImage({
+                  channel: "feishu",
+                  chatId,
+                  data: buffer,
+                  filename: `feishu-${photoUrl}`
+                })
+              ];
+            } catch (error) {
+              logger.warn("feishu", "inbound-photo-download-failed", { chatId }, error);
+            }
+          }
         }
+        text = resolveInboundImageText({
+          text
+        });
       } else if (messageType === "post") {
         text = this.extractPostText(content);
       } else {
@@ -281,7 +314,7 @@ export class FeishuChannel implements ChatChannel {
       text = "[消息解析失败]";
     }
 
-    if (!text && !photoUrl) {
+    if (!text && !attachments?.length) {
       return;
     }
 
@@ -291,6 +324,7 @@ export class FeishuChannel implements ChatChannel {
       text,
       fromUserId: senderId,
       sentAt: parseFeishuTimestamp(message.create_time),
+      attachments,
       photoUrl
     });
   }

@@ -33,6 +33,7 @@ export class ChannelRouter {
 
   async handleTelegram(input: {
     text: string;
+    attachments?: ChatAttachment[];
     photoUrl?: string;
     resourceId: string;
     threadId: string;
@@ -40,6 +41,7 @@ export class ChannelRouter {
   }): Promise<string> {
     return this.conversation.reply({
       text: input.text,
+      attachments: input.attachments,
       channel: "telegram",
       photoUrl: input.photoUrl,
       resourceId: input.resourceId,
@@ -50,6 +52,7 @@ export class ChannelRouter {
 
   async handleQQ(input: {
     text: string;
+    attachments?: ChatAttachment[];
     photoUrl?: string;
     resourceId: string;
     threadId: string;
@@ -57,6 +60,7 @@ export class ChannelRouter {
   }): Promise<string> {
     return this.conversation.reply({
       text: input.text,
+      attachments: input.attachments,
       channel: "qq",
       photoUrl: input.photoUrl,
       resourceId: input.resourceId,
@@ -67,6 +71,7 @@ export class ChannelRouter {
 
   async handleFeishu(input: {
     text: string;
+    attachments?: ChatAttachment[];
     photoUrl?: string;
     resourceId: string;
     threadId: string;
@@ -75,6 +80,7 @@ export class ChannelRouter {
   }): Promise<string> {
     return this.conversation.reply({
       text: input.text,
+      attachments: input.attachments,
       channel: "feishu",
       photoUrl: input.photoUrl,
       resourceId: input.resourceId,

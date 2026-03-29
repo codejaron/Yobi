@@ -1,8 +1,10 @@
+import type { ChatMediaStore } from "@main/services/chat-media";
 import type { ChatChannel, InboundMessage, OutboundMessage } from "./types";
 import type { QQC2CMessageEvent, QQChannelConfig, QQSendC2CMessageBody } from "./qq-types";
 import { QQAuthManager } from "./qq-auth";
 import { QQGateway } from "./qq-gateway";
 import { appLogger as logger } from "@main/runtime/singletons";
+import { filenameFromUrl, readResponseBuffer, resolveInboundImageText } from "./inbound-media";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const REPLY_WINDOW_TTL_MS = 55 * 60 * 1000;
@@ -28,7 +30,11 @@ export class QQChannel implements ChatChannel {
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private onMessage: ((message: InboundMessage) => Promise<void>) | null = null;
 
-  constructor(config: QQChannelConfig, callbacks: QQChannelCallbacks = {}) {
+  constructor(
+    config: QQChannelConfig,
+    private readonly chatMediaStore: ChatMediaStore,
+    callbacks: QQChannelCallbacks = {}
+  ) {
     this.auth = new QQAuthManager(config.appId, config.appSecret);
     this.apiBase = API_BASE;
     this.gateway = new QQGateway({
@@ -150,10 +156,27 @@ export class QQChannel implements ChatChannel {
       (item) => typeof item.content_type === "string" && item.content_type.startsWith("image/")
     );
     const hasImage = Boolean(imageAttachment?.url);
-    const normalizedText = event.content?.trim() ?? "";
-    const fallbackText = hasImage ? "用户发送了一张图片" : "";
-    const text = normalizedText || fallbackText;
-    if (!text && !hasImage) {
+    let attachments: InboundMessage["attachments"] = undefined;
+    if (typeof imageAttachment?.url === "string" && imageAttachment.url.trim()) {
+      try {
+        const response = await fetch(imageAttachment.url);
+        const buffer = await readResponseBuffer(response);
+        attachments = [
+          await this.chatMediaStore.storeInboundImage({
+            channel: "qq",
+            chatId: openid,
+            data: buffer,
+            filename: imageAttachment.filename || filenameFromUrl(imageAttachment.url, "qq-image")
+          })
+        ];
+      } catch (error) {
+        logger.warn("qq", "inbound-photo-download-failed", { chatId: openid }, error);
+      }
+    }
+    const text = resolveInboundImageText({
+      text: event.content
+    });
+    if (!text && !attachments?.length) {
       return;
     }
 
@@ -163,7 +186,7 @@ export class QQChannel implements ChatChannel {
       text,
       fromUserId: openid,
       sentAt: event.timestamp || new Date().toISOString(),
-      photoUrl: imageAttachment?.url
+      attachments
     };
 
     if (!this.onMessage) {

@@ -42,6 +42,7 @@ import { ProviderModelDiscoveryService } from "@main/services/provider-model-dis
 import { SkillManager } from "@main/skills/manager";
 import { appLogger, companionPaths } from "@main/runtime/singletons";
 import { buildKernelQueueTaskHandlers } from "@main/kernel/task-handlers";
+import { ChatMediaStore } from "@main/services/chat-media";
 
 export interface RuntimeRegistryBuildInput {
   resourceId: string;
@@ -124,6 +125,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     () => configStore.getConfig(),
     approvalGuard
   );
+  const chatMediaStore = new ChatMediaStore(paths);
   const skillManager = new SkillManager(paths);
   const mcpManager = new McpManager(() => configStore.getConfig());
   const backgroundWorker = new BackgroundTaskWorkerService();
@@ -184,12 +186,12 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   );
 
   const channelRouter = new ChannelRouter(conversation);
-  const telegram = new TelegramChannel(() => configStore.getConfig(), {
+  const telegram = new TelegramChannel(() => configStore.getConfig(), chatMediaStore, {
     onStatusChange: () => {
       void callbackBridge.emitStatus();
     }
   });
-  const feishu = new FeishuChannel(() => configStore.getConfig(), {
+  const feishu = new FeishuChannel(() => configStore.getConfig(), chatMediaStore, {
     onStatusChange: () => {
       void callbackBridge.emitStatus();
     }
@@ -270,7 +272,7 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
   const channelCoordinator = new ChannelCoordinator({
     telegram,
     feishu,
-    createQQChannel: (config, callbacks) => new QQChannel(config, callbacks),
+    createQQChannel: (config, callbacks) => new QQChannel(config, chatMediaStore, callbacks),
     logger,
     pet,
     getQQConfig: () => ({

@@ -7,6 +7,7 @@ import type {
   HealthMetrics
 } from "@shared/cognition";
 import { isManualActivationLogEntry } from "@shared/cognition";
+import { PRIMARY_RESOURCE_ID, PRIMARY_THREAD_ID } from "@shared/runtime-ids";
 import type { AppLogger } from "@main/services/logger";
 import { appendJsonlLine, readJsonlFile, writeJsonlFileAtomic } from "@main/storage/fs";
 import type { ModelFactory } from "@main/core/model-factory";
@@ -27,9 +28,6 @@ import { AttentionSchema } from "../workspace/attention-schema";
 import { GlobalWorkspace } from "../workspace/global-workspace";
 import { ColdArchive } from "../consolidation/cold-archive";
 import { ConsolidationEngine } from "../consolidation/consolidation-engine";
-
-const PRIMARY_RESOURCE_ID = "primary-user";
-const PRIMARY_THREAD_ID = "primary-thread";
 
 function resolveGraphLabel(graph: MemoryGraphStore, nodeId: string): string {
   return graph.getNode(nodeId)?.content ?? "失效节点";

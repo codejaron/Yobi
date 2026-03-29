@@ -1,9 +1,12 @@
+import type { ChatAttachment } from "@shared/types";
+
 export interface InboundMessage {
   kind: "text" | "photo";
   chatId: string;
   text: string;
   fromUserId: string;
   sentAt: string;
+  attachments?: ChatAttachment[];
   photoUrl?: string;
 }
 

@@ -25,7 +25,7 @@ import {
   isAbortLikeError,
   isConversationAbortError
 } from "./conversation-abort";
-import { resolveOpenAIStoreOption } from "./provider-utils";
+import { resolveOpenAIStoreOption, supportsAllChatAttachments } from "./provider-utils";
 import { createEmotionTagStripper, extractEmotionTag, extractRawSignalsTag, stripEmotionTags } from "./emotion-tags";
 import type { YobiMemory } from "@main/memory/setup";
 import { buildUserContentWithAttachments } from "@main/services/chat-media";
@@ -229,6 +229,25 @@ function buildVoiceInputContextPrompt(voiceContext: VoiceInputContext): string {
   ].join("\n");
 }
 
+function sanitizeInboundPhotoReference(
+  channel: "telegram" | "console" | "qq" | "feishu",
+  photoUrl: string | undefined
+): string {
+  const normalized = photoUrl?.trim() ?? "";
+  if (!normalized) {
+    return "";
+  }
+
+  if (channel !== "telegram") {
+    return normalized;
+  }
+
+  return normalized.replace(
+    /(https:\/\/api\.telegram\.org\/file\/)bot[^/]+\/(.+)/i,
+    "$1bot<redacted>/$2"
+  );
+}
+
 function buildTaskModePrompt(): string {
   return [
     "[TASK MODE]",
@@ -280,6 +299,7 @@ export class ConversationEngine {
     const providerOptions = resolveOpenAIStoreOption(config);
     const normalizedText = input.text.trim();
     const attachments = input.attachments ?? [];
+    const includeAttachmentMedia = supportsAllChatAttachments(config, attachments);
 
     if (!normalizedText && attachments.length === 0) {
       return "";
@@ -349,7 +369,9 @@ export class ConversationEngine {
       buildRealtimeSignalContractPrompt(),
       cognitionMemoryBlock,
       input.voiceContext ? buildVoiceInputContextPrompt(input.voiceContext) : "",
-      input.photoUrl ? `用户这轮附带图片 URL: ${input.photoUrl}` : ""
+      input.photoUrl
+        ? `用户这轮附带图片 URL: ${sanitizeInboundPhotoReference(input.channel, input.photoUrl)}`
+        : ""
     ].filter(Boolean);
     const assembled = assembleContext({
       soul: soul.trim(),
@@ -388,7 +410,8 @@ export class ConversationEngine {
       const currentUserContent = await buildUserContentWithAttachments({
         text: normalizedText,
         attachments,
-        includeMedia: true
+        includeMedia: includeAttachmentMedia,
+        fallbackReason: attachments.length > 0 && !includeAttachmentMedia ? "unsupported" : "expired"
       });
       messages.push({
         role: "user",

@@ -546,7 +546,7 @@ export interface AttachmentReferenceNote {
   filename: string;
   mimeType: string;
   path: string;
-  reason: "expired" | "missing";
+  reason: "expired" | "missing" | "unsupported";
 }
 
 export interface HistoryMessageMeta {

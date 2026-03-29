@@ -207,6 +207,115 @@ test("ConversationEngine: sends current user attachments as multimodal message p
   }
 });
 
+test("ConversationEngine: falls back to attachment reference text when the chat provider does not support image input", async () => {
+  const config = cloneConfig();
+  config.providers = [
+    {
+      id: "deepseek-main",
+      label: "DeepSeek",
+      kind: "deepseek",
+      apiMode: "chat",
+      apiKey: "",
+      enabled: true
+    }
+  ];
+  config.modelRouting.chat = {
+    providerId: "deepseek-main",
+    model: "deepseek-chat"
+  };
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-conversation-external-image-fallback-"));
+  const attachmentPath = path.join(tempDir, "photo.png");
+  await fs.writeFile(
+    attachmentPath,
+    Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x00
+    ])
+  );
+
+  let seenMessages: Array<{ role: string; content: unknown }> = [];
+  try {
+    const conversation = new ConversationEngine(
+      {
+        rememberMessage: async () => undefined,
+        getProfile: async () => DEFAULT_USER_PROFILE,
+        listFacts: async () => [],
+        listRecentEpisodes: async () => [],
+        searchRelevantFacts: async () => [],
+        touchFacts: async () => undefined,
+        listRecentBufferMessages: async () => [],
+        mapRecentToModelMessages: async () => []
+      } as any,
+      {
+        getChatModel: () => ({})
+      } as any,
+      {
+        getToolSet: () => ({})
+      } as any,
+      {
+        getCatalogPrompt: () => ({
+          prompt: "",
+          summary: {
+            enabledCount: 0,
+            truncated: false,
+            truncatedDescriptions: 0,
+            omittedSkills: 0
+          }
+        })
+      } as any,
+      {
+        getSnapshot: () => DEFAULT_KERNEL_STATE
+      } as any,
+      {
+        soulPath: "/tmp/does-not-exist"
+      } as any,
+      () => config,
+      undefined,
+      ((input: { messages: Array<{ role: string; content: unknown }> }) => {
+        seenMessages = input.messages;
+        return {
+          fullStream: (async function* () {
+            yield {
+              type: "text-delta",
+              text: "收到图片说明"
+            };
+          })(),
+          totalUsage: Promise.resolve(undefined)
+        };
+      }) as any
+    );
+
+    await conversation.reply({
+      text: "看看这张图",
+      attachments: [
+        {
+          id: "attachment-image-1",
+          kind: "image",
+          filename: "photo.png",
+          mimeType: "image/png",
+          size: 12,
+          path: attachmentPath,
+          source: "user-upload",
+          createdAt: new Date().toISOString()
+        }
+      ],
+      channel: "telegram",
+      resourceId: "resource-1",
+      threadId: "thread-1",
+      persistUserMessage: false
+    });
+
+    const lastMessage = seenMessages.at(-1);
+    assert.equal(lastMessage?.role, "user");
+    assert.equal(typeof lastMessage?.content, "string");
+    assert.match(String(lastMessage?.content), /\[附件引用：当前模型不支持该附件类型\]/);
+    assert.doesNotMatch(String(lastMessage?.content), /"type":"image"/);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("ConversationEngine: persists toolTrace metadata for successful tool calls", async () => {
   const config = cloneConfig();
   const remembered: Array<{ role: string; text: string; metadata?: Record<string, unknown> }> = [];
@@ -539,6 +648,74 @@ test("ConversationEngine: injects cognition memory block from the optional provi
   assert.equal(seenSystems.length, 1);
   assert.match(seenSystems[0] ?? "", /\[你对这个用户的记忆\]/);
   assert.match(seenSystems[0] ?? "", /用户喜欢热乎的拉面/);
+});
+
+test("ConversationEngine: redacts Telegram bot tokens from image references in the system prompt", async () => {
+  const config = cloneConfig();
+  const seenSystems: string[] = [];
+
+  const conversation = new ConversationEngine(
+    {
+      rememberMessage: async () => undefined,
+      getProfile: async () => DEFAULT_USER_PROFILE,
+      listFacts: async () => [],
+      listRecentEpisodes: async () => [],
+      searchRelevantFacts: async () => [],
+      touchFacts: async () => undefined,
+      listRecentBufferMessages: async () => [],
+      mapRecentToModelMessages: async () => []
+    } as any,
+    {
+      getChatModel: () => ({})
+    } as any,
+    {
+      getToolSet: () => ({})
+    } as any,
+    {
+      getCatalogPrompt: () => ({
+        prompt: "",
+        summary: {
+          enabledCount: 0,
+          truncated: false,
+          truncatedDescriptions: 0,
+          omittedSkills: 0
+        }
+      })
+    } as any,
+    {
+      getSnapshot: () => DEFAULT_KERNEL_STATE
+    } as any,
+    {
+      soulPath: "/tmp/does-not-exist"
+    } as any,
+    () => config,
+    undefined,
+    ((input: { system: string }) => {
+      seenSystems.push(input.system);
+      return {
+        fullStream: (async function* () {
+          yield {
+            type: "text-delta",
+            text: "已收到图片"
+          };
+        })(),
+        totalUsage: Promise.resolve(undefined)
+      };
+    }) as any
+  );
+
+  await conversation.reply({
+    text: "看看这张图",
+    channel: "telegram",
+    resourceId: "resource-1",
+    threadId: "thread-1",
+    photoUrl: "https://api.telegram.org/file/bot123456:ABCdef_secret/photos/file_1.jpg",
+    persistUserMessage: false
+  });
+
+  assert.equal(seenSystems.length, 1);
+  assert.doesNotMatch(seenSystems[0] ?? "", /123456:ABCdef_secret/);
+  assert.match(seenSystems[0] ?? "", /https:\/\/api\.telegram\.org\/file\/bot<redacted>\/photos\/file_1\.jpg/);
 });
 
 test("ConversationEngine: parses hidden signals from raw final text before visible stripping", async () => {

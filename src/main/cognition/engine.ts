@@ -13,6 +13,7 @@ import {
   type CognitionLogScope,
   type HealthMetrics,
 } from "@shared/cognition";
+import { PRIMARY_RESOURCE_ID, PRIMARY_THREAD_ID } from "@shared/runtime-ids";
 import { readJsonlFile, readTextFile } from "@main/storage/fs";
 import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
@@ -152,6 +153,7 @@ export class CognitionEngine {
   private recentDialogueResidue: string[] = [];
   private lastDialogueTime: number | null = null;
   private pendingDialogueRounds: DialogueIngestInput[] = [];
+  private dialogueIngestQueue: Promise<void> = Promise.resolve();
   private emotionState: EmotionStateManager | null = null;
   private predictionEngine: PredictionEngine | null = null;
   private attentionSchema: AttentionSchema | null = null;
@@ -180,6 +182,12 @@ export class CognitionEngine {
   }
 
   async ingestDialogue(input: DialogueIngestInput): Promise<void> {
+    const task = this.dialogueIngestQueue.then(() => this.ingestDialogueNow(input));
+    this.dialogueIngestQueue = task.catch(() => undefined);
+    return task;
+  }
+
+  private async ingestDialogueNow(input: DialogueIngestInput): Promise<void> {
     await this.ensureInitialized();
     if (this.requireConfig().consolidation.interrupt_on_user_message) {
       this.consolidationEngine?.interrupt();
@@ -225,8 +233,8 @@ export class CognitionEngine {
       embedText: (value) => this.input.memory.embedText(value),
       getRecentDialogueMessages: async () => {
         const recent = await this.input.memory.listHistoryByCursor({
-          threadId: "main",
-          resourceId: "main",
+          threadId: PRIMARY_THREAD_ID,
+          resourceId: PRIMARY_RESOURCE_ID,
           limit: this.requireConfig().retrieval.dedup_lookback_turns * 2
         });
         return recent.items.map((item) => item.text);
@@ -800,32 +808,11 @@ export class CognitionEngine {
 export function buildDialogueExtractionPrompt(input: {
   channel: string;
   chatId: string | null;
-  transcript?: DialogueTranscriptEntry[];
+  transcript: DialogueTranscriptEntry[];
   latestUserMessage?: string;
-  user?: string;
-  assistant?: string;
   nowIso: string;
 }): string {
-  const transcript = (input.transcript && input.transcript.length > 0
-    ? input.transcript
-    : [
-        ...(input.user?.trim()
-          ? [
-              {
-                role: "user" as const,
-                text: input.user.trim()
-              }
-            ]
-          : []),
-        ...(input.assistant?.trim()
-          ? [
-              {
-                role: "assistant" as const,
-                text: input.assistant.trim()
-              }
-            ]
-          : [])
-      ]).filter((entry) => entry.text.length > 0);
+  const transcript = input.transcript.filter((entry) => entry.text.trim().length > 0);
   const latestUserMessage =
     input.latestUserMessage?.trim()
     || [...transcript].reverse().find((entry) => entry.role === "user")?.text

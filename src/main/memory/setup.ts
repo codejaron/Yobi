@@ -19,6 +19,7 @@ import {
   ATTACHMENT_REUSE_USER_MESSAGE_WINDOW,
   buildUserContentWithAttachments
 } from "@main/services/chat-media";
+import { supportsAllChatAttachments } from "@main/core/provider-utils";
 import {
   fileExists,
   readJsonlFile
@@ -383,7 +384,16 @@ export class YobiMemory {
         const built = await buildUserContentWithAttachments({
           text: message.text,
           attachments,
-          includeMedia: attachments.length > 0 && message.id === activeAttachmentMessageId
+          includeMedia:
+            attachments.length > 0 &&
+            message.id === activeAttachmentMessageId &&
+            supportsAllChatAttachments(this.getConfig(), attachments),
+          fallbackReason:
+            message.id === activeAttachmentMessageId &&
+            attachments.length > 0 &&
+            !supportsAllChatAttachments(this.getConfig(), attachments)
+              ? "unsupported"
+              : "expired"
         });
         const hasContent =
           typeof built.content === "string" ? built.content.trim().length > 0 : built.content.length > 0;

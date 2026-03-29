@@ -8,6 +8,7 @@ import { createEmotionTagStripper, extractEmotionTag } from "@main/core/emotion-
 import { AppLogger } from "@main/services/logger";
 import type { PetWindowController } from "@main/pet/pet-window";
 import type { RuntimeInboundChannel } from "@main/storage/runtime-context-store";
+import type { ChatAttachment } from "@shared/types";
 
 interface ChannelCoordinatorInput {
   telegram: TelegramChannel;
@@ -18,18 +19,21 @@ interface ChannelCoordinatorInput {
   getQQConfig: () => QQChannelConfig;
   handleTelegram: (payload: {
     text: string;
+    attachments?: ChatAttachment[];
     photoUrl?: string;
     resourceId: string;
     threadId: string;
   }) => Promise<string>;
   handleQQ: (payload: {
     text: string;
+    attachments?: ChatAttachment[];
     photoUrl?: string;
     resourceId: string;
     threadId: string;
   }) => Promise<string>;
   handleFeishu: (payload: {
     text: string;
+    attachments?: ChatAttachment[];
     photoUrl?: string;
     resourceId: string;
     threadId: string;
@@ -186,6 +190,7 @@ export class ChannelCoordinator {
     inbound: InboundMessage;
     handle: (payload: {
       text: string;
+      attachments?: ChatAttachment[];
       photoUrl?: string;
       resourceId: string;
       threadId: string;
@@ -203,7 +208,8 @@ export class ChannelCoordinator {
       const reply = await this.input.withTimeout(
         input.handle({
           text: input.inbound.text,
-          photoUrl: input.inbound.photoUrl,
+          attachments: input.inbound.attachments,
+          photoUrl: input.inbound.attachments?.length ? undefined : input.inbound.photoUrl,
           resourceId: this.input.resourceId,
           threadId: this.input.threadId
         }),
@@ -256,7 +262,8 @@ export class ChannelCoordinator {
       const reply = await this.input.withTimeout(
         this.input.handleFeishu({
           text: inbound.text,
-          photoUrl: inbound.photoUrl,
+          attachments: inbound.attachments,
+          photoUrl: inbound.attachments?.length ? undefined : inbound.photoUrl,
           resourceId: this.input.resourceId,
           threadId: this.input.threadId,
           stream: streamingEnabled

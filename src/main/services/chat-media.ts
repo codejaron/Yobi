@@ -264,7 +264,12 @@ export function buildAttachmentReferenceText(input: {
   attachments: ChatAttachment[];
   reason: AttachmentReferenceNote["reason"];
 }): string {
-  const title = input.reason === "missing" ? "[附件引用：缓存缺失]" : "[附件引用：已超出自动复用窗口]";
+  const title =
+    input.reason === "missing"
+      ? "[附件引用：缓存缺失]"
+      : input.reason === "unsupported"
+        ? "[附件引用：当前模型不支持该附件类型]"
+        : "[附件引用：已超出自动复用窗口]";
   return [
     title,
     ...input.attachments.map((attachment) =>
@@ -301,9 +306,11 @@ export async function buildUserContentWithAttachments(input: {
   text: string;
   attachments: ChatAttachment[];
   includeMedia: boolean;
+  fallbackReason?: AttachmentReferenceNote["reason"];
 }): Promise<{ content: UserContent; references: AttachmentReferenceNote[] }> {
   const normalizedText = input.text.trim();
   const references: AttachmentReferenceNote[] = [];
+  const fallbackReason = input.fallbackReason ?? "expired";
 
   if (input.attachments.length === 0) {
     return {
@@ -313,10 +320,10 @@ export async function buildUserContentWithAttachments(input: {
   }
 
   if (!input.includeMedia) {
-    references.push(...input.attachments.map((attachment) => attachmentToReferenceNote(attachment, "expired")));
+    references.push(...input.attachments.map((attachment) => attachmentToReferenceNote(attachment, fallbackReason)));
     const referenceBlock = buildAttachmentReferenceText({
       attachments: input.attachments,
-      reason: "expired"
+      reason: fallbackReason
     });
 
     return {
@@ -413,6 +420,53 @@ export class ChatMediaStore {
         };
       })
     );
+  }
+
+  async storeInboundImage(input: {
+    channel: "telegram" | "qq" | "feishu";
+    chatId: string;
+    data: Buffer;
+    filename?: string;
+  }): Promise<ChatAttachment> {
+    if (input.data.length === 0) {
+      throw new Error("图片内容为空");
+    }
+
+    if (input.data.length > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`图片超过 ${Math.floor(MAX_ATTACHMENT_BYTES / (1024 * 1024))}MB 限制`);
+    }
+
+    const detectedImage = detectImageSignature(input.data);
+    if (!detectedImage) {
+      throw new Error("图片类型不受支持，仅支持 PNG/JPEG/GIF/WEBP");
+    }
+
+    const createdAt = new Date().toISOString();
+    const id = randomUUID();
+    const targetDir = path.join(
+      this.paths.chatMediaDir,
+      "inbound",
+      sanitizePathSegment(input.channel, "channel"),
+      sanitizePathSegment(input.chatId, "chat")
+    );
+    const filename = sanitizeFilename(
+      input.filename,
+      `${input.channel}-image`,
+      detectedImage.extension
+    );
+    const targetPath = path.join(targetDir, `${id}-${filename}`);
+    await writeAttachmentFile(targetPath, input.data);
+
+    return {
+      id,
+      kind: "image",
+      filename,
+      mimeType: detectedImage.mimeType,
+      size: input.data.length,
+      path: targetPath,
+      source: "user-upload",
+      createdAt
+    };
   }
 
   async storeToolMedia(input: {
