@@ -177,6 +177,16 @@ export function registerIpcHandlers(runtime: CompanionRuntime): void {
       modelDir: imported.modelDir
     };
   });
+  ipcMain.handle("pet:model:metadata", (_, payload: { modelDir?: string }) =>
+    runtime.getPetModelMetadata({
+      modelDir: payload?.modelDir ?? ""
+    })
+  );
+  ipcMain.handle("pet:expression:apply", (_, payload: { id?: string }) =>
+    runtime.applyPetExpression({
+      id: payload?.id ?? ""
+    })
+  );
 
   ipcMain.handle("skills:list", () => runtime.listSkills());
   ipcMain.handle("skills:rescan", () => runtime.rescanSkills());

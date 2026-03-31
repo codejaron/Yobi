@@ -1,4 +1,5 @@
 import type { AppConfig } from "@shared/types";
+import type { PetExpressionOption } from "@shared/ipc";
 import { Button } from "@renderer/components/ui/button";
 import {
   Card,
@@ -8,6 +9,7 @@ import {
   CardTitle
 } from "@renderer/components/ui/card";
 import { Label } from "@renderer/components/ui/label";
+import { Select } from "@renderer/components/ui/select";
 import { Switch } from "@renderer/components/ui/switch";
 import {
   formatHotkeySymbol,
@@ -23,6 +25,9 @@ interface PetRuntimeCardProps {
     type: "success" | "error";
     message: string;
   } | null;
+  expressionOptions: PetExpressionOption[];
+  applyingExpression: boolean;
+  onSelectExpression: (expressionId: string) => void;
   isMac: boolean;
   isRecordingPttHotkey: boolean;
   pttHotkeyNotice: string;
@@ -36,6 +41,9 @@ export function PetRuntimeCard({
   importModelDirectory,
   importingModel,
   modelImportNotice,
+  expressionOptions,
+  applyingExpression,
+  onSelectExpression,
   isMac,
   isRecordingPttHotkey,
   pttHotkeyNotice,
@@ -129,6 +137,27 @@ export function PetRuntimeCard({
             }
           />
         </div>
+
+        {expressionOptions.length > 0 ? (
+          <div className="space-y-1.5">
+            <Label>换装 / Expression</Label>
+            <Select
+              value={config.pet.expressionId}
+              disabled={applyingExpression}
+              onChange={(event) => onSelectExpression(event.target.value)}
+            >
+              <option value="">默认 / 无换装</option>
+              {expressionOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              选择后会立即应用到桌宠，并自动保存为当前模型的默认换装。
+            </p>
+          </div>
+        ) : null}
 
         <div className="rounded-md border border-border/70 bg-white/70 px-3 py-3">
           <div className="flex items-center justify-between">

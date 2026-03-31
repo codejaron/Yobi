@@ -259,7 +259,8 @@ export const appConfigSchema = z
       .object({
         enabled: z.boolean().default(false),
         modelDir: z.string().default(""),
-        alwaysOnTop: z.boolean().default(true)
+        alwaysOnTop: z.boolean().default(true),
+        expressionId: z.string().default("")
       })
       .strict(),
     ptt: z
@@ -1451,7 +1452,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   pet: {
     enabled: false,
     modelDir: "",
-    alwaysOnTop: true
+    alwaysOnTop: true,
+    expressionId: ""
   },
   ptt: {
     enabled: true,

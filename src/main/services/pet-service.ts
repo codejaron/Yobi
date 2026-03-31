@@ -25,8 +25,10 @@ import { SystemPermissionsService } from "@main/services/system-permissions";
 import { extractEmotionTag } from "@main/core/emotion-tags";
 import { StateStore } from "@main/kernel/state-store";
 import { shouldPublishEmotionState } from "@main/pet/emotion-state-sync";
+import { getPetModelMetadata as readPetModelMetadata } from "@main/pet/pet-model-metadata";
 import { shouldUseUnifiedRealtimeVoice } from "@main/services/pet-voice-mode";
 import type { VoiceSessionEvent, VoiceSessionPhase } from "@shared/types";
+import type { PetModelMetadata } from "@shared/ipc";
 import { resolveAssistantSpeechRoute } from "@main/services/assistant-speech-policy";
 import type { NativeAudioCaptureBackend } from "@main/services/native-audio-capture";
 
@@ -131,6 +133,44 @@ export class PetService {
 
     return {
       modelDir: targetDir
+    };
+  }
+
+  getPetModelMetadata(input?: { modelDir?: string }): PetModelMetadata {
+    const configuredModelDir = input?.modelDir?.trim() || this.input.getConfig().pet.modelDir.trim();
+    if (!configuredModelDir) {
+      return {
+        expressions: []
+      };
+    }
+
+    const modelDir = path.isAbsolute(configuredModelDir)
+      ? configuredModelDir
+      : path.join(resolveElectronAppPath(), configuredModelDir);
+
+    if (!existsSync(modelDir)) {
+      return {
+        expressions: []
+      };
+    }
+
+    return readPetModelMetadata(modelDir);
+  }
+
+  applyPetExpression(input: { id?: string }): { applied: boolean } {
+    if (!this.input.pet.isOnline()) {
+      return {
+        applied: false
+      };
+    }
+
+    this.input.pet.emitEvent({
+      type: "expression",
+      id: typeof input.id === "string" ? input.id : ""
+    });
+
+    return {
+      applied: true
     };
   }
 
@@ -301,6 +341,10 @@ export class PetService {
     });
 
     this.publishEmotionState({ force: true });
+    this.input.pet.emitEvent({
+      type: "expression",
+      id: config.expressionId
+    });
   }
 
   async syncGlobalPetPushToTalk(): Promise<void> {

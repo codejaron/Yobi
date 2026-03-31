@@ -112,6 +112,28 @@ test("ConfigStore: migrates legacy realtime voice shape without losing enabled f
   }
 });
 
+test("ConfigStore: fills pet expression default for configs without pet expression state", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-pet-expression-"));
+
+  try {
+    const paths = new CompanionPaths(baseDir);
+    paths.ensureLayout();
+
+    const legacyConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Record<string, any>;
+    delete legacyConfig.pet.expressionId;
+
+    await fs.writeFile(paths.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, "utf8");
+
+    const store = new ConfigStore(paths);
+    await store.init();
+    const config = store.getConfig();
+
+    assert.equal(config.pet.expressionId, "");
+  } finally {
+    await fs.rm(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("ConfigStore: downgrades legacy whisper-local ASR to none without resetting the rest of config", async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "yobi-config-whisper-downgrade-"));
 

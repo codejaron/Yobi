@@ -23,7 +23,7 @@ import {
   type VoiceSessionTarget,
   type VoiceTranscriptionResult
 } from "@shared/types";
-import type { AudioCaptureSegmentResult } from "@shared/ipc";
+import type { AudioCaptureSegmentResult, PetModelMetadata } from "@shared/ipc";
 import type { ProviderModelListResult } from "@shared/provider-catalog";
 import type {
   ActivationLogEntry,
@@ -441,6 +441,14 @@ export class CompanionRuntime {
 
   async importPetModelDirectory(sourceDir: string): Promise<{ modelDir: string }> {
     return this.petService.importPetModelDirectory(sourceDir);
+  }
+
+  async getPetModelMetadata(input?: { modelDir?: string }): Promise<PetModelMetadata> {
+    return this.petService.getPetModelMetadata(input);
+  }
+
+  async applyPetExpression(input: { id?: string }): Promise<{ applied: boolean }> {
+    return this.petService.applyPetExpression(input);
   }
 
   async importSkillDirectory(sourceDir: string) {

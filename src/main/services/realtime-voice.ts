@@ -908,37 +908,6 @@ export class RealtimeVoiceService {
     }
 
     const config = this.input.getConfig();
-    await this.input.memory.rememberMessage({
-      threadId: target.threadId,
-      resourceId: target.resourceId,
-      role: "user",
-      text,
-      metadata: {
-        channel: "console",
-        ...(attachments.length > 0
-          ? {
-              attachments
-            }
-          : {}),
-        voice: {
-          source: "voice",
-          sessionId,
-          mode: this.state.mode,
-          interrupted: false,
-          playedTextLength: 0,
-          asrProvider: config.voice.asrProvider,
-          ttsProvider: config.voice.ttsProvider
-        },
-        ...(metadata
-          ? {
-              speechRecognition: {
-                provider: config.voice.asrProvider,
-                ...metadata
-              }
-            }
-          : {})
-      }
-    });
     this.input.logger.info("realtime-voice", "llm:user-input", {
       sessionId,
       textLength: text.length,
@@ -985,8 +954,18 @@ export class RealtimeVoiceService {
           channel: "console",
           resourceId: target.resourceId,
           threadId: target.threadId,
-          persistUserMessage: false,
           assistantPersistence: "caller",
+          userMetadata: {
+            voice: {
+              source: "voice",
+              sessionId,
+              mode: this.state.mode,
+              interrupted: false,
+              playedTextLength: 0,
+              asrProvider: config.voice.asrProvider,
+              ttsProvider: config.voice.ttsProvider
+            }
+          },
           voiceContext: metadata
             ? {
                 provider: config.voice.asrProvider,

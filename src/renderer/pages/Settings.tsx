@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AppConfig, AppStatus, BrowseAuthState, EmbedderRuntimeStatus, ThemeMode } from "@shared/types";
+import type { PetModelMetadata } from "@shared/ipc";
 import { Badge } from "@renderer/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@renderer/components/ui/card";
 import { AppearanceSettingsCard } from "@renderer/pages/settings/AppearanceSettingsCard";
@@ -374,6 +375,10 @@ export function SettingsPage({
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const [petModelMetadata, setPetModelMetadata] = useState<PetModelMetadata>({
+    expressions: []
+  });
+  const [applyingExpression, setApplyingExpression] = useState(false);
   const [isRecordingPttHotkey, setIsRecordingPttHotkey] = useState(false);
   const [pttHotkeyNotice, setPttHotkeyNotice] = useState("");
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(() => {
@@ -394,6 +399,39 @@ export function SettingsPage({
       window.localStorage.setItem(SETTINGS_STORAGE_KEY, activeSection);
     } catch {}
   }, [activeSection]);
+
+  useEffect(() => {
+    let canceled = false;
+    const modelDir = config.pet.modelDir.trim();
+
+    if (!modelDir) {
+      setPetModelMetadata({
+        expressions: []
+      });
+      return;
+    }
+
+    void window.companion
+      .getPetModelMetadata({
+        modelDir
+      })
+      .then((metadata) => {
+        if (!canceled) {
+          setPetModelMetadata(metadata);
+        }
+      })
+      .catch(() => {
+        if (!canceled) {
+          setPetModelMetadata({
+            expressions: []
+          });
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [config.pet.modelDir]);
 
   useEffect(() => {
     if (!isRecordingPttHotkey) {
@@ -460,7 +498,8 @@ export function SettingsPage({
         pet: {
           ...config.pet,
           enabled: true,
-          modelDir: result.modelDir
+          modelDir: result.modelDir,
+          expressionId: ""
         }
       };
       const saved = await window.companion.saveConfig(nextConfig);
@@ -509,6 +548,30 @@ export function SettingsPage({
     setIsRecordingPttHotkey(false);
   };
 
+  const handleSelectPetExpression = (expressionId: string): void => {
+    if (applyingExpression) {
+      return;
+    }
+
+    setApplyingExpression(true);
+    void (async () => {
+      try {
+        await window.companion.applyPetExpression({
+          id: expressionId
+        });
+      } catch {}
+
+      setConfig({
+        ...config,
+        pet: {
+          ...config.pet,
+          expressionId
+        }
+      });
+      setApplyingExpression(false);
+    })();
+  };
+
   const sectionSnapshots = useMemo(() => buildSectionSnapshots(config, status), [config, status]);
 
   const activeMeta = useMemo(
@@ -544,6 +607,9 @@ export function SettingsPage({
             importModelDirectory={importModelDirectory}
             importingModel={importingModel}
             modelImportNotice={modelImportNotice}
+            expressionOptions={petModelMetadata.expressions}
+            applyingExpression={applyingExpression}
+            onSelectExpression={handleSelectPetExpression}
             isMac={isMac}
             isRecordingPttHotkey={isRecordingPttHotkey}
             pttHotkeyNotice={pttHotkeyNotice}

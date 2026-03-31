@@ -232,6 +232,7 @@
       const presetFallbackImageUrl = params.get("fallbackImageUrl") || "";
       const cubismCoreUrl = params.get("cubismCoreUrl") || "";
       const pixiScriptUrl = params.get("pixiScriptUrl") || "";
+      const pixiSoundScriptUrl = params.get("pixiSoundScriptUrl") || "";
       const live2dScriptUrl = params.get("live2dScriptUrl") || "";
       const emotionConfigBase64 = params.get("emotionConfigBase64") || "";
       const emotionRuntimeModule = window.YobiPetEmotionRuntime || null;
@@ -755,6 +756,11 @@
               error: "missing-pixi-script"
             };
           }
+          if (!pixiSoundScriptUrl) {
+            return {
+              error: "missing-pixi-sound-script"
+            };
+          }
           if (!live2dScriptUrl) {
             return {
               error: "missing-live2d-script"
@@ -762,6 +768,7 @@
           }
 
           await loadScript(pixiScriptUrl);
+          await loadScript(pixiSoundScriptUrl);
           await loadScript(live2dScriptUrl);
 
           const PIXI = window.PIXI;
@@ -804,7 +811,14 @@
       async function boot() {
         try {
           fallbackEl.innerHTML = `<div class="badge">Yobi 加载中</div>`;
-          debugLog("boot:start", { presetModelJsonUrl, presetFallbackImageUrl, cubismCoreUrl, pixiScriptUrl, live2dScriptUrl });
+          debugLog("boot:start", {
+            presetModelJsonUrl,
+            presetFallbackImageUrl,
+            cubismCoreUrl,
+            pixiScriptUrl,
+            pixiSoundScriptUrl,
+            live2dScriptUrl
+          });
           updateStatus("初始化桌宠...");
           const modelJsonPath = presetModelJsonUrl || "";
           if (!modelJsonPath) {
@@ -843,11 +857,11 @@
           const app = new PIXI.Application({
             width: window.innerWidth,
             height: window.innerHeight,
-            transparent: true,
+            backgroundAlpha: 0,
             autoStart: true,
             antialias: true
           });
-          app.stage.interactive = true;
+          app.stage.eventMode = "static";
           const stageHitArea = new PIXI.Rectangle(0, 0, app.renderer.width, app.renderer.height);
           app.stage.hitArea = stageHitArea;
 
@@ -862,7 +876,7 @@
             MODEL_LOAD_TIMEOUT_MS,
             "model-load-timeout"
           );
-          model.interactive = true;
+          model.eventMode = "static";
           model.autoUpdate = false;
           bootSettled = true;
           window.clearTimeout(bootTimer);
@@ -1008,9 +1022,18 @@
           let idleMotionTimer = null;
           let suppressTapUntil = 0;
           let thinkingActive = false;
+          let localSpeechActive = false;
           let speechActive = false;
           let remoteSpeechActive = false;
           let activeAudio = null;
+          let talkingMotionManager = null;
+          let emotionMotionManager = null;
+          let talkingMotionIndex = null;
+          let talkingMotionHeld = false;
+          let talkingMotionUsesPrimary = false;
+          let selectedExpressionId = "";
+          let transientExpressionToken = 0;
+          let transientExpressionTimer = null;
           let syntheticLipSyncRaf = 0;
           let audioLipSyncRaf = 0;
           let audioContext = null;
@@ -1037,6 +1060,19 @@
           const DOUBLE_TAP_GAP_MS = 320;
           const DRAG_ACTIVATE_DISTANCE = 8;
           const CURSOR_POLL_INTERVAL_MS = 48;
+
+          try {
+            model.internalModel?.extendParallelMotionManager?.(2);
+            talkingMotionManager = model.internalModel?.parallelMotionManager?.[0] || null;
+            emotionMotionManager = model.internalModel?.parallelMotionManager?.[1] || null;
+            talkingMotionManager?.on?.("motionFinish", () => {
+              if (syncSpeechActive()) {
+                void holdTalkingMotionLastFrame();
+                return;
+              }
+              stopTalkingMotion();
+            });
+          } catch {}
 
           const setChatVisible = (visible) => {
             if (!chatPanelEl) {
@@ -1254,6 +1290,13 @@
             pendingSingleTapArea = null;
           };
 
+          const clearTransientExpressionRestore = () => {
+            if (transientExpressionTimer) {
+              clearTimeout(transientExpressionTimer);
+              transientExpressionTimer = null;
+            }
+          };
+
           const motionCount = (group) => {
             if (typeof group !== "string") {
               return 0;
@@ -1262,28 +1305,237 @@
             return Array.isArray(bucket) ? bucket.length : 0;
           };
 
-          const playMotion = (group, index) => {
+          const syncSpeechActive = () => {
+            speechActive = localSpeechActive || remoteSpeechActive;
+            return speechActive;
+          };
+
+          const resolveMotionIndex = (group, index) => {
+            const count = motionCount(group);
+            if (count <= 0) {
+              return null;
+            }
+
+            return Number.isInteger(index) && index >= 0 && index < count
+              ? index
+              : Math.floor(Math.random() * count);
+          };
+
+          const playPrimaryMotion = async (group, index) => {
             if (typeof group !== "string") {
               return false;
             }
-            const count = motionCount(group);
-            if (count <= 0) {
+            const nextIndex = resolveMotionIndex(group, index);
+            if (nextIndex === null) {
               return false;
             }
 
             try {
-              const nextIndex =
-                Number.isInteger(index) && index >= 0 && index < count
-                  ? index
-                  : Math.floor(Math.random() * count);
-              model.motion(group, nextIndex, MOTION_PRIORITY_FORCE);
-              return true;
+              return Boolean(await model.motion(group, nextIndex, MOTION_PRIORITY_FORCE));
             } catch {
               return false;
             }
           };
 
-          const applyExpression = () => {};
+          const playPrimaryMotionLastFrame = async (group, index) => {
+            if (typeof group !== "string" || typeof model.motionLastFrame !== "function") {
+              return false;
+            }
+            const nextIndex = resolveMotionIndex(group, index);
+            if (nextIndex === null) {
+              return false;
+            }
+
+            try {
+              return Boolean(await model.motionLastFrame(group, nextIndex));
+            } catch {
+              return false;
+            }
+          };
+
+          const playManagedMotion = async (manager, group, index) => {
+            if (!manager || typeof manager.startMotion !== "function" || typeof group !== "string") {
+              return false;
+            }
+            const nextIndex = resolveMotionIndex(group, index);
+            if (nextIndex === null) {
+              return false;
+            }
+
+            try {
+              return Boolean(await manager.startMotion(group, nextIndex, MOTION_PRIORITY_FORCE));
+            } catch {
+              return false;
+            }
+          };
+
+          const playManagedMotionLastFrame = async (manager, group, index) => {
+            if (!manager || typeof manager.playMotionLastFrame !== "function" || typeof group !== "string") {
+              return false;
+            }
+            const nextIndex = resolveMotionIndex(group, index);
+            if (nextIndex === null) {
+              return false;
+            }
+
+            try {
+              return Boolean(await manager.playMotionLastFrame(group, nextIndex));
+            } catch {
+              return false;
+            }
+          };
+
+          const stopTalkingMotion = () => {
+            if (talkingMotionManager && typeof talkingMotionManager.stopAllMotions === "function") {
+              try {
+                talkingMotionManager.stopAllMotions();
+              } catch {}
+            }
+
+            if (talkingMotionUsesPrimary && typeof model.stopMotions === "function") {
+              try {
+                model.stopMotions();
+              } catch {}
+            }
+
+            talkingMotionIndex = null;
+            talkingMotionHeld = false;
+            talkingMotionUsesPrimary = false;
+          };
+
+          const startPrimaryTalkingMotion = async (index) => {
+            if (typeof talkingMotionGroup !== "string") {
+              return false;
+            }
+
+            try {
+              return Boolean(
+                await model.motion(talkingMotionGroup, index, MOTION_PRIORITY_FORCE, {
+                  onFinish: () => {
+                    if (syncSpeechActive()) {
+                      void holdTalkingMotionLastFrame();
+                      return;
+                    }
+                    stopTalkingMotion();
+                  }
+                })
+              );
+            } catch {
+              return false;
+            }
+          };
+
+          const startTalkingMotion = async () => {
+            if (!syncSpeechActive()) {
+              stopTalkingMotion();
+              return false;
+            }
+
+            if (talkingMotionIndex !== null) {
+              return true;
+            }
+
+            const nextIndex = resolveMotionIndex(talkingMotionGroup);
+            if (nextIndex === null) {
+              return false;
+            }
+
+            talkingMotionIndex = nextIndex;
+            talkingMotionHeld = false;
+            talkingMotionUsesPrimary = false;
+
+            if (talkingMotionManager) {
+              const ok = await playManagedMotion(talkingMotionManager, talkingMotionGroup, nextIndex);
+              if (ok) {
+                return true;
+              }
+            }
+
+            talkingMotionUsesPrimary = true;
+            const ok = await startPrimaryTalkingMotion(nextIndex);
+            if (!ok) {
+              stopTalkingMotion();
+            }
+            return ok;
+          };
+
+          const holdTalkingMotionLastFrame = async () => {
+            if (!syncSpeechActive()) {
+              stopTalkingMotion();
+              return false;
+            }
+
+            if (talkingMotionIndex === null || talkingMotionHeld) {
+              return talkingMotionIndex !== null;
+            }
+
+            let ok = false;
+            if (talkingMotionManager) {
+              ok = await playManagedMotionLastFrame(talkingMotionManager, talkingMotionGroup, talkingMotionIndex);
+            }
+
+            if (!ok) {
+              talkingMotionUsesPrimary = true;
+              ok = await playPrimaryMotionLastFrame(talkingMotionGroup, talkingMotionIndex);
+            }
+
+            if (ok) {
+              talkingMotionHeld = true;
+            }
+
+            return ok;
+          };
+
+          const ensureTalkingMotion = async () => {
+            if (!syncSpeechActive()) {
+              stopTalkingMotion();
+              return false;
+            }
+
+            if (talkingMotionIndex !== null) {
+              return true;
+            }
+
+            return startTalkingMotion();
+          };
+
+          const applyExpression = async (id) => {
+            const normalizedId = typeof id === "string" ? id.trim() : "";
+            if (!normalizedId) {
+              try {
+                model.internalModel?.motionManager?.expressionManager?.resetExpression?.();
+                return true;
+              } catch {
+                return false;
+              }
+            }
+
+            try {
+              return Boolean(await model.expression(normalizedId));
+            } catch {
+              return false;
+            }
+          };
+
+          const applySelectedExpression = async (id) => {
+            selectedExpressionId = typeof id === "string" ? id.trim() : "";
+            transientExpressionToken += 1;
+            clearTransientExpressionRestore();
+            return applyExpression(selectedExpressionId);
+          };
+
+          const scheduleExpressionRestore = (delayMs) => {
+            const restoreDelay = Number.isFinite(delayMs) ? Math.max(0, delayMs) : 0;
+            const token = ++transientExpressionToken;
+            clearTransientExpressionRestore();
+            transientExpressionTimer = setTimeout(() => {
+              transientExpressionTimer = null;
+              if (token !== transientExpressionToken) {
+                return;
+              }
+              void applyExpression(selectedExpressionId);
+            }, restoreDelay);
+          };
 
           const setMouthOpen = (value) => {
             const clamped = clamp(value, 0, 1);
@@ -1388,7 +1640,7 @@
               }
 
               const loop = () => {
-                if (!audioAnalyser || !audioAnalyserData || !speechActive) {
+                if (!audioAnalyser || !audioAnalyserData || !localSpeechActive || activeAudio !== audio) {
                   audioLipSyncRaf = 0;
                   setMouthOpen(0);
                   return;
@@ -1433,7 +1685,7 @@
               if (thinkingActive || speechActive) {
                 return;
               }
-              playMotion(idleMotionGroup);
+              void playPrimaryMotion(idleMotionGroup);
               scheduleIdleMotionLoop();
             }, 4200 + Math.random() * 3600);
           };
@@ -1445,7 +1697,7 @@
 
             clearStatusTimer();
             if (playImmediateMotion) {
-              playMotion(idleMotionGroup);
+              void playPrimaryMotion(idleMotionGroup);
             }
             updateStatus("idle");
             scheduleIdleMotionLoop();
@@ -1454,9 +1706,12 @@
           const applyThinkingState = () => {
             clearStatusTimer();
             clearIdleMotionLoop();
-            if (!playMotion(thinkingMotionGroup, 1)) {
-              playMotion(thinkingMotionGroup);
-            }
+            void (async () => {
+              const ok = await playPrimaryMotion(thinkingMotionGroup, 1);
+              if (!ok) {
+                await playPrimaryMotion(thinkingMotionGroup);
+              }
+            })();
             updateStatus("thinking");
           };
 
@@ -1464,13 +1719,22 @@
             const durationMs = input.durationMs ?? 1700;
             clearIdleMotionLoop();
             clearStatusTimer();
+            transientExpressionToken += 1;
+            clearTransientExpressionRestore();
 
-            if (typeof input.motionGroup === "string") {
-              const ok = playMotion(input.motionGroup, input.motionIndex);
-              if (!ok && input.motionGroup !== idleMotionGroup) {
-                playMotion(idleMotionGroup);
+            void (async () => {
+              if (typeof input.expression === "string" && input.expression.trim()) {
+                await applyExpression(input.expression);
+                scheduleExpressionRestore(durationMs);
               }
-            }
+
+              if (typeof input.motionGroup === "string") {
+                const ok = await playPrimaryMotion(input.motionGroup, input.motionIndex);
+                if (!ok && input.motionGroup !== idleMotionGroup) {
+                  await playPrimaryMotion(idleMotionGroup);
+                }
+              }
+            })();
 
             if (input.syntheticLipSyncMs && input.syntheticLipSyncMs > 0) {
               startSyntheticLipSync(input.syntheticLipSyncMs);
@@ -1517,12 +1781,25 @@
               return;
             }
 
-            runStateAction({
-              status: `emotion · ${normalizedEmotion}`,
-              motionGroup: action.motionGroup,
-              motionIndex: action.motionIndex,
-              durationMs: Math.max(650, Number.isFinite(options.durationMs) ? options.durationMs : 1850)
-            });
+            clearIdleMotionLoop();
+            clearStatusTimer();
+
+            void (async () => {
+              const ok = emotionMotionManager
+                ? await playManagedMotion(emotionMotionManager, action.motionGroup, action.motionIndex)
+                : await playPrimaryMotion(action.motionGroup, action.motionIndex);
+              if (!ok && action.motionGroup !== idleMotionGroup && !speechActive && !thinkingActive) {
+                await playPrimaryMotion(idleMotionGroup);
+              }
+            })();
+
+            if (!speechActive && !thinkingActive) {
+              updateStatus(`emotion · ${normalizedEmotion}`);
+              scheduleStatusBackToBaseline(
+                Math.max(650, Number.isFinite(options.durationMs) ? options.durationMs : 1850)
+              );
+              scheduleIdleMotionLoop();
+            }
           };
 
           const stopCurrentAudio = () => {
@@ -1536,19 +1813,26 @@
               activeAudio.load();
             } catch {}
 
-            speechActive = remoteSpeechActive;
+            localSpeechActive = false;
+            syncSpeechActive();
             activeAudio = null;
             stopLipSync();
+            if (!speechActive) {
+              stopTalkingMotion();
+            }
           };
 
           const finishSpeech = () => {
-            speechActive = remoteSpeechActive;
+            localSpeechActive = false;
+            syncSpeechActive();
             activeAudio = null;
             stopLipSync();
-            if (remoteSpeechActive) {
+            if (speechActive) {
+              void ensureTalkingMotion();
               updateStatus("talking");
               return;
             }
+            stopTalkingMotion();
             if (thinkingActive) {
               applyThinkingState();
               return;
@@ -1558,20 +1842,19 @@
 
           const applyRemoteSpeechState = (active) => {
             remoteSpeechActive = active;
-            speechActive = remoteSpeechActive || Boolean(activeAudio);
-            if (remoteSpeechActive) {
+            syncSpeechActive();
+            if (speechActive) {
               clearIdleMotionLoop();
               clearStatusTimer();
-              pulseModel();
-              playMotion(talkingMotionGroup);
+              if (remoteSpeechActive) {
+                pulseModel();
+              }
+              void ensureTalkingMotion();
               updateStatus("talking");
               return;
             }
 
-            if (activeAudio) {
-              return;
-            }
-
+            stopTalkingMotion();
             stopLipSync();
             setMouthOpen(0);
             if (thinkingActive) {
@@ -1594,11 +1877,12 @@
             audio.volume = 1;
 
             audio.onplay = () => {
-              speechActive = true;
+              localSpeechActive = true;
+              syncSpeechActive();
               clearIdleMotionLoop();
               clearStatusTimer();
               pulseModel();
-              playMotion(talkingMotionGroup);
+              void ensureTalkingMotion();
               startAudioLipSync(audio);
               updateStatus("talking");
             };
@@ -2208,13 +2492,16 @@
             }
 
             if (data.type === "talking") {
-              runStateAction({
-                status: "talking",
-                motionGroup: talkingMotionGroup,
-                syntheticLipSyncMs: 1400,
-                pulse: true,
-                durationMs: 1650
-              });
+              pulseModel();
+              if (!speechActive) {
+                updateStatus("talking");
+                scheduleStatusBackToBaseline(900);
+              }
+              return;
+            }
+
+            if (data.type === "expression") {
+              void applySelectedExpression(typeof data.id === "string" ? data.id : "");
               return;
             }
 
@@ -2249,7 +2536,7 @@
             }
 
             if (data.type === "speech-level") {
-              if (remoteSpeechActive && !activeAudio) {
+              if (remoteSpeechActive && !localSpeechActive) {
                 setMouthOpen(Number.isFinite(data.level) ? data.level : 0);
               }
             }

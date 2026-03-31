@@ -88,6 +88,12 @@ const api = {
   importPetModelFromDialog() {
     return ipcRenderer.invoke('pet:model:import');
   },
+  getPetModelMetadata(input) {
+    return ipcRenderer.invoke('pet:model:metadata', input ?? {});
+  },
+  applyPetExpression(input) {
+    return ipcRenderer.invoke('pet:expression:apply', input ?? {});
+  },
   listSkills() {
     return ipcRenderer.invoke('skills:list');
   },

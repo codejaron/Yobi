@@ -11,6 +11,7 @@ import {
 } from "electron";
 import { appLogger as logger } from "@main/runtime/singletons";
 import { DEFAULT_PET_EMOTION_CONFIG, mergePetEmotionConfig, type PetEmotionConfigOverride, normalizePetEmotionName } from "@shared/pet-emotion";
+import { buildPetModelCandidateDirs, findPetFallbackImagePath, findPetModelJsonPath } from "@main/pet/pet-model-metadata";
 import type { PetEvent } from "@shared/pet-events";
 
 export class PetWindowController {
@@ -221,13 +222,18 @@ export class PetWindowController {
       path.join(app.getAppPath(), "resources", "vendor", "live2dcubismcore.min.js")
     ]);
     const pixiScriptPath = resolveExistingPath([
-      path.join(app.getAppPath(), "node_modules", "pixi.js", "dist", "browser", "pixi.min.js"),
-      path.join(process.cwd(), "node_modules", "pixi.js", "dist", "browser", "pixi.min.js"),
+      path.join(app.getAppPath(), "node_modules", "pixi.js", "dist", "pixi.min.js"),
+      path.join(process.cwd(), "node_modules", "pixi.js", "dist", "pixi.min.js"),
       path.join(app.getAppPath(), "resources", "vendor", "pixi.min.js")
     ]);
+    const pixiSoundScriptPath = resolveExistingPath([
+      path.join(app.getAppPath(), "node_modules", "@pixi", "sound", "dist", "pixi-sound.js"),
+      path.join(process.cwd(), "node_modules", "@pixi", "sound", "dist", "pixi-sound.js"),
+      path.join(app.getAppPath(), "resources", "vendor", "pixi-sound.js")
+    ]);
     const live2dScriptPath = resolveExistingPath([
-      path.join(app.getAppPath(), "node_modules", "pixi-live2d-display", "dist", "cubism4.min.js"),
-      path.join(process.cwd(), "node_modules", "pixi-live2d-display", "dist", "cubism4.min.js"),
+      path.join(app.getAppPath(), "node_modules", "pixi-live2d-display-advanced", "dist", "cubism4.min.js"),
+      path.join(process.cwd(), "node_modules", "pixi-live2d-display-advanced", "dist", "cubism4.min.js"),
       path.join(app.getAppPath(), "resources", "vendor", "cubism4.min.js")
     ]);
     if (modelJsonPath) {
@@ -241,6 +247,9 @@ export class PetWindowController {
     }
     if (pixiScriptPath) {
       targetUrl.searchParams.set("pixiScriptUrl", pathToFileURL(pixiScriptPath).toString());
+    }
+    if (pixiSoundScriptPath) {
+      targetUrl.searchParams.set("pixiSoundScriptUrl", pathToFileURL(pixiSoundScriptPath).toString());
     }
     if (live2dScriptPath) {
       targetUrl.searchParams.set("live2dScriptUrl", pathToFileURL(live2dScriptPath).toString());
@@ -371,85 +380,15 @@ export class PetWindowController {
 }
 
 function findModelJsonPath(modelDir: string): string | null {
-  const candidateDirs = buildCandidateDirs(modelDir);
-  for (const dir of candidateDirs) {
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".model3.json")) {
-        continue;
-      }
-      return path.join(dir, entry.name);
-    }
-  }
-  return null;
+  return findPetModelJsonPath(modelDir);
 }
 
 function findFallbackImagePath(modelJsonPath: string): string | null {
-  try {
-    const raw = fs.readFileSync(modelJsonPath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      FileReferences?: {
-        Textures?: string[];
-      };
-    };
-    const modelBaseDir = path.dirname(modelJsonPath);
-    const textures = Array.isArray(parsed?.FileReferences?.Textures) ? parsed.FileReferences.Textures : [];
-    for (const texture of textures) {
-      if (typeof texture !== "string" || !texture.trim()) {
-        continue;
-      }
-      const candidate = path.join(modelBaseDir, texture);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {}
-
-  const candidateDirs = buildCandidateDirs(path.dirname(modelJsonPath));
-  for (const dir of candidateDirs) {
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      if (!/texture_\d+\.png$/i.test(entry.name) && !/\.png$/i.test(entry.name)) {
-        continue;
-      }
-      return path.join(dir, entry.name);
-    }
-  }
-
-  return null;
+  return findPetFallbackImagePath(modelJsonPath);
 }
 
 function buildCandidateDirs(baseDir: string): string[] {
-  const candidates = [baseDir, path.join(baseDir, "runtime")];
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = fs.readdirSync(baseDir, { withFileTypes: true });
-  } catch {
-    return candidates;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const childDir = path.join(baseDir, entry.name);
-    candidates.push(childDir, path.join(childDir, "runtime"));
-  }
-
-  return Array.from(new Set(candidates));
+  return buildPetModelCandidateDirs(baseDir);
 }
 
 

@@ -60,6 +60,15 @@ export interface SenseVoiceModelProgressEvent {
   percent: number;
 }
 
+export interface PetExpressionOption {
+  id: string;
+  label: string;
+}
+
+export interface PetModelMetadata {
+  expressions: PetExpressionOption[];
+}
+
 export interface ConsoleChatRequestInput {
   text: string;
   attachments?: ConsoleChatAttachmentInput[];
@@ -130,6 +139,10 @@ export interface CompanionApi {
     canceled: boolean;
     modelDir?: string;
   }>;
+  getPetModelMetadata(input?: {
+    modelDir?: string;
+  }): Promise<PetModelMetadata>;
+  applyPetExpression(input: { id: string }): Promise<{ applied: boolean }>;
   onStatus(listener: (status: AppStatus) => void): () => void;
   onPetEnabledChange(listener: (enabled: boolean) => void): () => void;
   loadChatImagePreview(input: { path: string; mimeType?: string | null }): Promise<string | null>;

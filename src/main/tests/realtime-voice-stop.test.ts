@@ -26,6 +26,8 @@ function createService(overrides?: {
   voiceRouter?: Partial<ConstructorParameters<typeof RealtimeVoiceService>[0]["voiceRouter"]>;
   createVad?: ConstructorParameters<typeof RealtimeVoiceService>[0]["createVad"];
   getConfig?: ConstructorParameters<typeof RealtimeVoiceService>[0]["getConfig"];
+  conversation?: Partial<ConstructorParameters<typeof RealtimeVoiceService>[0]["conversation"]>;
+  memory?: Partial<ConstructorParameters<typeof RealtimeVoiceService>[0]["memory"]>;
   captureService?: {
     isNativeSupported?: () => boolean;
     startStream?: () => Promise<void>;
@@ -77,13 +79,23 @@ function createService(overrides?: {
           }),
           abort: async () => undefined
         }) satisfies StreamingAsrSession,
+      createStreamingTtsSession: () =>
+        ({
+          synthesizeChunk: async () => Buffer.from("audio"),
+          close: async () => undefined
+        }) satisfies StreamingTtsSession,
       ...(overrides?.voiceRouter ?? {})
     } as never,
     createVad: overrides?.createVad,
     conversation: {
-      rememberAssistantMessage: async () => undefined
+      reply: async () => "",
+      rememberAssistantMessage: async () => undefined,
+      ...(overrides?.conversation ?? {})
     } as never,
-    memory: {} as never,
+    memory: {
+      rememberMessage: async () => undefined,
+      ...(overrides?.memory ?? {})
+    } as never,
     defaultTarget: {
       resourceId: "primary-user",
       threadId: "primary-thread"
@@ -689,4 +701,59 @@ test("realtime voice: final user transcript event includes companion attachments
   assert.equal(transcriptEvent?.type, "user-transcript");
   assert.equal(transcriptEvent?.attachments?.length, 1);
   assert.equal(transcriptEvent?.attachments?.[0]?.id, attachment.id);
+});
+
+test("realtime voice: handleUserTurn should not pre-persist the same user turn before conversation.reply", async () => {
+  let rememberedUserTurns = 0;
+  let seenReplyInput: any = null;
+  const service = createService({
+    conversation: {
+      reply: async (input: any) => {
+        seenReplyInput = input;
+        return "收到";
+      }
+    },
+    memory: {
+      rememberMessage: async () => {
+        rememberedUserTurns += 1;
+      }
+    }
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  await service.handleUserTurn(
+    "可以听到吗",
+    {
+      language: "zh",
+      emotion: null,
+      event: null,
+      rawTags: []
+    },
+    []
+  );
+
+  assert.equal(rememberedUserTurns, 0);
+  assert.equal(seenReplyInput?.persistUserMessage, undefined);
+  assert.deepEqual(seenReplyInput?.userMetadata, {
+    voice: {
+      source: "voice",
+      sessionId: "session-1",
+      mode: "free",
+      interrupted: false,
+      playedTextLength: 0,
+      asrProvider: "sensevoice-local",
+      ttsProvider: "edge"
+    }
+  });
 });

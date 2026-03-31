@@ -4,6 +4,7 @@ import type {
   AppConfig,
   AssistantTimelineBlock,
   ChatAttachment,
+  HistoryMessageMeta,
   RealtimeEmotionalSignals,
   SkillsCatalogSummary,
   TokenUsageSource,
@@ -288,6 +289,7 @@ export class ConversationEngine {
     stream?: ChatReplyStreamListener;
     requestApproval?: ToolApprovalHandler;
     persistUserMessage?: boolean;
+    userMetadata?: Partial<HistoryMessageMeta>;
     assistantPersistence?: "engine" | "caller";
     allowedToolNames?: string[];
     preapprovedToolNames?: string[];
@@ -312,6 +314,7 @@ export class ConversationEngine {
         role: "user",
         text: normalizedText,
         metadata: {
+          ...(input.userMetadata ?? {}),
           channel: input.channel,
           ...(attachments.length > 0 ? { attachments } : {}),
           ...(input.voiceContext
