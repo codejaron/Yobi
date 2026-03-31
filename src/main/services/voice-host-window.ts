@@ -27,6 +27,7 @@ export type VoiceHostMessage =
   | { type: "capture-stopped" }
   | { type: "capture-error"; message: string }
   | { type: "pcm-frame"; pcm: number[]; sampleRate: number }
+  | { type: "playback-pcm-frame"; pcm: number[]; sampleRate: number }
   | { type: "playback-started"; id: string; text: string; queueLength: number }
   | { type: "playback-ended"; id: string; text: string; queueLength: number }
   | { type: "playback-cleared"; queueLength: number }
@@ -236,7 +237,11 @@ export class VoiceHostWindowController {
       return;
     }
 
-    if (payload?.type !== "pcm-frame" && payload?.type !== "speech-level") {
+    if (
+      payload?.type !== "pcm-frame" &&
+      payload?.type !== "playback-pcm-frame" &&
+      payload?.type !== "speech-level"
+    ) {
       this.logger.info("voice-host", `message:${payload?.type ?? "unknown"}`);
     }
     if (payload?.type === "host-ready") {

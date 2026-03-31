@@ -27,8 +27,12 @@
         let playbackContext = null;
         let playbackAnalyser = null;
         let playbackSource = null;
+        let playbackTapNode = null;
         let playbackData = null;
+        let playbackReferenceEmitter = null;
         let playbackRaf = 0;
+        const PCM_OUTPUT_RATE = 16000;
+        const PCM_FRAME_SAMPLES = 320;
 
         const floatToInt16 = (input) => {
           const output = new Int16Array(input.length);
@@ -37,6 +41,64 @@
             output[index] = value < 0 ? Math.round(value * 0x8000) : Math.round(value * 0x7fff);
           }
           return output;
+        };
+
+        const createRealtimePcmEmitter = (eventType, inputRate, outputRate = PCM_OUTPUT_RATE) => {
+          let pendingInput = [];
+          let pendingOutput = [];
+          let consumedInputSamples = 0;
+          let emittedOutputSamples = 0;
+
+          const flushFrames = () => {
+            while (pendingOutput.length >= PCM_FRAME_SAMPLES) {
+              const frame = new Float32Array(pendingOutput.splice(0, PCM_FRAME_SAMPLES));
+              const pcm16 = floatToInt16(frame);
+              emit({
+                type: eventType,
+                pcm: Array.from(new Uint8Array(pcm16.buffer)),
+                sampleRate: outputRate
+              });
+            }
+          };
+
+          return {
+            push(floatChunk) {
+              if (!floatChunk || floatChunk.length === 0) {
+                return;
+              }
+
+              for (let index = 0; index < floatChunk.length; index += 1) {
+                pendingInput.push(floatChunk[index] || 0);
+              }
+
+              const ratio = inputRate / outputRate;
+              while (true) {
+                const boundaryAbs = Math.floor((emittedOutputSamples + 1) * ratio);
+                const windowLength = boundaryAbs - consumedInputSamples;
+                if (windowLength <= 0 || windowLength > pendingInput.length) {
+                  break;
+                }
+
+                let total = 0;
+                for (let index = 0; index < windowLength; index += 1) {
+                  total += pendingInput[index] || 0;
+                }
+
+                pendingOutput.push(windowLength > 0 ? total / windowLength : 0);
+                pendingInput.splice(0, windowLength);
+                consumedInputSamples = boundaryAbs;
+                emittedOutputSamples += 1;
+              }
+
+              flushFrames();
+            },
+            reset() {
+              pendingInput = [];
+              pendingOutput = [];
+              consumedInputSamples = 0;
+              emittedOutputSamples = 0;
+            }
+          };
         };
 
         const emit = (payload, transfer = []) => {
@@ -59,6 +121,8 @@
 
           playbackData = null;
           playbackAnalyser = null;
+          playbackReferenceEmitter?.reset?.();
+          playbackReferenceEmitter = null;
 
           if (playbackSource) {
             try {
@@ -66,6 +130,14 @@
             } catch {}
           }
           playbackSource = null;
+
+          if (playbackTapNode) {
+            try {
+              playbackTapNode.port.onmessage = null;
+              playbackTapNode.disconnect();
+            } catch {}
+          }
+          playbackTapNode = null;
 
           if (playbackContext) {
             try {
@@ -91,7 +163,7 @@
           await clearPlaybackMonitor();
         };
 
-        const startPlaybackMonitor = (item) => {
+        const startPlaybackMonitor = async (item) => {
           const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
           if (!AudioContextCtor) {
             return;
@@ -103,11 +175,34 @@
             playbackAnalyser.fftSize = 256;
             playbackData = new Uint8Array(playbackAnalyser.frequencyBinCount);
             playbackSource = playbackContext.createMediaElementSource(item.audio);
-            playbackSource.connect(playbackAnalyser);
+            const workletUrl = createWorkletUrl();
+            await playbackContext.audioWorklet.addModule(workletUrl);
+            URL.revokeObjectURL(workletUrl);
+
+            playbackTapNode = new AudioWorkletNode(
+              playbackContext,
+              "voice-playback-tap-processor",
+              {
+                numberOfInputs: 1,
+                numberOfOutputs: 1,
+                channelCount: 1,
+                outputChannelCount: [1]
+              }
+            );
+            playbackReferenceEmitter = createRealtimePcmEmitter(
+              "playback-pcm-frame",
+              playbackContext.sampleRate
+            );
+            playbackTapNode.port.onmessage = (event) => {
+              playbackReferenceEmitter?.push(event.data);
+            };
+
+            playbackSource.connect(playbackTapNode);
+            playbackTapNode.connect(playbackAnalyser);
             playbackAnalyser.connect(playbackContext.destination);
 
             if (playbackContext.state === "suspended") {
-              void playbackContext.resume().catch(() => undefined);
+              await playbackContext.resume().catch(() => undefined);
             }
 
             const tick = () => {
@@ -161,7 +256,6 @@
               text: item.text,
               queueLength: playbackQueue.length
             });
-            startPlaybackMonitor(activePlayback);
           };
 
           audio.onended = async () => {
@@ -192,6 +286,7 @@
           };
 
           try {
+            await startPlaybackMonitor(activePlayback);
             await audio.play();
           } catch (error) {
             emit({
@@ -216,7 +311,28 @@
                 return true;
               }
             }
+
+            class VoicePlaybackTapProcessor extends AudioWorkletProcessor {
+              process(inputs, outputs) {
+                const channel = inputs?.[0]?.[0];
+                const output = outputs?.[0]?.[0];
+                if (channel && channel.length > 0) {
+                  if (output && output.length === channel.length) {
+                    output.set(channel);
+                  }
+                  this.port.postMessage(channel.slice(0));
+                  return true;
+                }
+
+                if (output) {
+                  output.fill(0);
+                }
+                return true;
+              }
+            }
+
             registerProcessor("voice-capture-processor", VoiceCaptureProcessor);
+            registerProcessor("voice-playback-tap-processor", VoicePlaybackTapProcessor);
           `;
           return URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
         };

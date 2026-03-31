@@ -789,7 +789,7 @@
         }
       };
 
-      const disableModelEmbeddedMotionSound = (live2dModule) => {
+      const resolveLive2DSoundConfigs = (live2dModule) => {
         const candidates = [
           live2dModule?.config,
           live2dModule?.default?.config,
@@ -797,13 +797,22 @@
           window.PIXI?.live2d?.config
         ];
 
+        const configs = [];
         for (const config of candidates) {
-          if (!config || typeof config !== "object") {
+          if (!config || typeof config !== "object" || configs.includes(config)) {
             continue;
           }
 
+          configs.push(config);
+        }
+
+        return configs;
+      };
+
+      const setLive2DSoundEnabled = (configs, enabled) => {
+        for (const config of configs) {
           try {
-            config.sound = false;
+            config.sound = enabled;
           } catch {}
         }
       };
@@ -852,7 +861,8 @@
             return;
           }
           const { PIXI, Live2DModel, live2dModule } = runtime;
-          disableModelEmbeddedMotionSound(live2dModule);
+          const live2dSoundConfigs = resolveLive2DSoundConfigs(live2dModule);
+          setLive2DSoundEnabled(live2dSoundConfigs, false);
 
           const app = new PIXI.Application({
             width: window.innerWidth,
@@ -1025,7 +1035,7 @@
           let localSpeechActive = false;
           let speechActive = false;
           let remoteSpeechActive = false;
-          let activeAudio = null;
+          let localSpeechToken = 0;
           let talkingMotionManager = null;
           let emotionMotionManager = null;
           let talkingMotionIndex = null;
@@ -1035,11 +1045,6 @@
           let transientExpressionToken = 0;
           let transientExpressionTimer = null;
           let syntheticLipSyncRaf = 0;
-          let audioLipSyncRaf = 0;
-          let audioContext = null;
-          let audioAnalyser = null;
-          let audioAnalyserData = null;
-          let audioSourceNode = null;
           let chatRequestToken = 0;
           let pendingSingleTapTimer = null;
           let pendingSingleTapArea = null;
@@ -1553,39 +1558,34 @@
             setTimeout(() => rootEl.classList.remove("pulse"), 1600);
           };
 
+          const sampleModelLipSyncOpen = () => {
+            const motionManager = model.internalModel?.motionManager;
+            if (!motionManager?.currentAudio || typeof motionManager.mouthSync !== "function") {
+              return 0;
+            }
+
+            const sampled = Number(motionManager.mouthSync());
+            if (!Number.isFinite(sampled) || sampled <= 0) {
+              return 0;
+            }
+
+            return clamp(Math.max(0.4, sampled), 0, 1);
+          };
+
+          const startModelSpeak = (soundUrl, options) => {
+            setLive2DSoundEnabled(live2dSoundConfigs, true);
+            try {
+              return model.speak(soundUrl, options);
+            } finally {
+              setLive2DSoundEnabled(live2dSoundConfigs, false);
+            }
+          };
+
           const stopLipSync = () => {
             if (syntheticLipSyncRaf) {
               cancelAnimationFrame(syntheticLipSyncRaf);
               syntheticLipSyncRaf = 0;
             }
-
-            if (audioLipSyncRaf) {
-              cancelAnimationFrame(audioLipSyncRaf);
-              audioLipSyncRaf = 0;
-            }
-
-            if (audioSourceNode) {
-              try {
-                audioSourceNode.disconnect();
-              } catch {}
-              audioSourceNode = null;
-            }
-
-            if (audioAnalyser) {
-              try {
-                audioAnalyser.disconnect();
-              } catch {}
-              audioAnalyser = null;
-            }
-
-            audioAnalyserData = null;
-            setMouthOpen(0);
-            if (audioContext) {
-              const contextRef = audioContext;
-              audioContext = null;
-              void contextRef.close().catch(() => undefined);
-            }
-
             setMouthOpen(0);
           };
 
@@ -1593,10 +1593,6 @@
             if (syntheticLipSyncRaf) {
               cancelAnimationFrame(syntheticLipSyncRaf);
               syntheticLipSyncRaf = 0;
-            }
-            if (audioLipSyncRaf) {
-              cancelAnimationFrame(audioLipSyncRaf);
-              audioLipSyncRaf = 0;
             }
 
             const startedAt = performance.now();
@@ -1615,52 +1611,6 @@
             };
 
             syntheticLipSyncRaf = requestAnimationFrame(loop);
-          };
-
-          const startAudioLipSync = (audio) => {
-            stopLipSync();
-
-            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContextCtor) {
-              startSyntheticLipSync(1800);
-              return;
-            }
-
-            try {
-              audioContext = new AudioContextCtor();
-              audioAnalyser = audioContext.createAnalyser();
-              audioAnalyser.fftSize = 256;
-              audioAnalyserData = new Uint8Array(audioAnalyser.frequencyBinCount);
-              audioSourceNode = audioContext.createMediaElementSource(audio);
-              audioSourceNode.connect(audioAnalyser);
-              audioAnalyser.connect(audioContext.destination);
-
-              if (audioContext.state === "suspended") {
-                void audioContext.resume().catch(() => undefined);
-              }
-
-              const loop = () => {
-                if (!audioAnalyser || !audioAnalyserData || !localSpeechActive || activeAudio !== audio) {
-                  audioLipSyncRaf = 0;
-                  setMouthOpen(0);
-                  return;
-                }
-
-                audioAnalyser.getByteTimeDomainData(audioAnalyserData);
-                let energy = 0;
-                for (let index = 0; index < audioAnalyserData.length; index += 1) {
-                  const normalized = (audioAnalyserData[index] - 128) / 128;
-                  energy += normalized * normalized;
-                }
-                const rms = Math.sqrt(energy / audioAnalyserData.length);
-                setMouthOpen(rms * 8);
-                audioLipSyncRaf = requestAnimationFrame(loop);
-              };
-
-              audioLipSyncRaf = requestAnimationFrame(loop);
-            } catch {
-              startSyntheticLipSync(1800);
-            }
           };
 
           const scheduleStatusBackToBaseline = (delayMs) => {
@@ -1803,29 +1753,29 @@
           };
 
           const stopCurrentAudio = () => {
-            if (!activeAudio) {
-              return;
-            }
-
+            localSpeechToken += 1;
             try {
-              activeAudio.pause();
-              activeAudio.src = "";
-              activeAudio.load();
+              model.stopSpeaking();
             } catch {}
 
             localSpeechActive = false;
             syncSpeechActive();
-            activeAudio = null;
             stopLipSync();
-            if (!speechActive) {
-              stopTalkingMotion();
+            if (speechActive) {
+              void ensureTalkingMotion();
+              updateStatus("talking");
+              return;
             }
+            stopTalkingMotion();
           };
 
-          const finishSpeech = () => {
+          const finishSpeech = (token) => {
+            if (typeof token === "number" && token !== localSpeechToken) {
+              return;
+            }
+
             localSpeechActive = false;
             syncSpeechActive();
-            activeAudio = null;
             stopLipSync();
             if (speechActive) {
               void ensureTalkingMotion();
@@ -1864,51 +1814,58 @@
             enterIdle(false);
           };
 
-          const playPetSpeech = (audioBase64, mimeType) => {
+          const playPetSpeech = async (audioBase64, mimeType) => {
             const payload = typeof audioBase64 === "string" ? audioBase64.trim() : "";
             if (!payload) {
               return;
             }
 
             stopCurrentAudio();
+            stopLipSync();
 
-            const audio = new Audio(`data:${mimeType || "audio/mpeg"};base64,${payload}`);
-            activeAudio = audio;
-            audio.volume = 1;
+            const speechToken = localSpeechToken + 1;
+            localSpeechToken = speechToken;
+            const dataUrl = `data:${mimeType || "audio/mpeg"};base64,${payload}`;
 
-            audio.onplay = () => {
+            try {
+              const ok = await startModelSpeak(dataUrl, {
+                volume: 1,
+                onFinish: () => {
+                  finishSpeech(speechToken);
+                },
+                onError: () => {
+                  if (speechToken !== localSpeechToken) {
+                    return;
+                  }
+                  updateStatus("speech-error");
+                  finishSpeech(speechToken);
+                }
+              });
+
+              if (speechToken !== localSpeechToken) {
+                return;
+              }
+
+              if (!ok) {
+                updateStatus("speech-error");
+                finishSpeech(speechToken);
+                return;
+              }
+
               localSpeechActive = true;
               syncSpeechActive();
               clearIdleMotionLoop();
               clearStatusTimer();
               pulseModel();
               void ensureTalkingMotion();
-              startAudioLipSync(audio);
               updateStatus("talking");
-            };
-
-            audio.onended = () => {
-              if (activeAudio !== audio) {
-                return;
-              }
-              finishSpeech();
-            };
-
-            audio.onerror = () => {
-              if (activeAudio !== audio) {
+            } catch {
+              if (speechToken !== localSpeechToken) {
                 return;
               }
               updateStatus("speech-error");
-              finishSpeech();
-            };
-
-            audio.play().catch(() => {
-              if (activeAudio !== audio) {
-                return;
-              }
-              updateStatus("speech-blocked");
-              finishSpeech();
-            });
+              finishSpeech(speechToken);
+            }
           };
 
           const applyModelLayout = () => {
@@ -2340,6 +2297,9 @@
           app.view.style.inset = "0";
           app.view.style.zIndex = "10";
           app.ticker.add(() => {
+            if (emotionRenderer && localSpeechActive) {
+              emotionRenderer.setLipSyncOpen(sampleModelLipSyncOpen());
+            }
             model.update(app.ticker.deltaMS);
           });
 
@@ -2526,7 +2486,7 @@
             }
 
             if (data.type === "speech") {
-              playPetSpeech(data.audioBase64, data.mimeType);
+              void playPetSpeech(data.audioBase64, data.mimeType);
               return;
             }
 

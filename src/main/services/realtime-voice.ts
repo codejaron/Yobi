@@ -15,6 +15,7 @@ import type { ConversationEngine } from "@main/core/conversation";
 import type { CompanionSpeechCaptureSession } from "./companion-mode";
 import { SentenceChunkBuffer } from "./realtime-voice-chunker";
 import { shouldAutoStartVoiceSession } from "./realtime-voice-lifecycle";
+import { PlaybackReferenceTracker } from "./realtime-voice-playback-reference";
 import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
 import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voice-state";
 import {
@@ -134,6 +135,7 @@ export class RealtimeVoiceService {
         resolve: (result: "started" | "error") => void;
       }
     | null = null;
+  private readonly playbackReferenceTracker = new PlaybackReferenceTracker();
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
     this.host = new VoiceHostWindowController(input.logger);
@@ -412,7 +414,15 @@ export class RealtimeVoiceService {
   }
 
   private shouldUseNativeCapture(): boolean {
-    return this.captureService?.isNativeSupported() === true;
+    if (this.captureService?.isNativeSupported() !== true) {
+      return false;
+    }
+
+    // Realtime voice was stable before native capture was introduced because it
+    // stayed on the browser getUserMedia path with built-in AEC. Keep that
+    // route as the default, and only opt into raw native capture when the user
+    // explicitly disables AEC.
+    return this.input.getConfig().realtimeVoice.aecEnabled === false;
   }
 
   async speakText(text: string): Promise<void> {
@@ -514,6 +524,7 @@ export class RealtimeVoiceService {
     this.speechStartedAtMs = 0;
     this.preRollBuffers = [];
     this.speechBuffers = [];
+    this.playbackReferenceTracker.clear();
     this.speechCaptureGeneration += 1;
     this.activeSpeechCaptureSession = null;
     this.activeSpeechCapturePromise = null;
@@ -737,6 +748,14 @@ export class RealtimeVoiceService {
       return;
     }
 
+    if (message.type === "playback-pcm-frame") {
+      this.playbackReferenceTracker.pushFrame({
+        pcm: Buffer.from(message.pcm),
+        sampleRate: message.sampleRate
+      });
+      return;
+    }
+
     if (message.type === "capture-started") {
       return;
     }
@@ -808,6 +827,7 @@ export class RealtimeVoiceService {
 
     if (message.type === "playback-cleared") {
       this.pendingPlaybackTexts.clear();
+      this.playbackReferenceTracker.clear();
       this.state = {
         ...this.state,
         playback: {
@@ -863,6 +883,21 @@ export class RealtimeVoiceService {
       this.speechBuffers.push(Buffer.from(chunk));
       await this.activeAsrSession.pushPcm(chunk);
       await this.captureCompanionSpeechRecapture?.(this.activeSpeechCaptureSession ?? null);
+      return;
+    }
+
+    // During assistant playback, reject mic chunks that still look like the rendered TTS
+    // instead of globally muting barge-in while audio is active.
+    if (
+      !this.speechActive &&
+      this.playbackReferenceTracker.classifyMicChunk({
+        pcm: chunk,
+        sampleRate,
+        capturedAtMs: Date.now()
+      }).echoLikely
+    ) {
+      this.preRollBuffers = [];
+      this.vad?.reset();
       return;
     }
 
