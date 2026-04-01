@@ -17,6 +17,12 @@ test("pet window: speech runtime queues model.speak playback without manual lips
   assert.match(html, /PIXI\.webaudio = pixiSound\.webaudio/);
   assert.match(html, /disableAutoPause = true/);
   assert.match(html, /audioContext\.resume\(\)/);
+  assert.match(html, /const ok = await startModelSpeak\(audioUrl,/);
+  assert.doesNotMatch(html, /const \{ ok \} = await startModelSpeak\(audioUrl,/);
+  assert.match(html, /disableSound:\s*\(\)\s*=>\s*\{/);
+  assert.match(html, /finishedItem\.disableSound\?\.\(\);/);
+  assert.match(html, /currentItem\?\.disableSound\?\.\(\);/);
+  assert.doesNotMatch(html, /finally\s*\{\s*setLive2DSoundEnabled\(live2dSoundConfigs,\s*false\);/);
   assert.match(html, /voice:talking-motion-skip-primary-fallback/);
   assert.match(html, /speech-enqueue/);
   assert.match(html, /speech-clear/);

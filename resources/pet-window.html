@@ -1563,11 +1563,7 @@
           const startModelSpeak = async (soundUrl, options) => {
             await ensurePixiSoundPlaybackReady(PIXI);
             setLive2DSoundEnabled(live2dSoundConfigs, true);
-            try {
-              return await model.speak(soundUrl, options);
-            } finally {
-              setLive2DSoundEnabled(live2dSoundConfigs, false);
-            }
+            return await model.speak(soundUrl, options);
           };
 
           const emitSpeechEvent = (payload) => {
@@ -1873,6 +1869,7 @@
               model.stopSpeaking();
             } catch {}
             currentItem?.stopReferenceEmitter?.();
+            currentItem?.disableSound?.();
             currentItem?.revokeAudioUrl?.();
 
             localSpeechActive = false;
@@ -1896,6 +1893,7 @@
             syncSpeechActive();
             if (finishedItem) {
               finishedItem.stopReferenceEmitter?.();
+              finishedItem.disableSound?.();
               finishedItem.revokeAudioUrl?.();
               emitSpeechEvent({
                 type: "speech-playback-ended",
@@ -1970,7 +1968,7 @@
             const referenceFrames = await decodeReferenceFrames(payload);
 
             try {
-              const { ok } = await startModelSpeak(audioUrl, {
+              const ok = await startModelSpeak(audioUrl, {
                 volume: 1,
                 onFinish: () => {
                   finishSpeech(speechToken);
@@ -1990,6 +1988,7 @@
                   localSpeechActive = false;
                   syncSpeechActive();
                   failedItem?.stopReferenceEmitter?.();
+                  failedItem?.disableSound?.();
                   failedItem?.revokeAudioUrl?.();
                   emitSpeechEvent({
                     type: "speech-playback-error",
@@ -2010,11 +2009,18 @@
               });
 
               if (speechToken !== localSpeechToken) {
+                setLive2DSoundEnabled(live2dSoundConfigs, false);
                 revokeSpeechAudioUrl(audioUrl);
                 return false;
               }
 
               if (!ok) {
+                setLive2DSoundEnabled(live2dSoundConfigs, false);
+                debugLog("voice:speech-start-rejected", {
+                  chunkId: item.chunkId,
+                  generation: item.generation,
+                  speechToken
+                });
                 revokeSpeechAudioUrl(audioUrl);
                 emitSpeechEvent({
                   type: "speech-playback-error",
@@ -2033,6 +2039,9 @@
                 text: item.text,
                 generation: item.generation,
                 stopReferenceEmitter: startSpeechReferenceEmitter(referenceFrames, item.generation),
+                disableSound: () => {
+                  setLive2DSoundEnabled(live2dSoundConfigs, false);
+                },
                 revokeAudioUrl: () => {
                   revokeSpeechAudioUrl(audioUrl);
                 }
@@ -2052,9 +2061,16 @@
               return true;
             } catch {
               if (speechToken !== localSpeechToken) {
+                setLive2DSoundEnabled(live2dSoundConfigs, false);
                 revokeSpeechAudioUrl(audioUrl);
                 return false;
               }
+              setLive2DSoundEnabled(live2dSoundConfigs, false);
+              debugLog("voice:speech-start-failed", {
+                chunkId: item.chunkId,
+                generation: item.generation,
+                speechToken
+              });
               revokeSpeechAudioUrl(audioUrl);
               emitSpeechEvent({
                 type: "speech-playback-error",
