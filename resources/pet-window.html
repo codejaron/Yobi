@@ -848,34 +848,6 @@
         }
       };
 
-      const resolveLive2DSoundConfigs = (live2dModule) => {
-        const candidates = [
-          live2dModule?.config,
-          live2dModule?.default?.config,
-          live2dModule?.live2d?.config,
-          window.PIXI?.live2d?.config
-        ];
-
-        const configs = [];
-        for (const config of candidates) {
-          if (!config || typeof config !== "object" || configs.includes(config)) {
-            continue;
-          }
-
-          configs.push(config);
-        }
-
-        return configs;
-      };
-
-      const setLive2DSoundEnabled = (configs, enabled) => {
-        for (const config of configs) {
-          try {
-            config.sound = enabled;
-          } catch {}
-        }
-      };
-
       async function boot() {
         try {
           fallbackEl.innerHTML = `<div class="badge">Yobi 加载中</div>`;
@@ -919,9 +891,7 @@
             settleBootFailure(`missing-deps:${reason}`);
             return;
           }
-          const { PIXI, Live2DModel, live2dModule } = runtime;
-          const live2dSoundConfigs = resolveLive2DSoundConfigs(live2dModule);
-          setLive2DSoundEnabled(live2dSoundConfigs, false);
+          const { PIXI, Live2DModel } = runtime;
 
           const app = new PIXI.Application({
             width: window.innerWidth,
@@ -1562,7 +1532,6 @@
 
           const startModelSpeak = async (soundUrl, options) => {
             await ensurePixiSoundPlaybackReady(PIXI);
-            setLive2DSoundEnabled(live2dSoundConfigs, true);
             return await model.speak(soundUrl, options);
           };
 
@@ -1869,7 +1838,6 @@
               model.stopSpeaking();
             } catch {}
             currentItem?.stopReferenceEmitter?.();
-            currentItem?.disableSound?.();
             currentItem?.revokeAudioUrl?.();
 
             localSpeechActive = false;
@@ -1893,7 +1861,6 @@
             syncSpeechActive();
             if (finishedItem) {
               finishedItem.stopReferenceEmitter?.();
-              finishedItem.disableSound?.();
               finishedItem.revokeAudioUrl?.();
               emitSpeechEvent({
                 type: "speech-playback-ended",
@@ -1988,7 +1955,6 @@
                   localSpeechActive = false;
                   syncSpeechActive();
                   failedItem?.stopReferenceEmitter?.();
-                  failedItem?.disableSound?.();
                   failedItem?.revokeAudioUrl?.();
                   emitSpeechEvent({
                     type: "speech-playback-error",
@@ -2009,13 +1975,11 @@
               });
 
               if (speechToken !== localSpeechToken) {
-                setLive2DSoundEnabled(live2dSoundConfigs, false);
                 revokeSpeechAudioUrl(audioUrl);
                 return false;
               }
 
               if (!ok) {
-                setLive2DSoundEnabled(live2dSoundConfigs, false);
                 debugLog("voice:speech-start-rejected", {
                   chunkId: item.chunkId,
                   generation: item.generation,
@@ -2039,9 +2003,6 @@
                 text: item.text,
                 generation: item.generation,
                 stopReferenceEmitter: startSpeechReferenceEmitter(referenceFrames, item.generation),
-                disableSound: () => {
-                  setLive2DSoundEnabled(live2dSoundConfigs, false);
-                },
                 revokeAudioUrl: () => {
                   revokeSpeechAudioUrl(audioUrl);
                 }
@@ -2061,11 +2022,9 @@
               return true;
             } catch {
               if (speechToken !== localSpeechToken) {
-                setLive2DSoundEnabled(live2dSoundConfigs, false);
                 revokeSpeechAudioUrl(audioUrl);
                 return false;
               }
-              setLive2DSoundEnabled(live2dSoundConfigs, false);
               debugLog("voice:speech-start-failed", {
                 chunkId: item.chunkId,
                 generation: item.generation,
