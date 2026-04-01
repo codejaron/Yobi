@@ -12,6 +12,7 @@ import type { AppLogger } from "./logger";
 import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ConversationEngine } from "@main/core/conversation";
+import { isAbortLikeError } from "@main/core/conversation-abort";
 import type { PetVoiceEvent } from "@shared/pet-events";
 import type { CompanionSpeechCaptureSession } from "./companion-mode";
 import { SentenceChunkBuffer } from "./realtime-voice-chunker";
@@ -102,6 +103,44 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
   };
 }
 
+const TRANSCRIPTION_TIMEOUT_ERROR = "realtime-voice-transcription-timeout";
+const ASSISTANT_PROGRESS_TIMEOUT_ERROR = "realtime-voice-assistant-progress-timeout";
+const SILENCE_RMS_THRESHOLD = 0.008;
+
+function createPlaybackState(): VoiceSessionState["playback"] {
+  return {
+    active: false,
+    queueLength: 0,
+    level: 0,
+    currentText: ""
+  };
+}
+
+function createTimeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "RealtimeVoiceTimeoutError";
+  return error;
+}
+
+function isTimeoutError(error: unknown, message: string): boolean {
+  return error instanceof Error && error.message === message;
+}
+
+function getPcm16RmsLevel(chunk: Buffer): number {
+  const sampleCount = Math.floor(chunk.length / 2);
+  if (sampleCount <= 0) {
+    return 0;
+  }
+
+  let squareSum = 0;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const normalized = chunk.readInt16LE(index * 2) / 0x8000;
+    squareSum += normalized * normalized;
+  }
+
+  return Math.sqrt(squareSum / sampleCount);
+}
+
 export class RealtimeVoiceService {
   private readonly captureService: NativeAudioCaptureBackend | null;
   private readonly playbackBridge: RealtimeVoicePlaybackBridge | null;
@@ -125,6 +164,8 @@ export class RealtimeVoiceService {
   private vadConfig: VoiceActivityDetectorConfig | null = null;
   private speechActive = false;
   private speechStartedAtMs = 0;
+  private speechGeneration = 0;
+  private speechSilenceStartedAtMs = 0;
   private preRollBuffers: Buffer[] = [];
   private speechBuffers: Buffer[] = [];
   private activeSpeechCaptureSession: CompanionSpeechCaptureSession | null = null;
@@ -133,6 +174,10 @@ export class RealtimeVoiceService {
   private activeAsrSession: StreamingAsrSession | null = null;
   private activeTtsSession: StreamingTtsSession | null = null;
   private replyAbortController: AbortController | null = null;
+  private assistantGeneration = 0;
+  private assistantProgressTimer: ReturnType<typeof setTimeout> | null = null;
+  private assistantProgressReject: ((error: Error) => void) | null = null;
+  private assistantProgressGeneration = 0;
   private responseSequence = Promise.resolve();
   private ttsSequence = Promise.resolve();
   private pendingSynthesisCount = 0;
@@ -460,8 +505,10 @@ export class RealtimeVoiceService {
   private resetSpeechTracking(): void {
     this.speechActive = false;
     this.speechStartedAtMs = 0;
+    this.invalidateSpeechGeneration();
     this.preRollBuffers = [];
     this.speechBuffers = [];
+    this.speechSilenceStartedAtMs = 0;
     this.playbackReferenceTracker.clear();
     this.speechCaptureGeneration += 1;
     this.activeSpeechCaptureSession = null;
@@ -499,6 +546,172 @@ export class RealtimeVoiceService {
     };
   }
 
+  private getRequestTimeoutMs(): number {
+    return Math.max(20, this.input.getConfig().voice.requestTimeoutMs);
+  }
+
+  private getAssistantProgressTimeoutMs(): number {
+    return Math.max(40, this.getRequestTimeoutMs() * 2);
+  }
+
+  private getForcedSpeechSilenceMs(): number {
+    return Math.max(1_200, this.input.getConfig().realtimeVoice.minSilenceMs + 600);
+  }
+
+  private invalidateSpeechGeneration(): number {
+    this.speechGeneration += 1;
+    this.speechSilenceStartedAtMs = 0;
+    return this.speechGeneration;
+  }
+
+  private invalidateAssistantGeneration(): number {
+    this.assistantGeneration += 1;
+    return this.assistantGeneration;
+  }
+
+  private isSpeechGenerationCurrent(generation: number): boolean {
+    return this.state.sessionId !== null && this.speechGeneration === generation;
+  }
+
+  private isAssistantGenerationCurrent(generation: number): boolean {
+    return this.state.sessionId !== null && this.assistantGeneration === generation;
+  }
+
+  private transitionToReadyState(): void {
+    this.state = {
+      ...this.state,
+      phase: this.state.sessionId && this.state.mode === "free" ? "listening" : "idle",
+      errorMessage: null,
+      playback: createPlaybackState(),
+      updatedAt: nowIso()
+    };
+    this.emitState();
+  }
+
+  private clearSpeechBuffers(): void {
+    this.activeSpeechCaptureSession = null;
+    this.activeSpeechCapturePromise = null;
+    this.preRollBuffers = [];
+    this.speechBuffers = [];
+    this.speechSilenceStartedAtMs = 0;
+    this.vad?.reset();
+  }
+
+  private async withTimeout<T>(task: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(createTimeoutError(message));
+      }, timeoutMs);
+      timer.unref?.();
+
+      task.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  private startAssistantProgressWatchdog(generation: number): Promise<never> {
+    this.clearAssistantProgressWatchdog();
+    this.assistantProgressGeneration = generation;
+
+    return new Promise<never>((_resolve, reject) => {
+      this.assistantProgressReject = reject;
+      this.refreshAssistantProgressWatchdog(generation);
+    });
+  }
+
+  private refreshAssistantProgressWatchdog(generation: number): void {
+    if (!this.isAssistantGenerationCurrent(generation) || !this.assistantProgressReject) {
+      return;
+    }
+
+    if (this.assistantProgressTimer) {
+      clearTimeout(this.assistantProgressTimer);
+      this.assistantProgressTimer = null;
+    }
+
+    this.assistantProgressGeneration = generation;
+    this.assistantProgressTimer = setTimeout(() => {
+      if (this.assistantProgressGeneration !== generation) {
+        return;
+      }
+
+      this.assistantProgressTimer = null;
+      this.assistantProgressReject?.(createTimeoutError(ASSISTANT_PROGRESS_TIMEOUT_ERROR));
+    }, this.getAssistantProgressTimeoutMs());
+    this.assistantProgressTimer.unref?.();
+  }
+
+  private clearAssistantProgressWatchdog(): void {
+    if (this.assistantProgressTimer) {
+      clearTimeout(this.assistantProgressTimer);
+      this.assistantProgressTimer = null;
+    }
+
+    this.assistantProgressReject = null;
+    this.assistantProgressGeneration = 0;
+  }
+
+  private async recoverFromAssistantTimeout(): Promise<void> {
+    this.input.logger.warn("realtime-voice", "assistant:progress-timeout", {
+      sessionId: this.state.sessionId ?? "unknown",
+      phase: this.state.phase
+    }, createTimeoutError(ASSISTANT_PROGRESS_TIMEOUT_ERROR));
+    await this.abortActiveResponse("system");
+    await this.clearPlayback("system");
+    this.playbackReferenceTracker.clear();
+    this.clearCurrentTurnTranscripts();
+    this.transitionToReadyState();
+    await this.notifyStatusChange();
+  }
+
+  private async recoverFromTranscriptionTimeout(asrSession: StreamingAsrSession): Promise<void> {
+    this.input.logger.warn("realtime-voice", "speech:transcription-timeout", {
+      sessionId: this.state.sessionId ?? "unknown"
+    }, createTimeoutError(TRANSCRIPTION_TIMEOUT_ERROR));
+    await asrSession.abort().catch(() => undefined);
+    this.clearCurrentTurnTranscripts();
+    this.transitionToReadyState();
+    await this.notifyStatusChange();
+  }
+
+  private shouldForceSpeechFinish(input: {
+    chunk: Buffer;
+    probability: number;
+    nowMs: number;
+  }): boolean {
+    if (!this.speechActive) {
+      this.speechSilenceStartedAtMs = 0;
+      return false;
+    }
+
+    const activityProbabilityFloor = Math.min(
+      0.18,
+      Math.max(0.08, this.input.getConfig().realtimeVoice.vadThreshold * 0.6)
+    );
+    const speechLikely =
+      input.probability >= activityProbabilityFloor || getPcm16RmsLevel(input.chunk) >= SILENCE_RMS_THRESHOLD;
+
+    if (speechLikely) {
+      this.speechSilenceStartedAtMs = 0;
+      return false;
+    }
+
+    if (this.speechSilenceStartedAtMs === 0) {
+      this.speechSilenceStartedAtMs = input.nowMs;
+      return false;
+    }
+
+    return input.nowMs - this.speechSilenceStartedAtMs >= this.getForcedSpeechSilenceMs();
+  }
+
   private shouldInterruptAssistantForSpeechStart(): boolean {
     if (!this.input.getConfig().realtimeVoice.autoInterrupt) {
       return false;
@@ -516,9 +729,11 @@ export class RealtimeVoiceService {
       await this.interrupt("vad");
     }
 
+    const speechGeneration = this.invalidateSpeechGeneration();
     this.speechActive = true;
     this.speechStartedAtMs = Date.now();
     this.speechBuffers = [];
+    this.speechSilenceStartedAtMs = 0;
     this.startSpeechCaptureContext();
     this.input.logger.info("realtime-voice", "speech:start", {
       sessionId: this.state.sessionId ?? "unknown"
@@ -530,6 +745,10 @@ export class RealtimeVoiceService {
     this.activeAsrSession = this.input.voiceRouter.createStreamingAsrSession({
       sampleRate: 16_000,
       onPartial: (text) => {
+        if (!this.isSpeechGenerationCurrent(speechGeneration)) {
+          return;
+        }
+
         this.state = {
           ...this.state,
           userTranscript: text,
@@ -560,7 +779,9 @@ export class RealtimeVoiceService {
       return;
     }
 
+    const speechGeneration = this.speechGeneration;
     this.speechActive = false;
+    this.speechSilenceStartedAtMs = 0;
     this.input.logger.info("realtime-voice", "speech:finish", {
       sessionId: this.state.sessionId ?? "unknown",
       bufferedBytes: this.speechBuffers.reduce((sum, item) => sum + item.length, 0)
@@ -581,9 +802,42 @@ export class RealtimeVoiceService {
     }
 
     try {
-      const recognized = await asrSession.flush();
+      const recognized = await this.withTimeout(
+        asrSession.flush(),
+        this.getRequestTimeoutMs(),
+        TRANSCRIPTION_TIMEOUT_ERROR
+      );
+      if (!this.isSpeechGenerationCurrent(speechGeneration)) {
+        return;
+      }
+
       const text = recognized.text.trim();
-      const speechCaptureSession = await this.awaitSpeechCaptureSession();
+      let speechCaptureSession: CompanionSpeechCaptureSession | null = null;
+      try {
+        speechCaptureSession = await this.withTimeout(
+          this.awaitSpeechCaptureSession(),
+          this.getRequestTimeoutMs(),
+          TRANSCRIPTION_TIMEOUT_ERROR
+        );
+      } catch (error) {
+        if (!isTimeoutError(error, TRANSCRIPTION_TIMEOUT_ERROR)) {
+          throw error;
+        }
+
+        this.input.logger.warn(
+          "realtime-voice",
+          "capture-speech-context-timeout",
+          {
+            sessionId: this.state.sessionId ?? "unknown"
+          },
+          error
+        );
+      }
+
+      if (!this.isSpeechGenerationCurrent(speechGeneration)) {
+        return;
+      }
+
       const speechAttachments = speechCaptureSession?.attachments ?? [];
       if (!text) {
         this.state = {
@@ -626,13 +880,27 @@ export class RealtimeVoiceService {
       this.emitState();
       await this.handleUserTurn(text, recognized.metadata, speechAttachments);
     } catch (error) {
+      if (!this.isSpeechGenerationCurrent(speechGeneration)) {
+        return;
+      }
+
+      if (isTimeoutError(error, TRANSCRIPTION_TIMEOUT_ERROR)) {
+        this.clearSpeechBuffers();
+        this.invalidateSpeechGeneration();
+        await this.recoverFromTranscriptionTimeout(asrSession);
+        return;
+      }
+
       this.fail(error instanceof Error ? error.message : "语音识别失败");
     } finally {
-      this.activeSpeechCaptureSession = null;
-      this.activeSpeechCapturePromise = null;
-      this.preRollBuffers = [];
-      this.speechBuffers = [];
-      this.vad?.reset();
+      if (this.speechGeneration === speechGeneration) {
+        this.activeSpeechCaptureSession = null;
+        this.activeSpeechCapturePromise = null;
+        this.preRollBuffers = [];
+        this.speechBuffers = [];
+        this.speechSilenceStartedAtMs = 0;
+        this.vad?.reset();
+      }
     }
   }
 
@@ -683,6 +951,7 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.playbackReferenceTracker.pushFrame({
         pcm: Buffer.from(message.pcm),
         sampleRate: message.sampleRate
@@ -694,6 +963,7 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.set(message.chunkId, message.text);
       if (!this.playedChunkIds.has(message.chunkId)) {
         this.playedChunkIds.add(message.chunkId);
@@ -727,6 +997,7 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.delete(message.chunkId);
       this.state = {
         ...this.state,
@@ -754,6 +1025,7 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.clear();
       this.playbackReferenceTracker.clear();
       this.state = {
@@ -781,6 +1053,7 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.delete(message.chunkId);
       const queueLength = this.pendingPlaybackTexts.size;
       this.state = {
@@ -854,6 +1127,15 @@ export class RealtimeVoiceService {
       return;
     }
 
+    if (this.speechActive && this.shouldForceSpeechFinish({
+      chunk,
+      probability: result.probability,
+      nowMs
+    })) {
+      await this.finishSpeech();
+      return;
+    }
+
     if (this.speechActive && result.speechEnded) {
       await this.finishSpeech();
     }
@@ -881,7 +1163,9 @@ export class RealtimeVoiceService {
       text
     });
 
-    this.replyAbortController = new AbortController();
+    const assistantGeneration = this.invalidateAssistantGeneration();
+    const replyAbortController = new AbortController();
+    this.replyAbortController = replyAbortController;
     this.llmFinished = false;
     this.llmVisibleText = "";
     this.playedAssistantText = "";
@@ -890,6 +1174,7 @@ export class RealtimeVoiceService {
     this.pendingPlaybackTexts.clear();
     this.playedChunkIds.clear();
     const playbackGeneration = this.beginPlaybackGeneration();
+    const assistantProgressWatchdog = this.startAssistantProgressWatchdog(assistantGeneration);
 
     const chunker = new SentenceChunkBuffer({
       firstChunkMinChars: config.realtimeVoice.firstChunkStrategy === "aggressive" ? 6 : 12,
@@ -911,61 +1196,86 @@ export class RealtimeVoiceService {
 
     this.responseSequence = (async () => {
       try {
-        const finalText = await this.input.conversation.reply({
-          text,
-          attachments,
-          channel: "console",
-          resourceId: target.resourceId,
-          threadId: target.threadId,
-          assistantPersistence: "caller",
-          userMetadata: {
-            voice: {
-              source: "voice",
-              sessionId,
-              mode: this.state.mode,
-              interrupted: false,
-              playedTextLength: 0,
-              asrProvider: config.voice.asrProvider,
-              ttsProvider: config.voice.ttsProvider
-            }
-          },
-          voiceContext: metadata
-            ? {
-                provider: config.voice.asrProvider,
-                metadata
-              }
-            : undefined,
-          abortSignal: this.replyAbortController?.signal,
-          stream: {
-            onVisibleTextDelta: (delta) => {
-              this.llmVisibleText += delta;
-              this.state = {
-                ...this.state,
-                assistantTranscript: this.llmVisibleText,
-                updatedAt: nowIso()
-              };
-              this.emit({
-                type: "assistant-transcript",
-                text: this.llmVisibleText,
-                isFinal: false,
-                timestamp: nowIso()
-              });
-              this.emitState();
-              for (const chunk of chunker.push(delta)) {
-                void this.enqueueTtsChunk(chunk, ttsSession, playbackGeneration);
+        const finalText = await Promise.race([
+          this.input.conversation.reply({
+            text,
+            attachments,
+            channel: "console",
+            resourceId: target.resourceId,
+            threadId: target.threadId,
+            assistantPersistence: "caller",
+            userMetadata: {
+              voice: {
+                source: "voice",
+                sessionId,
+                mode: this.state.mode,
+                interrupted: false,
+                playedTextLength: 0,
+                asrProvider: config.voice.asrProvider,
+                ttsProvider: config.voice.ttsProvider
               }
             },
-            onVisibleTextFinal: (visibleText) => {
-              this.llmVisibleText = visibleText;
-            },
-            onAbortVisibleText: (visibleText) => {
-              this.llmVisibleText = visibleText;
+            voiceContext: metadata
+              ? {
+                  provider: config.voice.asrProvider,
+                  metadata
+                }
+              : undefined,
+            abortSignal: replyAbortController.signal,
+            stream: {
+              onVisibleTextDelta: (delta) => {
+                if (!this.isAssistantGenerationCurrent(assistantGeneration)) {
+                  return;
+                }
+
+                this.refreshAssistantProgressWatchdog(assistantGeneration);
+                this.llmVisibleText += delta;
+                this.state = {
+                  ...this.state,
+                  assistantTranscript: this.llmVisibleText,
+                  updatedAt: nowIso()
+                };
+                this.emit({
+                  type: "assistant-transcript",
+                  text: this.llmVisibleText,
+                  isFinal: false,
+                  timestamp: nowIso()
+                });
+                this.emitState();
+                for (const chunk of chunker.push(delta)) {
+                  void this.enqueueTtsChunk(chunk, ttsSession, playbackGeneration);
+                }
+              },
+              onVisibleTextFinal: (visibleText) => {
+                if (!this.isAssistantGenerationCurrent(assistantGeneration)) {
+                  return;
+                }
+
+                this.refreshAssistantProgressWatchdog(assistantGeneration);
+                this.llmVisibleText = visibleText;
+              },
+              onAbortVisibleText: (visibleText) => {
+                if (!this.isAssistantGenerationCurrent(assistantGeneration)) {
+                  return;
+                }
+
+                this.llmVisibleText = visibleText;
+              }
             }
-          }
-        });
+          }),
+          assistantProgressWatchdog
+        ]);
+
+        if (!this.isAssistantGenerationCurrent(assistantGeneration)) {
+          return;
+        }
 
         for (const chunk of chunker.flush()) {
           await this.enqueueTtsChunk(chunk, ttsSession, playbackGeneration);
+        }
+
+        if (!this.isAssistantGenerationCurrent(assistantGeneration)) {
+          return;
         }
 
         this.llmVisibleText = finalText;
@@ -984,14 +1294,36 @@ export class RealtimeVoiceService {
         this.emitState();
         await this.maybeFinalizeAssistantTurn();
       } catch (error) {
-        if (this.replyAbortController?.signal.aborted) {
+        if (isTimeoutError(error, ASSISTANT_PROGRESS_TIMEOUT_ERROR)) {
+          if (this.isAssistantGenerationCurrent(assistantGeneration)) {
+            await this.recoverFromAssistantTimeout();
+          }
+          return;
+        }
+
+        if (!this.isAssistantGenerationCurrent(assistantGeneration)) {
+          return;
+        }
+
+        if (replyAbortController.signal.aborted) {
           await this.persistInterruptedAssistantTurn();
+          return;
+        }
+
+        if (isAbortLikeError(error)) {
+          await this.persistInterruptedAssistantTurn();
+          this.clearCurrentTurnTranscripts();
+          this.transitionToReadyState();
+          await this.notifyStatusChange();
           return;
         }
 
         this.fail(error instanceof Error ? error.message : "实时语音回复失败");
       } finally {
-        this.llmFinished = true;
+        if (this.isAssistantGenerationCurrent(assistantGeneration)) {
+          this.clearAssistantProgressWatchdog();
+          this.llmFinished = true;
+        }
         await ttsSession.close();
         if (this.activeTtsSession === ttsSession) {
           this.activeTtsSession = null;
@@ -1036,6 +1368,7 @@ export class RealtimeVoiceService {
         }
 
         this.pendingPlaybackTexts.set(id, normalized);
+        this.refreshAssistantProgressWatchdog(this.assistantGeneration);
         this.state = {
           ...this.state,
           playback: {
@@ -1066,6 +1399,7 @@ export class RealtimeVoiceService {
       return;
     }
 
+    this.clearAssistantProgressWatchdog();
     this.assistantCommitPersisted = true;
     if (this.llmVisibleText.trim()) {
       const userTranscript = this.state.userTranscript;
@@ -1141,6 +1475,8 @@ export class RealtimeVoiceService {
   }
 
   private async abortActiveResponse(reason: "vad" | "manual" | "system"): Promise<void> {
+    this.clearAssistantProgressWatchdog();
+    this.invalidateAssistantGeneration();
     if (this.replyAbortController && !this.replyAbortController.signal.aborted) {
       this.replyAbortController.abort();
     }

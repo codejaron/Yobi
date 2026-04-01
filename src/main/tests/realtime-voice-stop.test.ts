@@ -1240,3 +1240,330 @@ test("realtime voice: handleUserTurn should not pre-persist the same user turn b
     }
   });
 });
+
+test("realtime voice: sustained silence force-finishes a stuck speech turn when VAD stays latched", async () => {
+  let callCount = 0;
+  let flushCount = 0;
+  const originalDateNow = Date.now;
+  let nowMs = 0;
+  Date.now = () => nowMs;
+
+  try {
+    const service = createService({
+      getConfig: () =>
+        ({
+          realtimeVoice: {
+            enabled: true,
+            mode: "free",
+            aecEnabled: true,
+            autoInterrupt: true,
+            preRollMs: 300,
+            vadThreshold: 0.35,
+            maxUtteranceMs: 45_000,
+            minSpeechMs: 180,
+            minSilenceMs: 600,
+            firstChunkStrategy: "aggressive"
+          },
+          voice: {
+            ttsVoice: "stub-voice",
+            ttsRate: "+0%",
+            ttsPitch: "+0Hz",
+            requestTimeoutMs: 50,
+            retryCount: 0,
+            asrProvider: "sensevoice-local",
+            ttsProvider: "edge"
+          }
+        }) as never,
+      createVad: async () =>
+        createFakeVad(async () => {
+          callCount += 1;
+          return {
+            probability: callCount === 1 ? 0.92 : 0.04,
+            speechStarted: callCount === 1,
+            speechEnded: false,
+            speaking: true
+          };
+        }),
+      voiceRouter: {
+        createStreamingAsrSession: () =>
+          ({
+            pushPcm: async () => undefined,
+            flush: async () => {
+              flushCount += 1;
+              return {
+                text: "",
+                metadata: null
+              };
+            },
+            abort: async () => undefined
+          }) satisfies StreamingAsrSession
+      }
+    });
+
+    service.host = {
+      send: async () => undefined
+    };
+    service.state = createVoiceSessionState({
+      sessionId: "session-1",
+      mode: "free",
+      target: {
+        resourceId: "primary-user",
+        threadId: "primary-thread"
+      }
+    });
+
+    await service.handlePcmFrame(Buffer.alloc(3200, 1), 16_000);
+    nowMs = 900;
+    await service.handlePcmFrame(Buffer.alloc(3200), 16_000);
+    nowMs = 1_800;
+    await service.handlePcmFrame(Buffer.alloc(3200), 16_000);
+    nowMs = 2_700;
+    await service.handlePcmFrame(Buffer.alloc(3200), 16_000);
+
+    assert.equal(flushCount, 1);
+    assert.equal(service.speechActive, false);
+    assert.equal(service.state.phase, "listening");
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("realtime voice: transcribing timeout recovers the session when ASR flush hangs", async () => {
+  const service = createService({
+    getConfig: () =>
+      ({
+        realtimeVoice: {
+          enabled: true,
+          mode: "free",
+          aecEnabled: true,
+          autoInterrupt: true,
+          preRollMs: 300,
+          vadThreshold: 0.35,
+          maxUtteranceMs: 45_000,
+          minSpeechMs: 180,
+          minSilenceMs: 600,
+          firstChunkStrategy: "aggressive"
+        },
+        voice: {
+          ttsVoice: "stub-voice",
+          ttsRate: "+0%",
+          ttsPitch: "+0Hz",
+          requestTimeoutMs: 20,
+          retryCount: 0,
+          asrProvider: "sensevoice-local",
+          ttsProvider: "edge"
+        }
+      }) as never
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = reduceVoiceSessionState(
+    createVoiceSessionState({
+      sessionId: "session-1",
+      mode: "free",
+      target: {
+        resourceId: "primary-user",
+        threadId: "primary-thread"
+      }
+    }),
+    {
+      type: "speech-started"
+    }
+  );
+  service.speechActive = true;
+  service.activeAsrSession = {
+    pushPcm: async () => undefined,
+    flush: async () => new Promise(() => undefined),
+    abort: async () => undefined
+  } satisfies StreamingAsrSession;
+
+  void service.finishSpeech();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(service.speechActive, false);
+  assert.equal(service.state.phase, "listening");
+});
+
+test("realtime voice: assistant progress watchdog aborts silent thinking and returns to listening", async () => {
+  let seenAbortSignal: AbortSignal | null = null;
+  const service = createService({
+    getConfig: () =>
+      ({
+        realtimeVoice: {
+          enabled: true,
+          mode: "free",
+          aecEnabled: true,
+          autoInterrupt: true,
+          preRollMs: 300,
+          vadThreshold: 0.35,
+          maxUtteranceMs: 45_000,
+          minSpeechMs: 180,
+          minSilenceMs: 600,
+          firstChunkStrategy: "aggressive"
+        },
+        voice: {
+          ttsVoice: "stub-voice",
+          ttsRate: "+0%",
+          ttsPitch: "+0Hz",
+          requestTimeoutMs: 20,
+          retryCount: 0,
+          asrProvider: "sensevoice-local",
+          ttsProvider: "edge"
+        }
+      }) as never,
+    conversation: {
+      reply: async (input: any) => {
+        seenAbortSignal = input.abortSignal ?? null;
+        return await new Promise<string>((_resolve, reject) => {
+          input.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("aborted"));
+            },
+            {
+              once: true
+            }
+          );
+        });
+      }
+    }
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  void service.handleUserTurn("可以听到吗", null, []);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+
+  assert.equal((seenAbortSignal as AbortSignal | null)?.aborted ?? false, true);
+  assert.equal(service.state.phase, "listening");
+  assert.equal(service.state.assistantTranscript, "");
+});
+
+test("realtime voice: stale assistant callbacks are ignored after an interrupt", async () => {
+  let capturedStream: {
+    onVisibleTextDelta?: (delta: string) => void;
+    onVisibleTextFinal?: (text: string) => void;
+    onAbortVisibleText?: (text: string) => void;
+  } | null = null;
+  const service = createService({
+    conversation: {
+      reply: async (input: any) => {
+        capturedStream = input.stream ?? null;
+        return await new Promise<string>(() => undefined);
+      }
+    }
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  void service.handleUserTurn("旧的一轮", null, []);
+  await Promise.resolve();
+  await service.interrupt("manual");
+
+  const staleStream = capturedStream as {
+    onVisibleTextDelta?: (delta: string) => void;
+    onVisibleTextFinal?: (text: string) => void;
+    onAbortVisibleText?: (text: string) => void;
+  } | null;
+
+  staleStream?.onVisibleTextDelta?.("迟到的文本");
+  staleStream?.onVisibleTextFinal?.("迟到的最终文本");
+  staleStream?.onAbortVisibleText?.("迟到的中断文本");
+
+  assert.equal(service.state.phase, "interrupted");
+  assert.equal(service.state.assistantTranscript, "");
+});
+
+test("realtime voice: terminated abort errors do not transition interrupted sessions to error", async () => {
+  let seenAbortSignal: AbortSignal | null = null;
+  const service = createService({
+    conversation: {
+      reply: async (input: any) => {
+        seenAbortSignal = input.abortSignal ?? null;
+        return await new Promise<string>((_resolve, reject) => {
+          input.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              reject(new TypeError("terminated"));
+            },
+            {
+              once: true
+            }
+          );
+        });
+      }
+    }
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  void service.handleUserTurn("先打断这轮", null, []);
+  await Promise.resolve();
+  await service.interrupt("manual");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal((seenAbortSignal as AbortSignal | null)?.aborted ?? false, true);
+  assert.equal(service.state.phase, "interrupted");
+  assert.equal(service.state.errorMessage, null);
+  assert.equal(service.state.assistantTranscript, "");
+});
+
+test("realtime voice: abort-like terminated reply failures recover back to listening", async () => {
+  const service = createService({
+    conversation: {
+      reply: async () => {
+        throw new TypeError("terminated");
+      }
+    }
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  await service.handleUserTurn("网络波动", null, []);
+
+  assert.equal(service.state.phase, "listening");
+  assert.equal(service.state.errorMessage, null);
+  assert.equal(service.state.assistantTranscript, "");
+});

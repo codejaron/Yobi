@@ -15,7 +15,13 @@ export function isAbortLikeError(error: unknown): boolean {
   }
 
   if (error instanceof Error) {
-    return error.name === "AbortError";
+    const message = error.message.trim().toLowerCase();
+    return (
+      error.name === "AbortError" ||
+      message === "terminated" ||
+      message === "aborted" ||
+      message === "this operation was aborted"
+    );
   }
 
   return false;
