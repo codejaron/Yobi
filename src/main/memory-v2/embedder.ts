@@ -74,6 +74,7 @@ export class EmbedderService {
   private initPromise: Promise<void> | null = null;
   private modelPath: string | null = null;
   private worker: any = null;
+  private readonly disposingWorkers = new WeakSet<object>();
   private pending = new Map<string, PendingWorkerCall>();
   private downloadPromise: Promise<void> | null = null;
   private downloadAbortController: AbortController | null = null;
@@ -206,18 +207,7 @@ export class EmbedderService {
       });
 
       child.once?.("exit", (code: number | null) => {
-        if (this.worker === child) {
-          this.worker = null;
-        }
-        const exitError = new Error(`embedding worker exited (code: ${code ?? "unknown"})`);
-        logger.error("embedder", "worker-exited", {
-          modelId: this.getCurrentModelId(),
-          modelPath: this.modelPath,
-          code: code ?? "unknown"
-        }, exitError);
-        this.rejectPendingCalls(exitError);
-        this.status = "error";
-        this.errorMessage = exitError.message;
+        this.handleWorkerExit(child, code);
       });
 
       const childWithLooseEvents = child as {
@@ -360,12 +350,40 @@ export class EmbedderService {
     }
   }
 
+  private markWorkerForDisposal(worker: unknown): void {
+    if (worker && typeof worker === "object") {
+      this.disposingWorkers.add(worker);
+    }
+  }
+
+  private handleWorkerExit(worker: unknown, code: number | null): void {
+    const workerObject = worker && typeof worker === "object" ? worker : null;
+    const intentionallyDisposed = workerObject ? this.disposingWorkers.delete(workerObject) : false;
+    if (this.worker === worker) {
+      this.worker = null;
+    }
+    if (intentionallyDisposed) {
+      return;
+    }
+
+    const exitError = new Error(`embedding worker exited (code: ${code ?? "unknown"})`);
+    logger.error("embedder", "worker-exited", {
+      modelId: this.getCurrentModelId(),
+      modelPath: this.modelPath,
+      code: code ?? "unknown"
+    }, exitError);
+    this.rejectPendingCalls(exitError);
+    this.status = "error";
+    this.errorMessage = exitError.message;
+  }
+
   private disposeWorker(): void {
     const worker = this.worker;
     this.worker = null;
     this.rejectPendingCalls(new Error("embedding-worker-restarted"));
     if (worker?.kill) {
       try {
+        this.markWorkerForDisposal(worker);
         worker.kill();
       } catch {}
     }

@@ -607,11 +607,6 @@ export type VoiceSessionEvent =
       timestamp: string;
     }
   | {
-      type: "speech-level";
-      level: number;
-      timestamp: string;
-    }
-  | {
       type: "playback";
       playback: VoicePlaybackState;
       timestamp: string;

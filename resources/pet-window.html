@@ -428,6 +428,60 @@
           document.head.appendChild(script);
         });
 
+      const installPixiSoundCompat = () => {
+        const PIXI = window.PIXI;
+        const pixiSound = PIXI?.sound;
+        if (!PIXI || !pixiSound || typeof pixiSound !== "object") {
+          return false;
+        }
+
+        // cubism4's browser UMD passes `window.PIXI` as the `@pixi/sound` import,
+        // so expose the pieces it expects on the root PIXI namespace.
+        if (!PIXI.Sound && pixiSound.Sound) {
+          PIXI.Sound = pixiSound.Sound;
+        }
+        if (!PIXI.webaudio && pixiSound.webaudio) {
+          PIXI.webaudio = pixiSound.webaudio;
+        }
+
+        return Boolean(PIXI.Sound && PIXI.webaudio);
+      };
+
+      const getPixiSoundContext = (PIXI) => {
+        const pixiSound = PIXI?.sound;
+        if (!pixiSound || typeof pixiSound !== "object") {
+          return null;
+        }
+        return pixiSound.context || null;
+      };
+
+      const ensurePixiSoundPlaybackReady = async (PIXI) => {
+        const pixiSound = PIXI?.sound;
+        const audioContext = getPixiSoundContext(PIXI)?.audioContext;
+
+        try {
+          if ("disableAutoPause" in pixiSound) {
+            pixiSound.disableAutoPause = true;
+          }
+        } catch {}
+
+        try {
+          if (pixiSound && typeof pixiSound.resumeAll === "function") {
+            pixiSound.resumeAll();
+          }
+        } catch {}
+
+        try {
+          if (
+            audioContext &&
+            typeof audioContext.resume === "function" &&
+            (audioContext.state === "suspended" || audioContext.state === "interrupted")
+          ) {
+            await audioContext.resume();
+          }
+        } catch {}
+      };
+
       const toFileHref = (value) => value || "";
 
       const mergeFloatChunks = (chunks) => {
@@ -769,6 +823,11 @@
 
           await loadScript(pixiScriptUrl);
           await loadScript(pixiSoundScriptUrl);
+          if (!installPixiSoundCompat()) {
+            return {
+              error: "pixi-sound-not-ready"
+            };
+          }
           await loadScript(live2dScriptUrl);
 
           const PIXI = window.PIXI;
@@ -1036,15 +1095,16 @@
           let speechActive = false;
           let remoteSpeechActive = false;
           let localSpeechToken = 0;
+          let localSpeechQueue = [];
+          let localSpeechQueueDraining = false;
+          let activeSpeechItem = null;
           let talkingMotionManager = null;
           let emotionMotionManager = null;
           let talkingMotionIndex = null;
           let talkingMotionHeld = false;
-          let talkingMotionUsesPrimary = false;
           let selectedExpressionId = "";
           let transientExpressionToken = 0;
           let transientExpressionTimer = null;
-          let syntheticLipSyncRaf = 0;
           let chatRequestToken = 0;
           let pendingSingleTapTimer = null;
           let pendingSingleTapArea = null;
@@ -1059,12 +1119,13 @@
           let emotionRenderer = null;
           const pttRecorder = createPcm16Recorder();
 
-          const MOUTH_PARAMETER_ID = "PARAM_MOUTH_OPEN_Y";
           const MOTION_PRIORITY_FORCE = 3;
           const SINGLE_TAP_DELAY_MS = 340;
           const DOUBLE_TAP_GAP_MS = 320;
           const DRAG_ACTIVATE_DISTANCE = 8;
           const CURSOR_POLL_INTERVAL_MS = 48;
+          const SPEECH_REFERENCE_FRAME_SAMPLES = 320;
+          const SPEECH_REFERENCE_SAMPLE_RATE = 16000;
 
           try {
             model.internalModel?.extendParallelMotionManager?.(2);
@@ -1342,22 +1403,6 @@
             }
           };
 
-          const playPrimaryMotionLastFrame = async (group, index) => {
-            if (typeof group !== "string" || typeof model.motionLastFrame !== "function") {
-              return false;
-            }
-            const nextIndex = resolveMotionIndex(group, index);
-            if (nextIndex === null) {
-              return false;
-            }
-
-            try {
-              return Boolean(await model.motionLastFrame(group, nextIndex));
-            } catch {
-              return false;
-            }
-          };
-
           const playManagedMotion = async (manager, group, index) => {
             if (!manager || typeof manager.startMotion !== "function" || typeof group !== "string") {
               return false;
@@ -1397,37 +1442,8 @@
               } catch {}
             }
 
-            if (talkingMotionUsesPrimary && typeof model.stopMotions === "function") {
-              try {
-                model.stopMotions();
-              } catch {}
-            }
-
             talkingMotionIndex = null;
             talkingMotionHeld = false;
-            talkingMotionUsesPrimary = false;
-          };
-
-          const startPrimaryTalkingMotion = async (index) => {
-            if (typeof talkingMotionGroup !== "string") {
-              return false;
-            }
-
-            try {
-              return Boolean(
-                await model.motion(talkingMotionGroup, index, MOTION_PRIORITY_FORCE, {
-                  onFinish: () => {
-                    if (syncSpeechActive()) {
-                      void holdTalkingMotionLastFrame();
-                      return;
-                    }
-                    stopTalkingMotion();
-                  }
-                })
-              );
-            } catch {
-              return false;
-            }
           };
 
           const startTalkingMotion = async () => {
@@ -1447,7 +1463,6 @@
 
             talkingMotionIndex = nextIndex;
             talkingMotionHeld = false;
-            talkingMotionUsesPrimary = false;
 
             if (talkingMotionManager) {
               const ok = await playManagedMotion(talkingMotionManager, talkingMotionGroup, nextIndex);
@@ -1456,12 +1471,15 @@
               }
             }
 
-            talkingMotionUsesPrimary = true;
-            const ok = await startPrimaryTalkingMotion(nextIndex);
-            if (!ok) {
-              stopTalkingMotion();
-            }
-            return ok;
+            debugLog("voice:talking-motion-skip-primary-fallback", {
+              speechActive,
+              thinkingActive,
+              hasTalkingMotionManager: Boolean(talkingMotionManager),
+              talkingMotionGroup,
+              talkingMotionIndex: nextIndex
+            });
+            stopTalkingMotion();
+            return false;
           };
 
           const holdTalkingMotionLastFrame = async () => {
@@ -1477,11 +1495,6 @@
             let ok = false;
             if (talkingMotionManager) {
               ok = await playManagedMotionLastFrame(talkingMotionManager, talkingMotionGroup, talkingMotionIndex);
-            }
-
-            if (!ok) {
-              talkingMotionUsesPrimary = true;
-              ok = await playPrimaryMotionLastFrame(talkingMotionGroup, talkingMotionIndex);
             }
 
             if (ok) {
@@ -1542,75 +1555,176 @@
             }, restoreDelay);
           };
 
-          const setMouthOpen = (value) => {
-            const clamped = clamp(value, 0, 1);
-            if (emotionRenderer) {
-              emotionRenderer.setLipSyncOpen(clamped);
-              return;
-            }
-            try {
-              model.internalModel?.coreModel?.setParameterValueById?.(MOUTH_PARAMETER_ID, clamped);
-            } catch {}
-          };
-
           const pulseModel = () => {
             rootEl.classList.add("pulse");
             setTimeout(() => rootEl.classList.remove("pulse"), 1600);
           };
 
-          const sampleModelLipSyncOpen = () => {
-            const motionManager = model.internalModel?.motionManager;
-            if (!motionManager?.currentAudio || typeof motionManager.mouthSync !== "function") {
-              return 0;
-            }
-
-            const sampled = Number(motionManager.mouthSync());
-            if (!Number.isFinite(sampled) || sampled <= 0) {
-              return 0;
-            }
-
-            return clamp(Math.max(0.4, sampled), 0, 1);
-          };
-
-          const startModelSpeak = (soundUrl, options) => {
+          const startModelSpeak = async (soundUrl, options) => {
+            await ensurePixiSoundPlaybackReady(PIXI);
             setLive2DSoundEnabled(live2dSoundConfigs, true);
             try {
-              return model.speak(soundUrl, options);
+              return await model.speak(soundUrl, options);
             } finally {
               setLive2DSoundEnabled(live2dSoundConfigs, false);
             }
           };
 
-          const stopLipSync = () => {
-            if (syntheticLipSyncRaf) {
-              cancelAnimationFrame(syntheticLipSyncRaf);
-              syntheticLipSyncRaf = 0;
+          const emitSpeechEvent = (payload) => {
+            if (!petBridge || typeof petBridge.emitVoiceEvent !== "function" || !payload) {
+              return;
             }
-            setMouthOpen(0);
+            petBridge.emitVoiceEvent(payload);
           };
 
-          const startSyntheticLipSync = (durationMs) => {
-            if (syntheticLipSyncRaf) {
-              cancelAnimationFrame(syntheticLipSyncRaf);
-              syntheticLipSyncRaf = 0;
+          const base64ToArrayBuffer = (base64) => {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index += 1) {
+              bytes[index] = binary.charCodeAt(index);
+            }
+            return bytes.buffer;
+          };
+
+          const createSpeechAudioUrl = (audioBase64, mimeType) => {
+            if (
+              typeof audioBase64 !== "string" ||
+              !audioBase64.trim() ||
+              typeof Blob !== "function" ||
+              !URL ||
+              typeof URL.createObjectURL !== "function"
+            ) {
+              return null;
             }
 
-            const startedAt = performance.now();
-            const loop = () => {
-              const elapsed = performance.now() - startedAt;
-              if (elapsed >= durationMs) {
-                syntheticLipSyncRaf = 0;
-                setMouthOpen(0);
+            try {
+              const buffer = base64ToArrayBuffer(audioBase64);
+              const blob = new Blob([buffer], {
+                type: typeof mimeType === "string" && mimeType.trim() ? mimeType.trim() : "audio/mpeg"
+              });
+              return URL.createObjectURL(blob);
+            } catch {
+              return null;
+            }
+          };
+
+          const revokeSpeechAudioUrl = (url) => {
+            if (typeof url !== "string" || !url || !URL || typeof URL.revokeObjectURL !== "function") {
+              return;
+            }
+
+            try {
+              URL.revokeObjectURL(url);
+            } catch {}
+          };
+
+          const floatToPcmFrameBytes = (samples) => {
+            const pcm = new Int16Array(samples.length);
+            for (let index = 0; index < samples.length; index += 1) {
+              const value = Math.max(-1, Math.min(1, samples[index] || 0));
+              pcm[index] = value < 0 ? Math.round(value * 0x8000) : Math.round(value * 0x7fff);
+            }
+            return Array.from(new Uint8Array(pcm.buffer));
+          };
+
+          const resampleToReferenceFrames = (inputSamples, inputRate) => {
+            if (!inputSamples || inputSamples.length === 0 || !Number.isFinite(inputRate) || inputRate <= 0) {
+              return [];
+            }
+
+            const ratio = inputRate / SPEECH_REFERENCE_SAMPLE_RATE;
+            const output = [];
+            let emittedOutputSamples = 0;
+
+            while (true) {
+              const start = Math.floor(emittedOutputSamples * ratio);
+              const end = Math.floor((emittedOutputSamples + 1) * ratio);
+              if (start >= inputSamples.length) {
+                break;
+              }
+
+              let total = 0;
+              let count = 0;
+              const upper = Math.max(start + 1, end);
+              for (let index = start; index < upper && index < inputSamples.length; index += 1) {
+                total += inputSamples[index] || 0;
+                count += 1;
+              }
+              output.push(count > 0 ? total / count : 0);
+              emittedOutputSamples += 1;
+            }
+
+            const frames = [];
+            for (let offset = 0; offset < output.length; offset += SPEECH_REFERENCE_FRAME_SAMPLES) {
+              const frame = output.slice(offset, offset + SPEECH_REFERENCE_FRAME_SAMPLES);
+              if (frame.length === 0) {
+                continue;
+              }
+              while (frame.length < SPEECH_REFERENCE_FRAME_SAMPLES) {
+                frame.push(0);
+              }
+              frames.push(floatToPcmFrameBytes(frame));
+            }
+            return frames;
+          };
+
+          const decodeReferenceFrames = async (audioBase64) => {
+            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextCtor || typeof audioBase64 !== "string" || !audioBase64.trim()) {
+              return [];
+            }
+
+            const context = new AudioContextCtor({
+              sampleRate: SPEECH_REFERENCE_SAMPLE_RATE
+            });
+            try {
+              const decoded = await context.decodeAudioData(base64ToArrayBuffer(audioBase64));
+              const source = decoded.getChannelData(0);
+              return resampleToReferenceFrames(source, decoded.sampleRate);
+            } catch {
+              return [];
+            } finally {
+              await context.close().catch(() => undefined);
+            }
+          };
+
+          const startSpeechReferenceEmitter = (frames, generation) => {
+            if (!Array.isArray(frames) || frames.length === 0) {
+              return () => undefined;
+            }
+
+            let cancelled = false;
+            let frameIndex = 0;
+            let timer = 0;
+
+            const tick = () => {
+              if (cancelled) {
+                return;
+              }
+              if (frameIndex >= frames.length) {
+                timer = 0;
                 return;
               }
 
-              const progress = elapsed / 115;
-              const wave = Math.abs(Math.sin(progress));
-              setMouthOpen(0.1 + wave * 0.7);
-              syntheticLipSyncRaf = requestAnimationFrame(loop);
+              emitSpeechEvent({
+                type: "speech-reference-frame",
+                pcm: frames[frameIndex],
+                sampleRate: SPEECH_REFERENCE_SAMPLE_RATE,
+                generation
+              });
+              frameIndex += 1;
+              timer = window.setTimeout(tick, 20);
             };
 
-            syntheticLipSyncRaf = requestAnimationFrame(loop);
+            tick();
+
+            return () => {
+              cancelled = true;
+              if (timer) {
+                clearTimeout(timer);
+                timer = 0;
+              }
+            };
           };
 
           const scheduleStatusBackToBaseline = (delayMs) => {
@@ -1686,10 +1800,6 @@
               }
             })();
 
-            if (input.syntheticLipSyncMs && input.syntheticLipSyncMs > 0) {
-              startSyntheticLipSync(input.syntheticLipSyncMs);
-            }
-
             if (input.pulse) {
               pulseModel();
             }
@@ -1735,9 +1845,12 @@
             clearStatusTimer();
 
             void (async () => {
-              const ok = emotionMotionManager
-                ? await playManagedMotion(emotionMotionManager, action.motionGroup, action.motionIndex)
-                : await playPrimaryMotion(action.motionGroup, action.motionIndex);
+              let ok = false;
+              if (emotionMotionManager) {
+                ok = await playManagedMotion(emotionMotionManager, action.motionGroup, action.motionIndex);
+              } else if (!speechActive) {
+                ok = await playPrimaryMotion(action.motionGroup, action.motionIndex);
+              }
               if (!ok && action.motionGroup !== idleMotionGroup && !speechActive && !thinkingActive) {
                 await playPrimaryMotion(idleMotionGroup);
               }
@@ -1754,13 +1867,16 @@
 
           const stopCurrentAudio = () => {
             localSpeechToken += 1;
+            const currentItem = activeSpeechItem;
+            activeSpeechItem = null;
             try {
               model.stopSpeaking();
             } catch {}
+            currentItem?.stopReferenceEmitter?.();
+            currentItem?.revokeAudioUrl?.();
 
             localSpeechActive = false;
             syncSpeechActive();
-            stopLipSync();
             if (speechActive) {
               void ensureTalkingMotion();
               updateStatus("talking");
@@ -1774,20 +1890,35 @@
               return;
             }
 
+            const finishedItem = activeSpeechItem;
+            activeSpeechItem = null;
             localSpeechActive = false;
             syncSpeechActive();
-            stopLipSync();
+            if (finishedItem) {
+              finishedItem.stopReferenceEmitter?.();
+              finishedItem.revokeAudioUrl?.();
+              emitSpeechEvent({
+                type: "speech-playback-ended",
+                chunkId: finishedItem.chunkId,
+                text: finishedItem.text,
+                queueLength: localSpeechQueue.length,
+                generation: finishedItem.generation
+              });
+            }
             if (speechActive) {
               void ensureTalkingMotion();
               updateStatus("talking");
+              void drainSpeechQueue();
               return;
             }
             stopTalkingMotion();
             if (thinkingActive) {
               applyThinkingState();
+              void drainSpeechQueue();
               return;
             }
             enterIdle(false);
+            void drainSpeechQueue();
           };
 
           const applyRemoteSpeechState = (active) => {
@@ -1805,8 +1936,6 @@
             }
 
             stopTalkingMotion();
-            stopLipSync();
-            setMouthOpen(0);
             if (thinkingActive) {
               applyThinkingState();
               return;
@@ -1814,58 +1943,180 @@
             enterIdle(false);
           };
 
-          const playPetSpeech = async (audioBase64, mimeType) => {
-            const payload = typeof audioBase64 === "string" ? audioBase64.trim() : "";
+          const startQueuedSpeech = async (item) => {
+            const payload = typeof item?.audioBase64 === "string" ? item.audioBase64.trim() : "";
             if (!payload) {
-              return;
+              return false;
             }
-
-            stopCurrentAudio();
-            stopLipSync();
 
             const speechToken = localSpeechToken + 1;
             localSpeechToken = speechToken;
-            const dataUrl = `data:${mimeType || "audio/mpeg"};base64,${payload}`;
+            const audioUrl = createSpeechAudioUrl(payload, item.mimeType);
+            if (!audioUrl) {
+              debugLog("voice:speech-start-no-audio-url", {
+                chunkId: item.chunkId,
+                generation: item.generation,
+                mimeType: item.mimeType
+              });
+              emitSpeechEvent({
+                type: "speech-playback-error",
+                chunkId: item.chunkId,
+                message: "语音播放失败",
+                generation: item.generation
+              });
+              updateStatus("speech-error");
+              return false;
+            }
+            const referenceFrames = await decodeReferenceFrames(payload);
 
             try {
-              const ok = await startModelSpeak(dataUrl, {
+              const { ok } = await startModelSpeak(audioUrl, {
                 volume: 1,
                 onFinish: () => {
                   finishSpeech(speechToken);
                 },
                 onError: () => {
+                  debugLog("voice:speech-error-callback", {
+                    chunkId: item.chunkId,
+                    generation: item.generation,
+                    speechToken
+                  });
                   if (speechToken !== localSpeechToken) {
+                    revokeSpeechAudioUrl(audioUrl);
                     return;
                   }
+                  const failedItem = activeSpeechItem;
+                  activeSpeechItem = null;
+                  localSpeechActive = false;
+                  syncSpeechActive();
+                  failedItem?.stopReferenceEmitter?.();
+                  failedItem?.revokeAudioUrl?.();
+                  emitSpeechEvent({
+                    type: "speech-playback-error",
+                    chunkId: item.chunkId,
+                    message: "语音播放失败",
+                    generation: item.generation
+                  });
                   updateStatus("speech-error");
-                  finishSpeech(speechToken);
+                  if (speechActive) {
+                    void ensureTalkingMotion();
+                  } else if (thinkingActive) {
+                    applyThinkingState();
+                  } else {
+                    enterIdle(false);
+                  }
+                  void drainSpeechQueue();
                 }
               });
 
               if (speechToken !== localSpeechToken) {
-                return;
+                revokeSpeechAudioUrl(audioUrl);
+                return false;
               }
 
               if (!ok) {
+                revokeSpeechAudioUrl(audioUrl);
+                emitSpeechEvent({
+                  type: "speech-playback-error",
+                  chunkId: item.chunkId,
+                  message: "语音播放失败",
+                  generation: item.generation
+                });
                 updateStatus("speech-error");
-                finishSpeech(speechToken);
-                return;
+                return false;
               }
 
               localSpeechActive = true;
               syncSpeechActive();
+              activeSpeechItem = {
+                chunkId: item.chunkId,
+                text: item.text,
+                generation: item.generation,
+                stopReferenceEmitter: startSpeechReferenceEmitter(referenceFrames, item.generation),
+                revokeAudioUrl: () => {
+                  revokeSpeechAudioUrl(audioUrl);
+                }
+              };
+              emitSpeechEvent({
+                type: "speech-playback-started",
+                chunkId: item.chunkId,
+                text: item.text,
+                queueLength: localSpeechQueue.length,
+                generation: item.generation
+              });
               clearIdleMotionLoop();
               clearStatusTimer();
               pulseModel();
               void ensureTalkingMotion();
               updateStatus("talking");
+              return true;
             } catch {
               if (speechToken !== localSpeechToken) {
-                return;
+                revokeSpeechAudioUrl(audioUrl);
+                return false;
               }
+              revokeSpeechAudioUrl(audioUrl);
+              emitSpeechEvent({
+                type: "speech-playback-error",
+                chunkId: item.chunkId,
+                message: "语音播放失败",
+                generation: item.generation
+              });
               updateStatus("speech-error");
-              finishSpeech(speechToken);
+              return false;
             }
+          };
+
+          const drainSpeechQueue = async () => {
+            if (localSpeechQueueDraining || localSpeechActive) {
+              return;
+            }
+
+            localSpeechQueueDraining = true;
+            try {
+              while (!localSpeechActive && localSpeechQueue.length > 0) {
+                const next = localSpeechQueue.shift();
+                if (!next) {
+                  continue;
+                }
+                const started = await startQueuedSpeech(next);
+                if (started) {
+                  break;
+                }
+              }
+            } finally {
+              localSpeechQueueDraining = false;
+            }
+          };
+
+          const enqueuePetSpeech = (item) => {
+            if (!item || typeof item !== "object") {
+              return;
+            }
+
+            const chunkId = typeof item.chunkId === "string" ? item.chunkId.trim() : "";
+            const audioBase64 = typeof item.audioBase64 === "string" ? item.audioBase64.trim() : "";
+            if (!chunkId || !audioBase64) {
+              return;
+            }
+
+            localSpeechQueue.push({
+              chunkId,
+              audioBase64,
+              mimeType: typeof item.mimeType === "string" ? item.mimeType : "audio/mpeg",
+              text: typeof item.text === "string" ? item.text : "",
+              generation: Number.isFinite(item.generation) ? Number(item.generation) : 0
+            });
+            void drainSpeechQueue();
+          };
+
+          const clearPetSpeech = (generation) => {
+            localSpeechQueue = [];
+            stopCurrentAudio();
+            emitSpeechEvent({
+              type: "speech-playback-cleared",
+              generation: Number.isFinite(generation) ? Number(generation) : 0
+            });
           };
 
           const applyModelLayout = () => {
@@ -2297,9 +2548,6 @@
           app.view.style.inset = "0";
           app.view.style.zIndex = "10";
           app.ticker.add(() => {
-            if (emotionRenderer && localSpeechActive) {
-              emotionRenderer.setLipSyncOpen(sampleModelLipSyncOpen());
-            }
             model.update(app.ticker.deltaMS);
           });
 
@@ -2318,6 +2566,7 @@
           window.addEventListener("beforeunload", () => {
             stopCursorPolling();
             unsubscribePetEvents();
+            stopCurrentAudio();
             void cancelPushToTalkCapture("");
             if (emotionRenderer) {
               emotionRenderer.destroy();
@@ -2485,20 +2734,19 @@
               return;
             }
 
-            if (data.type === "speech") {
-              void playPetSpeech(data.audioBase64, data.mimeType);
+            if (data.type === "speech-enqueue") {
+              enqueuePetSpeech(data);
+              return;
+            }
+
+            if (data.type === "speech-clear") {
+              clearPetSpeech(data.generation);
               return;
             }
 
             if (data.type === "voice-state") {
               applyRemoteSpeechState(data.phase === "assistant-speaking");
               return;
-            }
-
-            if (data.type === "speech-level") {
-              if (remoteSpeechActive && !localSpeechActive) {
-                setMouthOpen(Number.isFinite(data.level) ? data.level : 0);
-              }
             }
           });
         } catch (error) {

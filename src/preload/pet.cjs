@@ -34,6 +34,9 @@ const petApi = {
   debugLog(message, detail) {
     ipcRenderer.send('pet:debug:log', { message, detail });
   },
+  emitVoiceEvent(payload) {
+    ipcRenderer.send('pet:voice:event', payload);
+  },
   onEvent(listener) {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on('pet:event', wrapped);

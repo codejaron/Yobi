@@ -226,7 +226,8 @@ export function buildRuntimeRegistry(input: RuntimeRegistryBuildInput): RuntimeR
     onStatusChange: () => {
       void callbackBridge.emitStatus();
     },
-    captureService: nativeAudioCapture
+    captureService: nativeAudioCapture,
+    playbackBridge: pet
   });
   const globalPtt = new GlobalPetPushToTalkService();
   const systemPermissionsService = new SystemPermissionsService({

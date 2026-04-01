@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { NativeAudioCaptureService } from "@main/services/native-audio-capture";
 
-class FakeWritable {
+class FakeWritable extends EventEmitter {
   private readonly chunks: string[] = [];
 
-  write(chunk: Buffer | string): boolean {
+  write(chunk: Buffer | string, callback?: (error?: Error | null) => void): boolean {
     this.chunks.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk);
+    callback?.(null);
     return true;
   }
 
@@ -308,6 +309,62 @@ test("native audio capture: stopSegment waits for queued startSegment before sto
   await startPromise;
   const captured = await stopPromise;
   assert.equal(captured.pcm16Base64, "AQID");
+
+  await service.stop();
+});
+
+test("native audio capture: helper stdin EPIPE is absorbed and next start retries with a new helper", async () => {
+  const firstChild = new FakeChildProcess();
+  const secondChild = new FakeChildProcess();
+  const children = [firstChild, secondChild];
+  let spawnCount = 0;
+
+  const service = new NativeAudioCaptureService({
+    logger: {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined
+    } as never,
+    keepAliveMs: 1,
+    resolveHelperPath: async () => "/tmp/yobi-native-audio",
+    spawnProcess: () => children[spawnCount++] as never,
+    platform: "darwin"
+  });
+
+  const firstStartPromise = service.startSegment();
+  await flushMicrotasks();
+  firstChild.stdout.pushLine({
+    type: "ready"
+  });
+  await flushMicrotasks();
+  firstChild.stdout.pushLine({
+    type: "opened"
+  });
+  await firstStartPromise;
+
+  const brokenPipeError = Object.assign(new Error("write EPIPE"), {
+    code: "EPIPE"
+  });
+  assert.doesNotThrow(() => {
+    firstChild.stdin.emit("error", brokenPipeError);
+  });
+
+  const secondStartPromise = service.startSegment();
+  await flushMicrotasks();
+  secondChild.stdout.pushLine({
+    type: "ready"
+  });
+  await flushMicrotasks();
+  secondChild.stdout.pushLine({
+    type: "opened"
+  });
+  await secondStartPromise;
+
+  assert.equal(spawnCount, 2);
+  assert.deepEqual(
+    secondChild.stdin.readLines().map((line) => JSON.parse(line).command),
+    ["ensure_open", "start_segment"]
+  );
 
   await service.stop();
 });

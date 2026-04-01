@@ -12,6 +12,7 @@ import type { AppLogger } from "./logger";
 import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ConversationEngine } from "@main/core/conversation";
+import type { PetVoiceEvent } from "@shared/pet-events";
 import type { CompanionSpeechCaptureSession } from "./companion-mode";
 import { SentenceChunkBuffer } from "./realtime-voice-chunker";
 import { shouldAutoStartVoiceSession } from "./realtime-voice-lifecycle";
@@ -24,9 +25,20 @@ import {
   type VoiceActivityDetector,
   type VoiceActivityDetectorConfig
 } from "./realtime-voice-vad";
-import { VoiceHostWindowController, type VoiceHostMessage } from "./voice-host-window";
 import { VoiceProviderRouter, type StreamingAsrSession, type StreamingTtsSession } from "./voice-router";
 import type { NativeAudioCaptureBackend } from "./native-audio-capture";
+
+interface RealtimeVoicePlaybackBridge {
+  enqueueSpeech(input: {
+    chunkId: string;
+    audioBase64: string;
+    text: string;
+    mimeType: string;
+    generation: number;
+  }): Promise<boolean> | boolean;
+  clearSpeech(input: { generation: number; reason?: string }): Promise<boolean> | boolean;
+  onVoiceEvent?(listener: (event: PetVoiceEvent) => void): () => void;
+}
 
 interface RealtimeVoiceServiceInput {
   paths: CompanionPaths;
@@ -53,6 +65,7 @@ interface RealtimeVoiceServiceInput {
     logger: AppLogger;
   }) => Promise<VoiceActivityDetector>;
   captureService?: NativeAudioCaptureBackend;
+  playbackBridge?: RealtimeVoicePlaybackBridge | null;
 }
 
 function nowIso(): string {
@@ -90,9 +103,10 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
 }
 
 export class RealtimeVoiceService {
-  private readonly host: VoiceHostWindowController;
   private readonly captureService: NativeAudioCaptureBackend | null;
+  private readonly playbackBridge: RealtimeVoicePlaybackBridge | null;
   private readonly listeners = new Set<(event: VoiceSessionEvent) => void>();
+  private readonly disposePlaybackListener: (() => void) | null;
   private assistantReplyHook:
     | ((input: {
         channel: RuntimeInboundChannel;
@@ -129,25 +143,19 @@ export class RealtimeVoiceService {
   private llmVisibleText = "";
   private playedAssistantText = "";
   private assistantCommitPersisted = false;
-  private pendingCaptureStart:
-    | {
-        promise: Promise<"started" | "error">;
-        resolve: (result: "started" | "error") => void;
-      }
-    | null = null;
   private readonly playbackReferenceTracker = new PlaybackReferenceTracker();
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
-    this.host = new VoiceHostWindowController(input.logger);
     this.captureService = input.captureService ?? null;
+    this.playbackBridge = input.playbackBridge ?? null;
     this.captureCompanionSpeechStartContext = input.captureCompanionSpeechStartContext ?? null;
     this.captureCompanionSpeechRecapture = input.captureCompanionSpeechRecapture ?? null;
     this.state = createEmptyVoiceState(this.input.getConfig().realtimeVoice.mode);
-    this.host.onMessage((message) => {
-      void this.handleHostMessage(message).catch((error) => {
+    this.disposePlaybackListener = this.playbackBridge?.onVoiceEvent?.((message) => {
+      void this.handlePlaybackEvent(message).catch((error) => {
         this.fail(error instanceof Error ? error.message : "实时语音处理失败");
       });
-    });
+    }) ?? null;
     this.captureService?.onPcmFrame((frame) => {
       void this.handlePcmFrame(frame.pcm, frame.sampleRate).catch((error) => {
         this.fail(error instanceof Error ? error.message : "实时语音处理失败");
@@ -158,11 +166,9 @@ export class RealtimeVoiceService {
   start(): void {
     const config = this.input.getConfig();
     this.state = createEmptyVoiceState(config.realtimeVoice.mode);
-    if (this.shouldUseNativeCapture()) {
-      void this.captureService?.warmup?.().catch((error) => {
-        this.input.logger.warn("realtime-voice", "native-capture-warmup-failed", undefined, error);
-      });
-    }
+    void this.captureService?.warmup?.().catch((error) => {
+      this.input.logger.warn("realtime-voice", "native-capture-warmup-failed", undefined, error);
+    });
     void this.ensureVadReady().catch((error) => {
       this.input.logger.warn("realtime-voice", "vad-warmup-failed", undefined, error);
     });
@@ -180,8 +186,7 @@ export class RealtimeVoiceService {
 
   stop(): void {
     void this.stopSession();
-    this.finishAwaitingCaptureStart("error");
-    this.host.close();
+    this.disposePlaybackListener?.();
     this.disposeVad();
     void this.captureService?.stop().catch(() => undefined);
   }
@@ -256,25 +261,7 @@ export class RealtimeVoiceService {
 
     if (mode === "free") {
       await this.ensureVadReady();
-      if (this.shouldUseNativeCapture()) {
-        await this.captureService?.startStream();
-      } else {
-        const captureStart = this.beginAwaitingCaptureStart();
-        try {
-          await this.host.send({
-            type: "start-capture",
-            aecEnabled: config.realtimeVoice.aecEnabled
-          });
-        } catch (error) {
-          this.finishAwaitingCaptureStart("error");
-          throw error;
-        }
-
-        if ((await captureStart) !== "started") {
-          await this.notifyStatusChange();
-          return this.getState();
-        }
-      }
+      await this.captureService?.startStream();
     }
 
     this.applyState({
@@ -292,17 +279,8 @@ export class RealtimeVoiceService {
     }
 
     await this.abortActiveResponse("system");
-    this.finishAwaitingCaptureStart("error");
-    if (this.shouldUseNativeCapture()) {
-      await this.captureService?.stopStream().catch(() => undefined);
-    } else {
-      await this.host.send({
-        type: "stop-capture"
-      }).catch(() => undefined);
-    }
-    await this.host.send({
-      type: "clear-playback"
-    }).catch(() => undefined);
+    await this.captureService?.stopStream().catch(() => undefined);
+    await this.clearPlayback("system");
     this.pttHeld = false;
     this.resetSpeechTracking();
     this.state = createEmptyVoiceState(this.state.mode);
@@ -321,9 +299,7 @@ export class RealtimeVoiceService {
     }
 
     await this.abortActiveResponse(reason);
-    await this.host.send({
-      type: "clear-playback"
-    }).catch(() => undefined);
+    await this.clearPlayback(reason);
     this.applyState({
       type: "barge-in-detected",
       reason
@@ -347,22 +323,9 @@ export class RealtimeVoiceService {
     }
 
     if (mode === "free") {
-      if (this.shouldUseNativeCapture()) {
-        await this.captureService?.startStream();
-      } else {
-        await this.host.send({
-          type: "start-capture",
-          aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
-        });
-      }
+      await this.captureService?.startStream();
     } else if (!this.pttHeld) {
-      if (this.shouldUseNativeCapture()) {
-        await this.captureService?.stopStream().catch(() => undefined);
-      } else {
-        await this.host.send({
-          type: "stop-capture"
-        }).catch(() => undefined);
-      }
+      await this.captureService?.stopStream().catch(() => undefined);
     }
 
     return this.getState();
@@ -387,14 +350,7 @@ export class RealtimeVoiceService {
       this.pttHeld = true;
       this.resetSpeechTracking();
       await this.beginSpeech();
-      if (this.shouldUseNativeCapture()) {
-        await this.captureService?.startStream();
-      } else {
-        await this.host.send({
-          type: "start-capture",
-          aecEnabled: this.input.getConfig().realtimeVoice.aecEnabled
-        });
-      }
+      await this.captureService?.startStream();
       return;
     }
 
@@ -403,26 +359,8 @@ export class RealtimeVoiceService {
     }
 
     this.pttHeld = false;
-    if (this.shouldUseNativeCapture()) {
-      await this.captureService?.stopStream().catch(() => undefined);
-    } else {
-      await this.host.send({
-        type: "stop-capture"
-      }).catch(() => undefined);
-    }
+    await this.captureService?.stopStream().catch(() => undefined);
     await this.finishSpeech();
-  }
-
-  private shouldUseNativeCapture(): boolean {
-    if (this.captureService?.isNativeSupported() !== true) {
-      return false;
-    }
-
-    // Realtime voice was stable before native capture was introduced because it
-    // stayed on the browser getUserMedia path with built-in AEC. Keep that
-    // route as the default, and only opt into raw native capture when the user
-    // explicitly disables AEC.
-    return this.input.getConfig().realtimeVoice.aecEnabled === false;
   }
 
   async speakText(text: string): Promise<void> {
@@ -442,12 +380,12 @@ export class RealtimeVoiceService {
       }
     });
     const audio = await session.synthesizeChunk(normalized);
-    await this.host.send({
-      type: "enqueue-playback",
+    await this.enqueuePlayback({
       id: `standalone-${randomUUID()}`,
       audioBase64: audio.toString("base64"),
       text: normalized,
-      mimeType: "audio/mpeg"
+      mimeType: "audio/mpeg",
+      generation: this.state.sessionId ? this.playbackGeneration : 0
     });
     await session.close();
   }
@@ -740,15 +678,11 @@ export class RealtimeVoiceService {
     }
   }
 
-  private async handleHostMessage(message: VoiceHostMessage): Promise<void> {
-    if (message.type === "pcm-frame") {
-      this.finishAwaitingCaptureStart("started");
-      const chunk = Buffer.from(message.pcm);
-      await this.handlePcmFrame(chunk, message.sampleRate);
-      return;
-    }
-
-    if (message.type === "playback-pcm-frame") {
+  private async handlePlaybackEvent(message: PetVoiceEvent): Promise<void> {
+    if (message.type === "speech-reference-frame") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
+      }
       this.playbackReferenceTracker.pushFrame({
         pcm: Buffer.from(message.pcm),
         sampleRate: message.sampleRate
@@ -756,25 +690,13 @@ export class RealtimeVoiceService {
       return;
     }
 
-    if (message.type === "capture-started") {
-      return;
-    }
-
-    if (message.type === "capture-stopped") {
-      return;
-    }
-
-    if (message.type === "capture-error") {
-      this.finishAwaitingCaptureStart("error");
-      this.input.logger.warn("realtime-voice", "capture:error", undefined, new Error(message.message));
-      this.fail(message.message);
-      return;
-    }
-
-    if (message.type === "playback-started") {
-      this.pendingPlaybackTexts.set(message.id, message.text);
-      if (!this.playedChunkIds.has(message.id)) {
-        this.playedChunkIds.add(message.id);
+    if (message.type === "speech-playback-started") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
+      }
+      this.pendingPlaybackTexts.set(message.chunkId, message.text);
+      if (!this.playedChunkIds.has(message.chunkId)) {
+        this.playedChunkIds.add(message.chunkId);
         this.playedAssistantText += message.text;
       }
       this.applyState({
@@ -801,8 +723,11 @@ export class RealtimeVoiceService {
       return;
     }
 
-    if (message.type === "playback-ended") {
-      this.pendingPlaybackTexts.delete(message.id);
+    if (message.type === "speech-playback-ended") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
+      }
+      this.pendingPlaybackTexts.delete(message.chunkId);
       this.state = {
         ...this.state,
         playback: {
@@ -825,35 +750,22 @@ export class RealtimeVoiceService {
       return;
     }
 
-    if (message.type === "playback-cleared") {
+    if (message.type === "speech-playback-cleared") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
+      }
       this.pendingPlaybackTexts.clear();
       this.playbackReferenceTracker.clear();
       this.state = {
         ...this.state,
         playback: {
           active: false,
-          queueLength: message.queueLength,
+          queueLength: 0,
           level: 0,
           currentText: ""
         },
         updatedAt: nowIso()
       };
-      this.emitState();
-      return;
-    }
-
-    if (message.type === "speech-level") {
-      this.state = reduceVoiceSessionState(this.state, {
-        type: "playback-level",
-        level: message.level,
-        queueLength: message.queueLength,
-        currentText: message.currentText
-      });
-      this.emit({
-        type: "speech-level",
-        level: message.level,
-        timestamp: nowIso()
-      });
       this.emit({
         type: "playback",
         playback: {
@@ -865,8 +777,24 @@ export class RealtimeVoiceService {
       return;
     }
 
-    if (message.type === "playback-error") {
-      this.fail(message.message);
+    if (message.type === "speech-playback-error") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
+      }
+      this.pendingPlaybackTexts.delete(message.chunkId);
+      const queueLength = this.pendingPlaybackTexts.size;
+      this.state = {
+        ...this.state,
+        playback: {
+          active: queueLength > 0,
+          queueLength,
+          level: 0,
+          currentText: ""
+        },
+        updatedAt: nowIso()
+      };
+      this.emitState();
+      await this.maybeFinalizeAssistantTurn();
     }
   }
 
@@ -1096,14 +1024,18 @@ export class RealtimeVoiceService {
         }
 
         const id = `voice-playback-${randomUUID()}`;
-        this.pendingPlaybackTexts.set(id, normalized);
-        await this.host.send({
-          type: "enqueue-playback",
+        const queued = await this.enqueuePlayback({
           id,
           audioBase64: audio.toString("base64"),
           text: normalized,
-          mimeType: "audio/mpeg"
+          mimeType: "audio/mpeg",
+          generation: playbackGeneration
         });
+        if (!queued) {
+          return;
+        }
+
+        this.pendingPlaybackTexts.set(id, normalized);
         this.state = {
           ...this.state,
           playback: {
@@ -1234,32 +1166,6 @@ export class RealtimeVoiceService {
     return this.playbackGeneration;
   }
 
-  private beginAwaitingCaptureStart(): Promise<"started" | "error"> {
-    if (this.pendingCaptureStart) {
-      return this.pendingCaptureStart.promise;
-    }
-
-    let resolve!: (result: "started" | "error") => void;
-    const promise = new Promise<"started" | "error">((res) => {
-      resolve = res;
-    });
-    this.pendingCaptureStart = {
-      promise,
-      resolve
-    };
-    return promise;
-  }
-
-  private finishAwaitingCaptureStart(result: "started" | "error"): void {
-    const pending = this.pendingCaptureStart;
-    if (!pending) {
-      return;
-    }
-
-    this.pendingCaptureStart = null;
-    pending.resolve(result);
-  }
-
   private isPlaybackGenerationActive(
     session: StreamingTtsSession,
     playbackGeneration: number
@@ -1269,6 +1175,58 @@ export class RealtimeVoiceService {
       this.activeTtsSession === session &&
       this.state.sessionId !== null
     );
+  }
+
+  private isPlaybackGenerationCurrent(generation: number): boolean {
+    return generation === this.playbackGeneration;
+  }
+
+  private async enqueuePlayback(input: {
+    id: string;
+    audioBase64: string;
+    text: string;
+    mimeType: string;
+    generation: number;
+  }): Promise<boolean> {
+    if (!this.playbackBridge) {
+      return false;
+    }
+
+    try {
+      return (
+        (await this.playbackBridge.enqueueSpeech({
+          chunkId: input.id,
+          audioBase64: input.audioBase64,
+          text: input.text,
+          mimeType: input.mimeType,
+          generation: input.generation
+        })) !== false
+      );
+    } catch (error) {
+      this.input.logger.warn("realtime-voice", "enqueue-playback-failed", {
+        textLength: input.text.length,
+        generation: input.generation
+      }, error);
+      return false;
+    }
+  }
+
+  private async clearPlayback(reason: "vad" | "manual" | "system"): Promise<void> {
+    if (!this.playbackBridge) {
+      return;
+    }
+
+    try {
+      await this.playbackBridge.clearSpeech({
+        generation: this.playbackGeneration,
+        reason
+      });
+    } catch (error) {
+      this.input.logger.warn("realtime-voice", "clear-playback-failed", {
+        generation: this.playbackGeneration,
+        reason
+      }, error);
+    }
   }
 
   private applyState(event: Parameters<typeof reduceVoiceSessionState>[1]): void {

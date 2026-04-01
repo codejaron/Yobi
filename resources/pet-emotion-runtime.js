@@ -258,7 +258,6 @@
     const defaultEmotion = normalizeEmotion(config.defaultEmotion, config.defaultEmotion);
     let targetEmotion = cloneEmotion(defaultEmotion);
     let currentEmotion = cloneEmotion(defaultEmotion);
-    let lipSyncOpen = 0;
     let warmupRemainingMs = safeNumber(config.smoothing && config.smoothing.warmupMs, 900);
     let rendererFailed = false;
     const impulses = new Map();
@@ -309,21 +308,11 @@
       });
     }
 
-    function setLipSyncOpen(value) {
-      lipSyncOpen = clamp(safeNumber(value, 0), 0, 1);
-    }
-
-    function releaseLipSync(dtMs) {
-      const releasePerSecond = safeNumber(config.lipSync && config.lipSync.releasePerSecond, 9);
-      lipSyncOpen = approachExp(lipSyncOpen, 0, releasePerSecond, dtMs);
-    }
-
     function reset(nextEmotion) {
       targetEmotion = normalizeEmotion(nextEmotion || defaultEmotion, defaultEmotion);
       currentEmotion = cloneEmotion(defaultEmotion);
       impulses.clear();
       warmupRemainingMs = safeNumber(config.smoothing && config.smoothing.warmupMs, 900);
-      lipSyncOpen = 0;
       blink.reset();
       rendererFailed = false;
     }
@@ -342,7 +331,6 @@
       advanceEmotion(nextDeltaMs);
       advanceImpulses(nextDeltaMs);
       blink.update(nextDeltaMs);
-      releaseLipSync(nextDeltaMs);
       applyControlledSlots();
     }
 
@@ -412,10 +400,11 @@
         if (!parameter || !parameter.id) {
           continue;
         }
-        let nextValue = resolveMappedValue(slot, parameter, features);
         if (slot === "mouthOpen") {
-          nextValue = lerpRange(parameter.min, parameter.max, lipSyncOpen);
-        } else if (OPEN_EYE_SLOTS.has(slot)) {
+          continue;
+        }
+        let nextValue = resolveMappedValue(slot, parameter, features);
+        if (OPEN_EYE_SLOTS.has(slot)) {
           const desired = clamp(nextValue + getImpulseContribution(slot), parameter.min, parameter.max);
           const blinkFactor = blink.getOpenFactor();
           nextValue = parameter.min + (desired - parameter.min) * blinkFactor;
@@ -431,7 +420,6 @@
       destroy,
       hasSlot,
       reset,
-      setLipSyncOpen,
       setTargetEmotion,
       triggerImpulse
     };

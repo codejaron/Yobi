@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { NativeAudioCaptureService } from "@main/services/native-audio-capture";
 
-class FakeWritable {
+class FakeWritable extends EventEmitter {
   private readonly chunks: string[] = [];
 
-  write(chunk: Buffer | string): boolean {
+  write(chunk: Buffer | string, callback?: (error?: Error | null) => void): boolean {
     this.chunks.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk);
+    callback?.(null);
     return true;
   }
 

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -569,9 +570,12 @@ export class PetService {
         });
 
         this.input.pet.emitEvent({
-          type: "speech",
+          type: "speech-enqueue",
+          chunkId: `pet-speech-${randomUUID()}`,
           audioBase64: audio.toString("base64"),
-          mimeType: "audio/mpeg"
+          mimeType: "audio/mpeg",
+          text: normalized,
+          generation: 0
         });
       } catch (error) {
         logger.warn("pet", "speech-synthesis-failed", undefined, error);
@@ -688,13 +692,6 @@ export class PetService {
 
       this.lastVoicePhase = event.state.phase;
       return;
-    }
-
-    if (event.type === "speech-level") {
-      this.input.pet.emitEvent({
-        type: "speech-level",
-        level: event.level
-      });
     }
   }
 }

@@ -15,8 +15,7 @@ type VoiceSessionReducerEvent =
   | { type: "assistant-playback-finished" }
   | { type: "barge-in-detected"; reason: "vad" | "manual" | "system" }
   | { type: "session-stopped" }
-  | { type: "error"; message: string }
-  | { type: "playback-level"; level: number; queueLength?: number; currentText?: string };
+  | { type: "error"; message: string };
 
 interface CreateVoiceSessionStateInput {
   sessionId: string;
@@ -125,17 +124,6 @@ export function reduceVoiceSessionState(
       return {
         ...withPhase(state, "error"),
         errorMessage: event.message
-      };
-    case "playback-level":
-      return {
-        ...state,
-        playback: {
-          active: state.playback.active,
-          queueLength: typeof event.queueLength === "number" ? Math.max(0, Math.round(event.queueLength)) : state.playback.queueLength,
-          level: Math.max(0, event.level),
-          currentText: typeof event.currentText === "string" ? event.currentText : state.playback.currentText
-        },
-        updatedAt: nowIso()
       };
     default:
       return state;

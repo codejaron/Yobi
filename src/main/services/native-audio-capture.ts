@@ -74,8 +74,12 @@ interface HelperReadable {
 }
 
 interface HelperWritable {
-  write: (chunk: string) => boolean;
+  write: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
   end?: () => void;
+  on?: (event: "error" | "close" | "finish", listener: (...args: any[]) => void) => void;
+  destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
 }
 
 interface HelperChild {
@@ -108,6 +112,7 @@ export class NativeAudioCaptureService implements NativeAudioCaptureBackend {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private shutdownRequested = false;
   private opened = false;
+  private stdinReady = false;
 
   constructor(private readonly input: NativeAudioCaptureServiceInput) {}
 
@@ -301,8 +306,18 @@ export class NativeAudioCaptureService implements NativeAudioCaptureBackend {
   }
 
   private attachChild(child: HelperChild): void {
+    this.stdinReady = true;
     child.stdout.setEncoding?.("utf8");
     child.stderr.setEncoding?.("utf8");
+    child.stdin.on?.("error", (error) => {
+      this.handleStdinError(error instanceof Error ? error : new Error(String(error)));
+    });
+    child.stdin.on?.("close", () => {
+      this.stdinReady = false;
+    });
+    child.stdin.on?.("finish", () => {
+      this.stdinReady = false;
+    });
     child.stdout.on("data", (chunk) => {
       this.handleStdout(chunk);
     });
@@ -412,6 +427,7 @@ export class NativeAudioCaptureService implements NativeAudioCaptureBackend {
     this.helperReady = false;
     this.opened = false;
     this.activeMode = null;
+    this.stdinReady = false;
   }
 
   private handleMicClosed(): void {
@@ -425,6 +441,7 @@ export class NativeAudioCaptureService implements NativeAudioCaptureBackend {
       : new Error("原生录音 helper 已断开。");
     this.helperReady = false;
     this.opened = false;
+    this.stdinReady = false;
     this.warming?.reject(closeError);
     this.warming = null;
     this.opening?.reject(closeError);
@@ -436,11 +453,70 @@ export class NativeAudioCaptureService implements NativeAudioCaptureBackend {
   }
 
   private async sendCommand(command: NativeAudioHelperCommand): Promise<void> {
-    if (!this.child) {
-      throw new Error("原生录音 helper 未启动。");
+    const child = this.child;
+    if (!child || !this.canWriteToHelper(child.stdin)) {
+      throw new Error("原生录音 helper 已断开。");
     }
 
-    this.child.stdin.write(`${JSON.stringify(command)}\n`);
+    const payload = `${JSON.stringify(command)}\n`;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdin.write(payload, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    } catch (error) {
+      const normalized = normalizeWriteError(error);
+      this.handleStdinWriteFailure(normalized);
+      throw normalized;
+    }
+  }
+
+  private canWriteToHelper(stdin: HelperWritable): boolean {
+    if (!this.stdinReady) {
+      return false;
+    }
+    if (stdin.destroyed || stdin.writableEnded) {
+      return false;
+    }
+    if (typeof stdin.writable === "boolean" && !stdin.writable) {
+      return false;
+    }
+    return true;
+  }
+
+  private handleStdinError(error: Error): void {
+    const normalized = normalizeWriteError(error);
+    if (this.shutdownRequested && isClosedPipeError(normalized)) {
+      this.stdinReady = false;
+      return;
+    }
+
+    this.handleStdinWriteFailure(normalized);
+  }
+
+  private handleStdinWriteFailure(error: Error): void {
+    this.stdinReady = false;
+    this.helperReady = false;
+    this.opened = false;
+    this.activeMode = null;
+    this.warming?.reject(error);
+    this.warming = null;
+    this.opening?.reject(error);
+    this.opening = null;
+    this.pendingSegmentResult?.reject(error);
+    this.pendingSegmentResult = null;
+
+    const child = this.child;
+    this.child = null;
+    if (!this.shutdownRequested) {
+      this.input.logger.warn("native-audio", "helper-stdin-failed", undefined, error);
+      child?.kill();
+    }
   }
 
   private armIdleTimer(): void {
@@ -546,4 +622,18 @@ function defaultSpawnProcess(helperPath: string): HelperChild {
   return spawn(helperPath, [], {
     stdio: "pipe"
   }) as ChildProcessWithoutNullStreams;
+}
+
+function normalizeWriteError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(String(error));
+}
+
+function isClosedPipeError(error: Error): boolean {
+  const code = typeof (error as NodeJS.ErrnoException).code === "string"
+    ? (error as NodeJS.ErrnoException).code
+    : "";
+  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
 }

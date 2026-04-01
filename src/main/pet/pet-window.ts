@@ -12,7 +12,12 @@ import {
 import { appLogger as logger } from "@main/runtime/singletons";
 import { DEFAULT_PET_EMOTION_CONFIG, mergePetEmotionConfig, type PetEmotionConfigOverride, normalizePetEmotionName } from "@shared/pet-emotion";
 import { buildPetModelCandidateDirs, findPetFallbackImagePath, findPetModelJsonPath } from "@main/pet/pet-model-metadata";
-import type { PetEvent } from "@shared/pet-events";
+import type {
+  PetEvent,
+  PetSpeechClearEvent,
+  PetSpeechEnqueueEvent,
+  PetVoiceEvent
+} from "@shared/pet-events";
 
 export class PetWindowController {
   private window: BrowserWindow | null = null;
@@ -22,6 +27,7 @@ export class PetWindowController {
   private loaded = false;
   private currentModelDir: string | null = null;
   private pendingEvents: PetEvent[] = [];
+  private readonly voiceListeners = new Set<(event: PetVoiceEvent) => void>();
 
   private ensureDockIconVisibleOnMac(): void {
     if (process.platform !== "darwin") {
@@ -185,6 +191,7 @@ export class PetWindowController {
   constructor() {
     ipcMain.on("pet:window:move-by", this.moveWindowByListener);
     ipcMain.on("pet:window:set-ignore-mouse-events", this.setIgnoreMouseEventsListener);
+    ipcMain.on("pet:voice:event", this.voiceEventListener);
     ipcMain.on("pet:debug:log", (event, payload) => {
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       if (!senderWindow || senderWindow.isDestroyed() || !this.window || this.window.isDestroyed() || senderWindow.id !== this.window.id) {
@@ -363,6 +370,29 @@ export class PetWindowController {
     this.window.webContents.send("pet:event", normalizedEvent);
   }
 
+  enqueueSpeech(event: Omit<PetSpeechEnqueueEvent, "type">): boolean {
+    this.emitEvent({
+      type: "speech-enqueue",
+      ...event
+    });
+    return this.isOnline();
+  }
+
+  clearSpeech(event: Omit<PetSpeechClearEvent, "type">): boolean {
+    this.emitEvent({
+      type: "speech-clear",
+      ...event
+    });
+    return this.isOnline();
+  }
+
+  onVoiceEvent(listener: (event: PetVoiceEvent) => void): () => void {
+    this.voiceListeners.add(listener);
+    return () => {
+      this.voiceListeners.delete(listener);
+    };
+  }
+
   isOnline(): boolean {
     return Boolean(this.window && !this.window.isDestroyed());
   }
@@ -377,6 +407,27 @@ export class PetWindowController {
     }
     this.pendingEvents = [];
   }
+
+  private readonly voiceEventListener = (event: IpcMainEvent, payload: PetVoiceEvent): void => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (
+      !senderWindow ||
+      senderWindow.isDestroyed() ||
+      !this.window ||
+      this.window.isDestroyed() ||
+      senderWindow.id !== this.window.id
+    ) {
+      return;
+    }
+
+    for (const listener of this.voiceListeners) {
+      try {
+        listener(payload);
+      } catch (error) {
+        logger.warn("pet-window", "voice-event-listener-failed", undefined, error);
+      }
+    }
+  };
 }
 
 function findModelJsonPath(modelDir: string): string | null {
