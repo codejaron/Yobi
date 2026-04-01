@@ -1093,9 +1093,11 @@
           const SINGLE_TAP_DELAY_MS = 340;
           const DOUBLE_TAP_GAP_MS = 320;
           const DRAG_ACTIVATE_DISTANCE = 8;
-          const CURSOR_POLL_INTERVAL_MS = 48;
-          const SPEECH_REFERENCE_FRAME_SAMPLES = 320;
-          const SPEECH_REFERENCE_SAMPLE_RATE = 16000;
+	          const CURSOR_POLL_INTERVAL_MS = 48;
+	          const SPEECH_REFERENCE_FRAME_SAMPLES = 320;
+	          const SPEECH_REFERENCE_SAMPLE_RATE = 16000;
+	          const SPEECH_REFERENCE_DECODE_TIMEOUT_MS = 1200;
+	          const SPEECH_START_TIMEOUT_MS = 4000;
 
           try {
             model.internalModel?.extendParallelMotionManager?.(2);
@@ -1530,10 +1532,41 @@
             setTimeout(() => rootEl.classList.remove("pulse"), 1600);
           };
 
-          const startModelSpeak = async (soundUrl, options) => {
-            await ensurePixiSoundPlaybackReady(PIXI);
-            return await model.speak(soundUrl, options);
-          };
+	          const startModelSpeak = async (soundUrl, options) => {
+	            await ensurePixiSoundPlaybackReady(PIXI);
+	            return await model.speak(soundUrl, options);
+	          };
+
+	          const withAsyncTimeout = async (promise, timeoutMs, message) => {
+	            return await new Promise((resolve, reject) => {
+	              let settled = false;
+	              const timer = setTimeout(() => {
+	                if (settled) {
+	                  return;
+	                }
+	                settled = true;
+	                reject(new Error(message));
+	              }, Math.max(1, timeoutMs || 0));
+	              Promise.resolve(promise).then(
+	                (value) => {
+	                  if (settled) {
+	                    return;
+	                  }
+	                  settled = true;
+	                  clearTimeout(timer);
+	                  resolve(value);
+	                },
+	                (error) => {
+	                  if (settled) {
+	                    return;
+	                  }
+	                  settled = true;
+	                  clearTimeout(timer);
+	                  reject(error);
+	                }
+	              );
+	            });
+	          };
 
           const emitSpeechEvent = (payload) => {
             if (!petBridge || typeof petBridge.emitVoiceEvent !== "function" || !payload) {
@@ -1633,24 +1666,31 @@
             return frames;
           };
 
-          const decodeReferenceFrames = async (audioBase64) => {
-            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContextCtor || typeof audioBase64 !== "string" || !audioBase64.trim()) {
-              return [];
+	          const decodeReferenceFrames = async (audioBase64) => {
+	            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+	            if (!AudioContextCtor || typeof audioBase64 !== "string" || !audioBase64.trim()) {
+	              return [];
             }
 
-            const context = new AudioContextCtor({
-              sampleRate: SPEECH_REFERENCE_SAMPLE_RATE
-            });
-            try {
-              const decoded = await context.decodeAudioData(base64ToArrayBuffer(audioBase64));
-              const source = decoded.getChannelData(0);
-              return resampleToReferenceFrames(source, decoded.sampleRate);
-            } catch {
-              return [];
-            } finally {
-              await context.close().catch(() => undefined);
-            }
+	            const context = new AudioContextCtor({
+	              sampleRate: SPEECH_REFERENCE_SAMPLE_RATE
+	            });
+	            try {
+	              const decoded = await withAsyncTimeout(
+	                context.decodeAudioData(base64ToArrayBuffer(audioBase64)),
+	                SPEECH_REFERENCE_DECODE_TIMEOUT_MS,
+	                "voice:reference-decode-timeout"
+	              );
+	              const source = decoded.getChannelData(0);
+	              return resampleToReferenceFrames(source, decoded.sampleRate);
+	            } catch (error) {
+	              debugLog("voice:reference-decode-skipped", {
+	                reason: error instanceof Error ? error.message : String(error)
+	              });
+	              return [];
+	            } finally {
+	              await context.close().catch(() => undefined);
+	            }
           };
 
           const startSpeechReferenceEmitter = (frames, generation) => {
@@ -1932,114 +1972,126 @@
               updateStatus("speech-error");
               return false;
             }
-            const referenceFrames = await decodeReferenceFrames(payload);
+	            const referenceFrames = await decodeReferenceFrames(payload);
 
-            try {
-              const ok = await startModelSpeak(audioUrl, {
-                volume: 1,
-                onFinish: () => {
-                  finishSpeech(speechToken);
-                },
-                onError: () => {
-                  debugLog("voice:speech-error-callback", {
-                    chunkId: item.chunkId,
-                    generation: item.generation,
-                    speechToken
-                  });
-                  if (speechToken !== localSpeechToken) {
-                    revokeSpeechAudioUrl(audioUrl);
-                    return;
-                  }
-                  const failedItem = activeSpeechItem;
-                  activeSpeechItem = null;
-                  localSpeechActive = false;
-                  syncSpeechActive();
-                  failedItem?.stopReferenceEmitter?.();
-                  failedItem?.revokeAudioUrl?.();
-                  emitSpeechEvent({
-                    type: "speech-playback-error",
-                    chunkId: item.chunkId,
-                    message: "语音播放失败",
-                    generation: item.generation
-                  });
-                  updateStatus("speech-error");
-                  if (speechActive) {
-                    void ensureTalkingMotion();
-                  } else if (thinkingActive) {
-                    applyThinkingState();
-                  } else {
-                    enterIdle(false);
-                  }
-                  void drainSpeechQueue();
-                }
-              });
+	            try {
+	              const ok = await withAsyncTimeout(
+	                startModelSpeak(audioUrl, {
+	                  volume: 1,
+	                  onFinish: () => {
+	                    finishSpeech(speechToken);
+	                  },
+	                  onError: () => {
+	                    debugLog("voice:speech-error-callback", {
+	                      chunkId: item.chunkId,
+	                      generation: item.generation,
+	                      speechToken
+	                    });
+	                    if (speechToken !== localSpeechToken) {
+	                      revokeSpeechAudioUrl(audioUrl);
+	                      return;
+	                    }
+	                    const failedItem = activeSpeechItem;
+	                    activeSpeechItem = null;
+	                    localSpeechActive = false;
+	                    syncSpeechActive();
+	                    failedItem?.stopReferenceEmitter?.();
+	                    failedItem?.revokeAudioUrl?.();
+	                    emitSpeechEvent({
+	                      type: "speech-playback-error",
+	                      chunkId: item.chunkId,
+	                      message: "语音播放失败",
+	                      generation: item.generation
+	                    });
+	                    updateStatus("speech-error");
+	                    if (speechActive) {
+	                      void ensureTalkingMotion();
+	                    } else if (thinkingActive) {
+	                      applyThinkingState();
+	                    } else {
+	                      enterIdle(false);
+	                    }
+	                    void drainSpeechQueue();
+	                  }
+	                }),
+	                SPEECH_START_TIMEOUT_MS,
+	                "voice:speech-start-timeout"
+	              );
 
-              if (speechToken !== localSpeechToken) {
-                revokeSpeechAudioUrl(audioUrl);
-                return false;
-              }
+	              if (speechToken !== localSpeechToken) {
+	                revokeSpeechAudioUrl(audioUrl);
+	                return false;
+	              }
 
-              if (!ok) {
-                debugLog("voice:speech-start-rejected", {
-                  chunkId: item.chunkId,
-                  generation: item.generation,
-                  speechToken
-                });
-                revokeSpeechAudioUrl(audioUrl);
-                emitSpeechEvent({
-                  type: "speech-playback-error",
-                  chunkId: item.chunkId,
-                  message: "语音播放失败",
-                  generation: item.generation
-                });
-                updateStatus("speech-error");
-                return false;
-              }
+	              if (!ok) {
+	                debugLog("voice:speech-start-rejected", {
+	                  chunkId: item.chunkId,
+	                  generation: item.generation,
+	                  speechToken
+	                });
+	                revokeSpeechAudioUrl(audioUrl);
+	                emitSpeechEvent({
+	                  type: "speech-playback-error",
+	                  chunkId: item.chunkId,
+	                  message: "语音播放失败",
+	                  generation: item.generation
+	                });
+	                updateStatus("speech-error");
+	                return false;
+	              }
 
-              localSpeechActive = true;
-              syncSpeechActive();
-              activeSpeechItem = {
-                chunkId: item.chunkId,
-                text: item.text,
-                generation: item.generation,
-                stopReferenceEmitter: startSpeechReferenceEmitter(referenceFrames, item.generation),
-                revokeAudioUrl: () => {
-                  revokeSpeechAudioUrl(audioUrl);
-                }
-              };
-              emitSpeechEvent({
-                type: "speech-playback-started",
-                chunkId: item.chunkId,
-                text: item.text,
-                queueLength: localSpeechQueue.length,
-                generation: item.generation
-              });
-              clearIdleMotionLoop();
-              clearStatusTimer();
-              pulseModel();
-              void ensureTalkingMotion();
-              updateStatus("talking");
-              return true;
-            } catch {
-              if (speechToken !== localSpeechToken) {
-                revokeSpeechAudioUrl(audioUrl);
-                return false;
-              }
-              debugLog("voice:speech-start-failed", {
-                chunkId: item.chunkId,
-                generation: item.generation,
-                speechToken
-              });
-              revokeSpeechAudioUrl(audioUrl);
-              emitSpeechEvent({
-                type: "speech-playback-error",
-                chunkId: item.chunkId,
-                message: "语音播放失败",
-                generation: item.generation
-              });
-              updateStatus("speech-error");
-              return false;
-            }
+	              localSpeechActive = true;
+	              syncSpeechActive();
+	              activeSpeechItem = {
+	                chunkId: item.chunkId,
+	                text: item.text,
+	                generation: item.generation,
+	                stopReferenceEmitter: startSpeechReferenceEmitter(referenceFrames, item.generation),
+	                revokeAudioUrl: () => {
+	                  revokeSpeechAudioUrl(audioUrl);
+	                }
+	              };
+	              emitSpeechEvent({
+	                type: "speech-playback-started",
+	                chunkId: item.chunkId,
+	                text: item.text,
+	                queueLength: localSpeechQueue.length,
+	                generation: item.generation
+	              });
+	              clearIdleMotionLoop();
+	              clearStatusTimer();
+	              pulseModel();
+	              void ensureTalkingMotion();
+	              updateStatus("talking");
+	              return true;
+	            } catch (error) {
+	              if (speechToken !== localSpeechToken) {
+	                revokeSpeechAudioUrl(audioUrl);
+	                return false;
+	              }
+	              if (error instanceof Error && error.message === "voice:speech-start-timeout") {
+	                localSpeechToken += 1;
+	              }
+	              debugLog(
+	                error instanceof Error && error.message === "voice:speech-start-timeout"
+	                  ? "voice:speech-start-timeout"
+	                  : "voice:speech-start-failed",
+	                {
+	                  chunkId: item.chunkId,
+	                  generation: item.generation,
+	                  speechToken
+	                }
+	              );
+	              revokeSpeechAudioUrl(audioUrl);
+	              emitSpeechEvent({
+	                type: "speech-playback-error",
+	                chunkId: item.chunkId,
+	                message: "语音播放失败",
+	                generation: item.generation
+	              });
+	              updateStatus("speech-error");
+	              return false;
+	            }
           };
 
           const drainSpeechQueue = async () => {

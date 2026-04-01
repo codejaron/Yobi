@@ -105,6 +105,7 @@ function createEmptyVoiceState(mode: RealtimeVoiceMode): VoiceSessionState {
 
 const TRANSCRIPTION_TIMEOUT_ERROR = "realtime-voice-transcription-timeout";
 const ASSISTANT_PROGRESS_TIMEOUT_ERROR = "realtime-voice-assistant-progress-timeout";
+const PLAYBACK_START_TIMEOUT_ERROR = "realtime-voice-playback-start-timeout";
 const SILENCE_RMS_THRESHOLD = 0.008;
 
 function createPlaybackState(): VoiceSessionState["playback"] {
@@ -182,6 +183,9 @@ export class RealtimeVoiceService {
   private ttsSequence = Promise.resolve();
   private pendingSynthesisCount = 0;
   private pendingPlaybackTexts = new Map<string, string>();
+  private playbackStartTimer: ReturnType<typeof setTimeout> | null = null;
+  private playbackStartChunkId: string | null = null;
+  private playbackStartGeneration = 0;
   private playbackGeneration = 0;
   private playedChunkIds = new Set<string>();
   private llmFinished = false;
@@ -554,6 +558,10 @@ export class RealtimeVoiceService {
     return Math.max(40, this.getRequestTimeoutMs() * 2);
   }
 
+  private getPlaybackStartTimeoutMs(): number {
+    return Math.max(60, Math.min(2_500, Math.round(this.getRequestTimeoutMs() / 2)));
+  }
+
   private getForcedSpeechSilenceMs(): number {
     return Math.max(1_200, this.input.getConfig().realtimeVoice.minSilenceMs + 600);
   }
@@ -659,11 +667,92 @@ export class RealtimeVoiceService {
     this.assistantProgressGeneration = 0;
   }
 
+  private clearPlaybackStartWatchdog(): void {
+    if (this.playbackStartTimer) {
+      clearTimeout(this.playbackStartTimer);
+      this.playbackStartTimer = null;
+    }
+
+    this.playbackStartChunkId = null;
+    this.playbackStartGeneration = 0;
+  }
+
+  private armPlaybackStartWatchdog(chunkId: string, generation: number): void {
+    if (
+      !chunkId ||
+      !this.isPlaybackGenerationCurrent(generation) ||
+      this.state.playback.active
+    ) {
+      return;
+    }
+
+    if (this.playbackStartChunkId === chunkId && this.playbackStartGeneration === generation) {
+      return;
+    }
+
+    this.clearPlaybackStartWatchdog();
+    this.playbackStartChunkId = chunkId;
+    this.playbackStartGeneration = generation;
+    this.playbackStartTimer = setTimeout(() => {
+      if (
+        this.playbackStartChunkId !== chunkId ||
+        this.playbackStartGeneration !== generation
+      ) {
+        return;
+      }
+
+      this.playbackStartTimer = null;
+      void this.recoverFromPlaybackStartTimeout(chunkId, generation);
+    }, this.getPlaybackStartTimeoutMs());
+    this.playbackStartTimer.unref?.();
+  }
+
+  private syncPlaybackStartWatchdog(generation = this.playbackGeneration): void {
+    if (this.state.playback.active) {
+      this.clearPlaybackStartWatchdog();
+      return;
+    }
+
+    const nextChunkId = this.pendingPlaybackTexts.keys().next().value;
+    if (typeof nextChunkId !== "string" || !nextChunkId) {
+      this.clearPlaybackStartWatchdog();
+      return;
+    }
+
+    this.armPlaybackStartWatchdog(nextChunkId, generation);
+  }
+
   private async recoverFromAssistantTimeout(): Promise<void> {
     this.input.logger.warn("realtime-voice", "assistant:progress-timeout", {
       sessionId: this.state.sessionId ?? "unknown",
       phase: this.state.phase
     }, createTimeoutError(ASSISTANT_PROGRESS_TIMEOUT_ERROR));
+    await this.abortActiveResponse("system");
+    await this.clearPlayback("system");
+    this.playbackReferenceTracker.clear();
+    this.clearCurrentTurnTranscripts();
+    this.transitionToReadyState();
+    await this.notifyStatusChange();
+  }
+
+  private async recoverFromPlaybackStartTimeout(
+    chunkId: string,
+    generation: number
+  ): Promise<void> {
+    if (
+      !this.isPlaybackGenerationCurrent(generation) ||
+      !this.pendingPlaybackTexts.has(chunkId)
+    ) {
+      return;
+    }
+
+    this.input.logger.warn("realtime-voice", "assistant:playback-start-timeout", {
+      sessionId: this.state.sessionId ?? "unknown",
+      phase: this.state.phase,
+      chunkId,
+      generation,
+      pendingPlaybackCount: this.pendingPlaybackTexts.size
+    }, createTimeoutError(PLAYBACK_START_TIMEOUT_ERROR));
     await this.abortActiveResponse("system");
     await this.clearPlayback("system");
     this.playbackReferenceTracker.clear();
@@ -963,6 +1052,9 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      if (this.playbackStartChunkId === message.chunkId) {
+        this.clearPlaybackStartWatchdog();
+      }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.set(message.chunkId, message.text);
       if (!this.playedChunkIds.has(message.chunkId)) {
@@ -997,6 +1089,9 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      if (this.playbackStartChunkId === message.chunkId) {
+        this.clearPlaybackStartWatchdog();
+      }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.delete(message.chunkId);
       this.state = {
@@ -1017,6 +1112,7 @@ export class RealtimeVoiceService {
         timestamp: nowIso()
       });
       this.emitState();
+      this.syncPlaybackStartWatchdog(message.generation);
       await this.maybeFinalizeAssistantTurn();
       return;
     }
@@ -1025,6 +1121,7 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      this.clearPlaybackStartWatchdog();
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.clear();
       this.playbackReferenceTracker.clear();
@@ -1053,6 +1150,9 @@ export class RealtimeVoiceService {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
+      if (this.playbackStartChunkId === message.chunkId) {
+        this.clearPlaybackStartWatchdog();
+      }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       this.pendingPlaybackTexts.delete(message.chunkId);
       const queueLength = this.pendingPlaybackTexts.size;
@@ -1067,6 +1167,7 @@ export class RealtimeVoiceService {
         updatedAt: nowIso()
       };
       this.emitState();
+      this.syncPlaybackStartWatchdog(message.generation);
       await this.maybeFinalizeAssistantTurn();
     }
   }
@@ -1172,6 +1273,7 @@ export class RealtimeVoiceService {
     this.assistantCommitPersisted = false;
     this.ttsSequence = Promise.resolve();
     this.pendingPlaybackTexts.clear();
+    this.clearPlaybackStartWatchdog();
     this.playedChunkIds.clear();
     const playbackGeneration = this.beginPlaybackGeneration();
     const assistantProgressWatchdog = this.startAssistantProgressWatchdog(assistantGeneration);
@@ -1368,6 +1470,7 @@ export class RealtimeVoiceService {
         }
 
         this.pendingPlaybackTexts.set(id, normalized);
+        this.syncPlaybackStartWatchdog(playbackGeneration);
         this.refreshAssistantProgressWatchdog(this.assistantGeneration);
         this.state = {
           ...this.state,
@@ -1395,6 +1498,7 @@ export class RealtimeVoiceService {
       return;
     }
 
+    this.clearPlaybackStartWatchdog();
     if (this.assistantCommitPersisted || !this.state.sessionId || !this.state.target) {
       return;
     }
@@ -1476,6 +1580,7 @@ export class RealtimeVoiceService {
 
   private async abortActiveResponse(reason: "vad" | "manual" | "system"): Promise<void> {
     this.clearAssistantProgressWatchdog();
+    this.clearPlaybackStartWatchdog();
     this.invalidateAssistantGeneration();
     if (this.replyAbortController && !this.replyAbortController.signal.aborted) {
       this.replyAbortController.abort();

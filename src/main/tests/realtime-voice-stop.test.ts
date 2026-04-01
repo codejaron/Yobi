@@ -1451,6 +1451,67 @@ test("realtime voice: assistant progress watchdog aborts silent thinking and ret
   assert.equal(service.state.assistantTranscript, "");
 });
 
+test("realtime voice: playback start watchdog recovers when queued speech never starts", async () => {
+  let clearCount = 0;
+  const service = createService({
+    getConfig: () =>
+      ({
+        realtimeVoice: {
+          enabled: true,
+          mode: "free",
+          aecEnabled: true,
+          autoInterrupt: true,
+          preRollMs: 300,
+          vadThreshold: 0.35,
+          maxUtteranceMs: 45_000,
+          minSpeechMs: 180,
+          minSilenceMs: 600,
+          firstChunkStrategy: "aggressive"
+        },
+        voice: {
+          ttsVoice: "stub-voice",
+          ttsRate: "+0%",
+          ttsPitch: "+0Hz",
+          requestTimeoutMs: 80,
+          retryCount: 0,
+          asrProvider: "sensevoice-local",
+          ttsProvider: "edge"
+        }
+      }) as never,
+    conversation: {
+      reply: async (input: any) => {
+        input.stream?.onVisibleTextDelta?.("这是一段足够长的语音回复，可以进入播报。");
+        input.stream?.onVisibleTextFinal?.("这是一段足够长的语音回复，可以进入播报。");
+        return "这是一段足够长的语音回复，可以进入播报。";
+      }
+    },
+    playbackBridge: createPlaybackBridge({
+      onClear: () => {
+        clearCount += 1;
+      }
+    })
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  await service.handleUserTurn("测试播放启动卡死", null, []);
+  await new Promise((resolve) => setTimeout(resolve, 90));
+
+  assert.equal(clearCount > 0, true);
+  assert.equal(service.state.phase, "listening");
+  assert.equal(service.state.errorMessage, null);
+});
+
 test("realtime voice: stale assistant callbacks are ignored after an interrupt", async () => {
   let capturedStream: {
     onVisibleTextDelta?: (delta: string) => void;
