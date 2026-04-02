@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-test("pet window: speech runtime queues model.speak playback without manual lipsync bridge", () => {
+test("pet window: speech runtime executes model.speak playback without renderer queue state", () => {
   const root = process.cwd();
   const html = readFileSync(path.join(root, "resources", "pet-window.html"), "utf8");
 
@@ -17,13 +17,21 @@ test("pet window: speech runtime queues model.speak playback without manual lips
   assert.match(html, /PIXI\.webaudio = pixiSound\.webaudio/);
   assert.match(html, /disableAutoPause = true/);
   assert.match(html, /audioContext\.resume\(\)/);
-  assert.match(html, /const ok = await startModelSpeak\(audioUrl,/);
-  assert.doesNotMatch(html, /const \{ ok \} = await startModelSpeak\(audioUrl,/);
+  assert.match(html, /startModelSpeak\(audioUrl,/);
   assert.doesNotMatch(html, /setLive2DSoundEnabled\(/);
   assert.doesNotMatch(html, /config\.sound = enabled/);
   assert.match(html, /voice:talking-motion-skip-primary-fallback/);
   assert.match(html, /speech-enqueue/);
   assert.match(html, /speech-clear/);
+  assert.match(html, /voiceThinkingActive/);
+  assert.match(html, /const isThinkingActive = \(\) => thinkingActive \|\| voiceThinkingActive/);
+  assert.match(html, /phase === "assistant-thinking"/);
+  assert.doesNotMatch(html, /remoteSpeechActive/);
+  assert.doesNotMatch(html, /phase === "assistant-speaking"/);
+  assert.doesNotMatch(html, /applyRemoteSpeechState\(data\.phase === "assistant-speaking"\)/);
+  assert.doesNotMatch(html, /localSpeechQueue/);
+  assert.doesNotMatch(html, /drainSpeechQueue/);
+  assert.doesNotMatch(html, /queueLength:\s*0/);
   assert.doesNotMatch(html, /startPrimaryTalkingMotion/);
   assert.doesNotMatch(html, /playPrimaryMotionLastFrame/);
   assert.doesNotMatch(html, /sampleModelLipSyncOpen/);

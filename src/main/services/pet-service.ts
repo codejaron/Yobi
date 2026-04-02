@@ -28,7 +28,7 @@ import { StateStore } from "@main/kernel/state-store";
 import { shouldPublishEmotionState } from "@main/pet/emotion-state-sync";
 import { getPetModelMetadata as readPetModelMetadata } from "@main/pet/pet-model-metadata";
 import { shouldUseUnifiedRealtimeVoice } from "@main/services/pet-voice-mode";
-import type { VoiceSessionEvent, VoiceSessionPhase } from "@shared/types";
+import type { VoiceSessionEvent } from "@shared/types";
 import type { PetModelMetadata } from "@shared/ipc";
 import { resolveAssistantSpeechRoute } from "@main/services/assistant-speech-policy";
 import type { NativeAudioCaptureBackend } from "@main/services/native-audio-capture";
@@ -59,7 +59,6 @@ export class PetService {
   private latestEmotionalState: EmotionalState = cloneEmotionalState(DEFAULT_PET_EMOTION_CONFIG.defaultEmotion);
   private lastPublishedEmotionalState: EmotionalState | null = null;
   private lastPublishedAtMs = 0;
-  private lastVoicePhase: VoiceSessionPhase = "idle";
   private captureCompanionSpeechContext: (() => Promise<ChatAttachment[]>) | null = null;
   private nativeCaptureWarmupPromise: Promise<void> | null = null;
 
@@ -670,27 +669,6 @@ export class PetService {
         phase: event.state.phase,
         mode: event.state.mode
       });
-
-      if (event.state.phase === "assistant-thinking" && this.lastVoicePhase !== "assistant-thinking") {
-        this.input.pet.emitEvent({
-          type: "thinking",
-          value: "start"
-        });
-      } else if (this.lastVoicePhase === "assistant-thinking" && event.state.phase !== "assistant-thinking") {
-        this.input.pet.emitEvent({
-          type: "thinking",
-          value: "stop"
-        });
-      }
-
-      if (event.state.phase === "assistant-speaking" && this.lastVoicePhase !== "assistant-speaking") {
-        this.input.pet.emitEvent({
-          type: "talking",
-          value: "talking"
-        });
-      }
-
-      this.lastVoicePhase = event.state.phase;
       return;
     }
   }

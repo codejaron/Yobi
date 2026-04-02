@@ -1061,12 +1061,11 @@
           let idleMotionTimer = null;
           let suppressTapUntil = 0;
           let thinkingActive = false;
+          let voiceThinkingActive = false;
           let localSpeechActive = false;
+          let localSpeechStarting = false;
           let speechActive = false;
-          let remoteSpeechActive = false;
           let localSpeechToken = 0;
-          let localSpeechQueue = [];
-          let localSpeechQueueDraining = false;
           let activeSpeechItem = null;
           let talkingMotionManager = null;
           let emotionMotionManager = null;
@@ -1344,9 +1343,11 @@
           };
 
           const syncSpeechActive = () => {
-            speechActive = localSpeechActive || remoteSpeechActive;
+            speechActive = localSpeechActive;
             return speechActive;
           };
+
+          const isThinkingActive = () => thinkingActive || voiceThinkingActive;
 
           const resolveMotionIndex = (group, index) => {
             const count = motionCount(group);
@@ -1445,7 +1446,7 @@
 
             debugLog("voice:talking-motion-skip-primary-fallback", {
               speechActive,
-              thinkingActive,
+              thinkingActive: isThinkingActive(),
               hasTalkingMotionManager: Boolean(talkingMotionManager),
               talkingMotionGroup,
               talkingMotionIndex: nextIndex
@@ -1739,7 +1740,7 @@
               if (speechActive) {
                 return;
               }
-              if (thinkingActive) {
+              if (isThinkingActive()) {
                 applyThinkingState();
                 return;
               }
@@ -1751,7 +1752,7 @@
             clearIdleMotionLoop();
             idleMotionTimer = setTimeout(() => {
               idleMotionTimer = null;
-              if (thinkingActive || speechActive) {
+              if (isThinkingActive() || speechActive) {
                 return;
               }
               void playPrimaryMotion(idleMotionGroup);
@@ -1760,7 +1761,7 @@
           };
 
           const enterIdle = (playImmediateMotion = true) => {
-            if (thinkingActive || speechActive) {
+            if (isThinkingActive() || speechActive) {
               return;
             }
 
@@ -1856,12 +1857,12 @@
               } else if (!speechActive) {
                 ok = await playPrimaryMotion(action.motionGroup, action.motionIndex);
               }
-              if (!ok && action.motionGroup !== idleMotionGroup && !speechActive && !thinkingActive) {
+              if (!ok && action.motionGroup !== idleMotionGroup && !speechActive && !isThinkingActive()) {
                 await playPrimaryMotion(idleMotionGroup);
               }
             })();
 
-            if (!speechActive && !thinkingActive) {
+            if (!speechActive && !isThinkingActive()) {
               updateStatus(`emotion · ${normalizedEmotion}`);
               scheduleStatusBackToBaseline(
                 Math.max(650, Number.isFinite(options.durationMs) ? options.durationMs : 1850)
@@ -1874,6 +1875,7 @@
             localSpeechToken += 1;
             const currentItem = activeSpeechItem;
             activeSpeechItem = null;
+            localSpeechStarting = false;
             try {
               model.stopSpeaking();
             } catch {}
@@ -1890,74 +1892,67 @@
             stopTalkingMotion();
           };
 
-          const finishSpeech = (token) => {
+	          const finishSpeech = (token) => {
             if (typeof token === "number" && token !== localSpeechToken) {
               return;
             }
 
             const finishedItem = activeSpeechItem;
             activeSpeechItem = null;
+            localSpeechStarting = false;
             localSpeechActive = false;
             syncSpeechActive();
-            if (finishedItem) {
-              finishedItem.stopReferenceEmitter?.();
-              finishedItem.revokeAudioUrl?.();
-              emitSpeechEvent({
+	            if (finishedItem) {
+	              finishedItem.stopReferenceEmitter?.();
+	              finishedItem.revokeAudioUrl?.();
+	              emitSpeechEvent({
                 type: "speech-playback-ended",
                 chunkId: finishedItem.chunkId,
                 text: finishedItem.text,
-                queueLength: localSpeechQueue.length,
                 generation: finishedItem.generation
               });
             }
             if (speechActive) {
               void ensureTalkingMotion();
               updateStatus("talking");
-              void drainSpeechQueue();
               return;
             }
             stopTalkingMotion();
-            if (thinkingActive) {
+            if (isThinkingActive()) {
               applyThinkingState();
-              void drainSpeechQueue();
               return;
             }
             enterIdle(false);
-            void drainSpeechQueue();
           };
 
-          const applyRemoteSpeechState = (active) => {
-            remoteSpeechActive = active;
+          const applyRemoteVoicePhase = (phase) => {
+            voiceThinkingActive = phase === "assistant-thinking";
             syncSpeechActive();
             if (speechActive) {
-              clearIdleMotionLoop();
-              clearStatusTimer();
-              if (remoteSpeechActive) {
-                pulseModel();
-              }
-              void ensureTalkingMotion();
-              updateStatus("talking");
               return;
             }
 
-            stopTalkingMotion();
-            if (thinkingActive) {
+            if (isThinkingActive()) {
+              stopTalkingMotion();
               applyThinkingState();
               return;
             }
+            stopTalkingMotion();
             enterIdle(false);
           };
 
-          const startQueuedSpeech = async (item) => {
+	          const startPetSpeechPlayback = async (item) => {
             const payload = typeof item?.audioBase64 === "string" ? item.audioBase64.trim() : "";
             if (!payload) {
               return false;
             }
 
-            const speechToken = localSpeechToken + 1;
-            localSpeechToken = speechToken;
-            const audioUrl = createSpeechAudioUrl(payload, item.mimeType);
+	            const speechToken = localSpeechToken + 1;
+	            localSpeechToken = speechToken;
+              localSpeechStarting = true;
+	            const audioUrl = createSpeechAudioUrl(payload, item.mimeType);
             if (!audioUrl) {
+              localSpeechStarting = false;
               debugLog("voice:speech-start-no-audio-url", {
                 chunkId: item.chunkId,
                 generation: item.generation,
@@ -1993,6 +1988,7 @@
 	                    }
 	                    const failedItem = activeSpeechItem;
 	                    activeSpeechItem = null;
+                      localSpeechStarting = false;
 	                    localSpeechActive = false;
 	                    syncSpeechActive();
 	                    failedItem?.stopReferenceEmitter?.();
@@ -2006,12 +2002,11 @@
 	                    updateStatus("speech-error");
 	                    if (speechActive) {
 	                      void ensureTalkingMotion();
-	                    } else if (thinkingActive) {
+	                    } else if (isThinkingActive()) {
 	                      applyThinkingState();
 	                    } else {
 	                      enterIdle(false);
 	                    }
-	                    void drainSpeechQueue();
 	                  }
 	                }),
 	                SPEECH_START_TIMEOUT_MS,
@@ -2019,11 +2014,13 @@
 	              );
 
 	              if (speechToken !== localSpeechToken) {
+	                localSpeechStarting = false;
 	                revokeSpeechAudioUrl(audioUrl);
 	                return false;
 	              }
 
 	              if (!ok) {
+	                localSpeechStarting = false;
 	                debugLog("voice:speech-start-rejected", {
 	                  chunkId: item.chunkId,
 	                  generation: item.generation,
@@ -2040,6 +2037,7 @@
 	                return false;
 	              }
 
+                localSpeechStarting = false;
 	              localSpeechActive = true;
 	              syncSpeechActive();
 	              activeSpeechItem = {
@@ -2055,7 +2053,6 @@
 	                type: "speech-playback-started",
 	                chunkId: item.chunkId,
 	                text: item.text,
-	                queueLength: localSpeechQueue.length,
 	                generation: item.generation
 	              });
 	              clearIdleMotionLoop();
@@ -2065,6 +2062,7 @@
 	              updateStatus("talking");
 	              return true;
 	            } catch (error) {
+                localSpeechStarting = false;
 	              if (speechToken !== localSpeechToken) {
 	                revokeSpeechAudioUrl(audioUrl);
 	                return false;
@@ -2094,29 +2092,7 @@
 	            }
           };
 
-          const drainSpeechQueue = async () => {
-            if (localSpeechQueueDraining || localSpeechActive) {
-              return;
-            }
-
-            localSpeechQueueDraining = true;
-            try {
-              while (!localSpeechActive && localSpeechQueue.length > 0) {
-                const next = localSpeechQueue.shift();
-                if (!next) {
-                  continue;
-                }
-                const started = await startQueuedSpeech(next);
-                if (started) {
-                  break;
-                }
-              }
-            } finally {
-              localSpeechQueueDraining = false;
-            }
-          };
-
-          const enqueuePetSpeech = (item) => {
+	          const enqueuePetSpeech = (item) => {
             if (!item || typeof item !== "object") {
               return;
             }
@@ -2127,19 +2103,33 @@
               return;
             }
 
-            localSpeechQueue.push({
-              chunkId,
-              audioBase64,
-              mimeType: typeof item.mimeType === "string" ? item.mimeType : "audio/mpeg",
-              text: typeof item.text === "string" ? item.text : "",
-              generation: Number.isFinite(item.generation) ? Number(item.generation) : 0
-            });
-            void drainSpeechQueue();
-          };
+              if (localSpeechActive || localSpeechStarting) {
+                debugLog("voice:speech-enqueue-rejected-busy", {
+                  chunkId,
+                  generation: Number.isFinite(item.generation) ? Number(item.generation) : 0
+                });
+                emitSpeechEvent({
+                  type: "speech-playback-error",
+                  chunkId,
+                  message: "语音播放失败",
+                  generation: Number.isFinite(item.generation) ? Number(item.generation) : 0
+                });
+                updateStatus("speech-error");
+                return;
+              }
 
-          const clearPetSpeech = (generation) => {
-            localSpeechQueue = [];
-            stopCurrentAudio();
+              const speechItem = {
+                chunkId,
+                audioBase64,
+              mimeType: typeof item.mimeType === "string" ? item.mimeType : "audio/mpeg",
+                text: typeof item.text === "string" ? item.text : "",
+                generation: Number.isFinite(item.generation) ? Number(item.generation) : 0
+              };
+	            void startPetSpeechPlayback(speechItem);
+	          };
+
+	          const clearPetSpeech = (generation) => {
+	            stopCurrentAudio();
             emitSpeechEvent({
               type: "speech-playback-cleared",
               generation: Number.isFinite(generation) ? Number(generation) : 0
@@ -2720,7 +2710,9 @@
                 applyThinkingState();
               } else if (data.value === "stop") {
                 thinkingActive = false;
-                if (!speechActive) {
+                if (isThinkingActive()) {
+                  applyThinkingState();
+                } else if (!speechActive) {
                   enterIdle(false);
                 }
               }
@@ -2772,7 +2764,8 @@
             }
 
             if (data.type === "voice-state") {
-              applyRemoteSpeechState(data.phase === "assistant-speaking");
+              const phase = typeof data.phase === "string" ? data.phase : "idle";
+              applyRemoteVoicePhase(phase);
               return;
             }
           });

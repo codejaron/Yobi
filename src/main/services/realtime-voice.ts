@@ -13,10 +13,14 @@ import type { CompanionPaths } from "@main/storage/paths";
 import type { YobiMemory } from "@main/memory/setup";
 import type { ConversationEngine } from "@main/core/conversation";
 import { isAbortLikeError } from "@main/core/conversation-abort";
-import type { PetVoiceEvent } from "@shared/pet-events";
 import type { CompanionSpeechCaptureSession } from "./companion-mode";
 import { SentenceChunkBuffer } from "./realtime-voice-chunker";
 import { shouldAutoStartVoiceSession } from "./realtime-voice-lifecycle";
+import {
+  RealtimeVoicePlaybackController,
+  type RealtimeVoicePlaybackBridge,
+  type RealtimeVoicePlaybackControllerEvent
+} from "./realtime-voice-playback-controller";
 import { PlaybackReferenceTracker } from "./realtime-voice-playback-reference";
 import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
 import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voice-state";
@@ -28,18 +32,6 @@ import {
 } from "./realtime-voice-vad";
 import { VoiceProviderRouter, type StreamingAsrSession, type StreamingTtsSession } from "./voice-router";
 import type { NativeAudioCaptureBackend } from "./native-audio-capture";
-
-interface RealtimeVoicePlaybackBridge {
-  enqueueSpeech(input: {
-    chunkId: string;
-    audioBase64: string;
-    text: string;
-    mimeType: string;
-    generation: number;
-  }): Promise<boolean> | boolean;
-  clearSpeech(input: { generation: number; reason?: string }): Promise<boolean> | boolean;
-  onVoiceEvent?(listener: (event: PetVoiceEvent) => void): () => void;
-}
 
 interface RealtimeVoiceServiceInput {
   paths: CompanionPaths;
@@ -144,7 +136,7 @@ function getPcm16RmsLevel(chunk: Buffer): number {
 
 export class RealtimeVoiceService {
   private readonly captureService: NativeAudioCaptureBackend | null;
-  private readonly playbackBridge: RealtimeVoicePlaybackBridge | null;
+  private readonly playbackController: RealtimeVoicePlaybackController | null;
   private readonly listeners = new Set<(event: VoiceSessionEvent) => void>();
   private readonly disposePlaybackListener: (() => void) | null;
   private assistantReplyHook:
@@ -182,10 +174,6 @@ export class RealtimeVoiceService {
   private responseSequence = Promise.resolve();
   private ttsSequence = Promise.resolve();
   private pendingSynthesisCount = 0;
-  private pendingPlaybackTexts = new Map<string, string>();
-  private playbackStartTimer: ReturnType<typeof setTimeout> | null = null;
-  private playbackStartChunkId: string | null = null;
-  private playbackStartGeneration = 0;
   private playbackGeneration = 0;
   private playedChunkIds = new Set<string>();
   private llmFinished = false;
@@ -196,11 +184,17 @@ export class RealtimeVoiceService {
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
     this.captureService = input.captureService ?? null;
-    this.playbackBridge = input.playbackBridge ?? null;
+    this.playbackController = input.playbackBridge
+      ? new RealtimeVoicePlaybackController({
+          bridge: input.playbackBridge,
+          logger: input.logger,
+          startTimeoutMs: this.getPlaybackStartTimeoutMs()
+        })
+      : null;
     this.captureCompanionSpeechStartContext = input.captureCompanionSpeechStartContext ?? null;
     this.captureCompanionSpeechRecapture = input.captureCompanionSpeechRecapture ?? null;
     this.state = createEmptyVoiceState(this.input.getConfig().realtimeVoice.mode);
-    this.disposePlaybackListener = this.playbackBridge?.onVoiceEvent?.((message) => {
+    this.disposePlaybackListener = this.playbackController?.onEvent((message) => {
       void this.handlePlaybackEvent(message).catch((error) => {
         this.fail(error instanceof Error ? error.message : "实时语音处理失败");
       });
@@ -236,6 +230,7 @@ export class RealtimeVoiceService {
   stop(): void {
     void this.stopSession();
     this.disposePlaybackListener?.();
+    this.playbackController?.dispose();
     this.disposeVad();
     void this.captureService?.stop().catch(() => undefined);
   }
@@ -667,61 +662,6 @@ export class RealtimeVoiceService {
     this.assistantProgressGeneration = 0;
   }
 
-  private clearPlaybackStartWatchdog(): void {
-    if (this.playbackStartTimer) {
-      clearTimeout(this.playbackStartTimer);
-      this.playbackStartTimer = null;
-    }
-
-    this.playbackStartChunkId = null;
-    this.playbackStartGeneration = 0;
-  }
-
-  private armPlaybackStartWatchdog(chunkId: string, generation: number): void {
-    if (
-      !chunkId ||
-      !this.isPlaybackGenerationCurrent(generation) ||
-      this.state.playback.active
-    ) {
-      return;
-    }
-
-    if (this.playbackStartChunkId === chunkId && this.playbackStartGeneration === generation) {
-      return;
-    }
-
-    this.clearPlaybackStartWatchdog();
-    this.playbackStartChunkId = chunkId;
-    this.playbackStartGeneration = generation;
-    this.playbackStartTimer = setTimeout(() => {
-      if (
-        this.playbackStartChunkId !== chunkId ||
-        this.playbackStartGeneration !== generation
-      ) {
-        return;
-      }
-
-      this.playbackStartTimer = null;
-      void this.recoverFromPlaybackStartTimeout(chunkId, generation);
-    }, this.getPlaybackStartTimeoutMs());
-    this.playbackStartTimer.unref?.();
-  }
-
-  private syncPlaybackStartWatchdog(generation = this.playbackGeneration): void {
-    if (this.state.playback.active) {
-      this.clearPlaybackStartWatchdog();
-      return;
-    }
-
-    const nextChunkId = this.pendingPlaybackTexts.keys().next().value;
-    if (typeof nextChunkId !== "string" || !nextChunkId) {
-      this.clearPlaybackStartWatchdog();
-      return;
-    }
-
-    this.armPlaybackStartWatchdog(nextChunkId, generation);
-  }
-
   private async recoverFromAssistantTimeout(): Promise<void> {
     this.input.logger.warn("realtime-voice", "assistant:progress-timeout", {
       sessionId: this.state.sessionId ?? "unknown",
@@ -741,7 +681,7 @@ export class RealtimeVoiceService {
   ): Promise<void> {
     if (
       !this.isPlaybackGenerationCurrent(generation) ||
-      !this.pendingPlaybackTexts.has(chunkId)
+      !this.playbackController?.hasPendingChunk(chunkId, generation)
     ) {
       return;
     }
@@ -751,7 +691,7 @@ export class RealtimeVoiceService {
       phase: this.state.phase,
       chunkId,
       generation,
-      pendingPlaybackCount: this.pendingPlaybackTexts.size
+      pendingPlaybackCount: this.playbackController.getPendingCount()
     }, createTimeoutError(PLAYBACK_START_TIMEOUT_ERROR));
     await this.abortActiveResponse("system");
     await this.clearPlayback("system");
@@ -1035,8 +975,34 @@ export class RealtimeVoiceService {
     }
   }
 
-  private async handlePlaybackEvent(message: PetVoiceEvent): Promise<void> {
-    if (message.type === "speech-reference-frame") {
+  private syncPlaybackState(input: {
+    active: boolean;
+    queueLength: number;
+    currentText: string;
+    level?: number;
+  }): void {
+    this.state = {
+      ...this.state,
+      playback: {
+        active: input.active,
+        queueLength: input.queueLength,
+        level: input.level ?? this.state.playback.level,
+        currentText: input.currentText
+      },
+      updatedAt: nowIso()
+    };
+    this.emit({
+      type: "playback",
+      playback: {
+        ...this.state.playback
+      },
+      timestamp: nowIso()
+    });
+    this.emitState();
+  }
+
+  private async handlePlaybackEvent(message: RealtimeVoicePlaybackControllerEvent): Promise<void> {
+    if (message.type === "reference-frame") {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
@@ -1048,15 +1014,25 @@ export class RealtimeVoiceService {
       return;
     }
 
-    if (message.type === "speech-playback-started") {
+    if (message.type === "chunk-dispatched") {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
-      if (this.playbackStartChunkId === message.chunkId) {
-        this.clearPlaybackStartWatchdog();
+      this.refreshAssistantProgressWatchdog(this.assistantGeneration);
+      this.syncPlaybackState({
+        active: false,
+        queueLength: message.state.pendingCount,
+        currentText: message.text,
+        level: 0
+      });
+      return;
+    }
+
+    if (message.type === "chunk-started") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
       }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-      this.pendingPlaybackTexts.set(message.chunkId, message.text);
       if (!this.playedChunkIds.has(message.chunkId)) {
         this.playedChunkIds.add(message.chunkId);
         this.playedAssistantText += message.text;
@@ -1064,111 +1040,64 @@ export class RealtimeVoiceService {
       this.applyState({
         type: "assistant-playback-started"
       });
-      this.state = {
-        ...this.state,
-        playback: {
-          active: true,
-          queueLength: message.queueLength,
-          level: this.state.playback.level,
-          currentText: message.text
-        },
-        updatedAt: nowIso()
-      };
-      this.emit({
-        type: "playback",
-        playback: {
-          ...this.state.playback
-        },
-        timestamp: nowIso()
+      this.syncPlaybackState({
+        active: true,
+        queueLength: message.state.queuedCount,
+        currentText: message.text
       });
-      this.emitState();
       return;
     }
 
-    if (message.type === "speech-playback-ended") {
+    if (message.type === "chunk-ended") {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
-      if (this.playbackStartChunkId === message.chunkId) {
-        this.clearPlaybackStartWatchdog();
-      }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-      this.pendingPlaybackTexts.delete(message.chunkId);
-      this.state = {
-        ...this.state,
-        playback: {
-          active: message.queueLength > 0,
-          queueLength: message.queueLength,
-          level: 0,
-          currentText: ""
-        },
-        updatedAt: nowIso()
-      };
-      this.emit({
-        type: "playback",
-        playback: {
-          ...this.state.playback
-        },
-        timestamp: nowIso()
+      this.syncPlaybackState({
+        active: message.state.active,
+        queueLength: message.state.pendingCount,
+        currentText: message.state.currentText,
+        level: 0
       });
-      this.emitState();
-      this.syncPlaybackStartWatchdog(message.generation);
       await this.maybeFinalizeAssistantTurn();
       return;
     }
 
-    if (message.type === "speech-playback-cleared") {
+    if (message.type === "cleared") {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
-      this.clearPlaybackStartWatchdog();
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-      this.pendingPlaybackTexts.clear();
       this.playbackReferenceTracker.clear();
-      this.state = {
-        ...this.state,
-        playback: {
-          active: false,
-          queueLength: 0,
-          level: 0,
-          currentText: ""
-        },
-        updatedAt: nowIso()
-      };
-      this.emit({
-        type: "playback",
-        playback: {
-          ...this.state.playback
-        },
-        timestamp: nowIso()
+      this.syncPlaybackState({
+        active: false,
+        queueLength: 0,
+        currentText: "",
+        level: 0
       });
-      this.emitState();
       return;
     }
 
-    if (message.type === "speech-playback-error") {
+    if (message.type === "chunk-error") {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
       }
-      if (this.playbackStartChunkId === message.chunkId) {
-        this.clearPlaybackStartWatchdog();
-      }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-      this.pendingPlaybackTexts.delete(message.chunkId);
-      const queueLength = this.pendingPlaybackTexts.size;
-      this.state = {
-        ...this.state,
-        playback: {
-          active: queueLength > 0,
-          queueLength,
-          level: 0,
-          currentText: ""
-        },
-        updatedAt: nowIso()
-      };
-      this.emitState();
-      this.syncPlaybackStartWatchdog(message.generation);
+      this.syncPlaybackState({
+        active: message.state.active,
+        queueLength: message.state.pendingCount,
+        currentText: message.state.currentText,
+        level: 0
+      });
       await this.maybeFinalizeAssistantTurn();
+      return;
+    }
+
+    if (message.type === "start-timeout") {
+      if (!this.isPlaybackGenerationCurrent(message.generation)) {
+        return;
+      }
+      await this.recoverFromPlaybackStartTimeout(message.chunkId, message.generation);
     }
   }
 
@@ -1272,8 +1201,6 @@ export class RealtimeVoiceService {
     this.playedAssistantText = "";
     this.assistantCommitPersisted = false;
     this.ttsSequence = Promise.resolve();
-    this.pendingPlaybackTexts.clear();
-    this.clearPlaybackStartWatchdog();
     this.playedChunkIds.clear();
     const playbackGeneration = this.beginPlaybackGeneration();
     const assistantProgressWatchdog = this.startAssistantProgressWatchdog(assistantGeneration);
@@ -1372,7 +1299,19 @@ export class RealtimeVoiceService {
           return;
         }
 
-        for (const chunk of chunker.flush()) {
+        this.input.logger.info("realtime-voice", "llm:reply-complete", {
+          sessionId,
+          textLength: finalText.length,
+          textPreview: toLogPreview(finalText),
+          ttsProvider: config.voice.ttsProvider
+        });
+
+        const trailingChunks = chunker.flush();
+        this.input.logger.info("realtime-voice", "tts:flush-start", {
+          sessionId,
+          chunkCount: trailingChunks.length
+        });
+        for (const chunk of trailingChunks) {
           await this.enqueueTtsChunk(chunk, ttsSession, playbackGeneration);
         }
 
@@ -1452,12 +1391,28 @@ export class RealtimeVoiceService {
 
       this.pendingSynthesisCount += 1;
       try {
+        this.input.logger.info("realtime-voice", "tts:chunk-start", {
+          generation: playbackGeneration,
+          textLength: normalized.length,
+          textPreview: toLogPreview(normalized)
+        });
         const audio = await session.synthesizeChunk(normalized);
         if (!this.isPlaybackGenerationActive(session, playbackGeneration)) {
           return;
         }
 
+        this.input.logger.info("realtime-voice", "tts:chunk-synthesized", {
+          generation: playbackGeneration,
+          textLength: normalized.length,
+          audioBytes: audio.length
+        });
+
         const id = `voice-playback-${randomUUID()}`;
+        this.input.logger.info("realtime-voice", "playback:enqueue-start", {
+          chunkId: id,
+          generation: playbackGeneration,
+          textLength: normalized.length
+        });
         const queued = await this.enqueuePlayback({
           id,
           audioBase64: audio.toString("base64"),
@@ -1466,21 +1421,18 @@ export class RealtimeVoiceService {
           generation: playbackGeneration
         });
         if (!queued) {
+          this.input.logger.warn("realtime-voice", "playback:enqueue-skipped", {
+            chunkId: id,
+            generation: playbackGeneration
+          });
           return;
         }
 
-        this.pendingPlaybackTexts.set(id, normalized);
-        this.syncPlaybackStartWatchdog(playbackGeneration);
+        this.input.logger.info("realtime-voice", "playback:enqueue-complete", {
+          chunkId: id,
+          generation: playbackGeneration
+        });
         this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-        this.state = {
-          ...this.state,
-          playback: {
-            ...this.state.playback,
-            queueLength: this.pendingPlaybackTexts.size
-          },
-          updatedAt: nowIso()
-        };
-        this.emitState();
       } catch (error) {
         this.input.logger.warn("realtime-voice", "tts-chunk-failed", {
           textLength: normalized.length
@@ -1494,11 +1446,10 @@ export class RealtimeVoiceService {
   }
 
   private async maybeFinalizeAssistantTurn(): Promise<void> {
-    if (!this.llmFinished || this.pendingSynthesisCount > 0 || this.pendingPlaybackTexts.size > 0) {
+    if (!this.llmFinished || this.pendingSynthesisCount > 0 || this.hasPendingPlaybackWork()) {
       return;
     }
 
-    this.clearPlaybackStartWatchdog();
     if (this.assistantCommitPersisted || !this.state.sessionId || !this.state.target) {
       return;
     }
@@ -1538,6 +1489,10 @@ export class RealtimeVoiceService {
       type: "assistant-playback-finished"
     });
     await this.notifyStatusChange();
+  }
+
+  private hasPendingPlaybackWork(): boolean {
+    return (this.playbackController?.getPendingCount() ?? 0) > 0;
   }
 
   private async persistInterruptedAssistantTurn(): Promise<void> {
@@ -1580,7 +1535,6 @@ export class RealtimeVoiceService {
 
   private async abortActiveResponse(reason: "vad" | "manual" | "system"): Promise<void> {
     this.clearAssistantProgressWatchdog();
-    this.clearPlaybackStartWatchdog();
     this.invalidateAssistantGeneration();
     if (this.replyAbortController && !this.replyAbortController.signal.aborted) {
       this.replyAbortController.abort();
@@ -1593,7 +1547,6 @@ export class RealtimeVoiceService {
     this.llmFinished = true;
     this.ttsSequence = Promise.resolve();
     this.pendingSynthesisCount = 0;
-    this.pendingPlaybackTexts.clear();
     await activeTtsSession?.close().catch(() => undefined);
     this.state = {
       ...this.state,
@@ -1603,7 +1556,7 @@ export class RealtimeVoiceService {
   }
 
   private beginPlaybackGeneration(): number {
-    this.playbackGeneration += 1;
+    this.playbackGeneration = this.playbackController?.beginGeneration() ?? this.playbackGeneration + 1;
     return this.playbackGeneration;
   }
 
@@ -1629,20 +1582,18 @@ export class RealtimeVoiceService {
     mimeType: string;
     generation: number;
   }): Promise<boolean> {
-    if (!this.playbackBridge) {
+    if (!this.playbackController) {
       return false;
     }
 
     try {
-      return (
-        (await this.playbackBridge.enqueueSpeech({
-          chunkId: input.id,
-          audioBase64: input.audioBase64,
-          text: input.text,
-          mimeType: input.mimeType,
-          generation: input.generation
-        })) !== false
-      );
+      return await this.playbackController.enqueue({
+        chunkId: input.id,
+        audioBase64: input.audioBase64,
+        text: input.text,
+        mimeType: input.mimeType,
+        generation: input.generation
+      });
     } catch (error) {
       this.input.logger.warn("realtime-voice", "enqueue-playback-failed", {
         textLength: input.text.length,
@@ -1653,15 +1604,12 @@ export class RealtimeVoiceService {
   }
 
   private async clearPlayback(reason: "vad" | "manual" | "system"): Promise<void> {
-    if (!this.playbackBridge) {
+    if (!this.playbackController) {
       return;
     }
 
     try {
-      await this.playbackBridge.clearSpeech({
-        generation: this.playbackGeneration,
-        reason
-      });
+      await this.playbackController.clear(reason);
     } catch (error) {
       this.input.logger.warn("realtime-voice", "clear-playback-failed", {
         generation: this.playbackGeneration,

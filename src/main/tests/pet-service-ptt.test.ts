@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_CONFIG } from "@shared/types";
 import { PetService } from "@main/services/pet-service";
+import type { VoiceSessionEvent } from "@shared/types";
 
 function createService(overrides?: {
   getConfig?: ConstructorParameters<typeof PetService>[0]["getConfig"];
@@ -23,7 +24,10 @@ function createService(overrides?: {
   transcribePcm16?: () => Promise<{ text: string; metadata?: unknown }>;
   ensureGlobalPttPermission?: () => boolean;
 }) {
-  return new PetService({
+  const emittedPetEvents: any[] = [];
+  let realtimeVoiceListener: ((event: VoiceSessionEvent) => void) | null = null;
+
+  const service = new PetService({
     paths: {} as never,
     getConfig:
       overrides?.getConfig ??
@@ -47,7 +51,9 @@ function createService(overrides?: {
         }) as never),
     pet: {
       isOnline: overrides?.isPetOnline ?? (() => true),
-      emitEvent: () => undefined,
+      emitEvent: (event: any) => {
+        emittedPetEvents.push(event);
+      },
       close: () => undefined
     } as never,
     stateStore: {
@@ -62,7 +68,12 @@ function createService(overrides?: {
         }))
     } as never,
     realtimeVoice: {
-      onEvent: () => undefined,
+      onEvent: (listener: (event: VoiceSessionEvent) => void) => {
+        realtimeVoiceListener = listener;
+        return () => {
+          realtimeVoiceListener = null;
+        };
+      },
       stop: () => undefined,
       start: () => undefined,
       isActive: () => false,
@@ -86,6 +97,13 @@ function createService(overrides?: {
     chatReplyTimeoutMs: 1000,
     withTimeout: async <T>(promise: Promise<T>) => promise,
     onStatusChange: async () => undefined
+  });
+
+  return Object.assign(service, {
+    emittedPetEvents,
+    emitRealtimeVoiceEvent(event: VoiceSessionEvent) {
+      realtimeVoiceListener?.(event);
+    }
   });
 }
 
@@ -185,4 +203,43 @@ test("pet service: transcribeAndSendFromPet returns message instead of throwing 
     metadata: undefined,
     message: "模型并发已达上限，请稍后重试。"
   });
+});
+
+test("pet service: realtime voice state forwards only voice-state to pet", () => {
+  const service = createService() as PetService & {
+    emittedPetEvents: Array<{ type: string; phase?: string; mode?: string }>;
+    emitRealtimeVoiceEvent: (event: VoiceSessionEvent) => void;
+  };
+
+  service.emitRealtimeVoiceEvent({
+    type: "state",
+    state: {
+      ...DEFAULT_CONFIG.realtimeVoice,
+      sessionId: "voice-session",
+      phase: "assistant-thinking",
+      mode: "free",
+      target: null,
+      userTranscript: "",
+      userTranscriptMetadata: null,
+      assistantTranscript: "",
+      lastInterruptReason: null,
+      errorMessage: null,
+      playback: {
+        active: false,
+        queueLength: 0,
+        level: 0,
+        currentText: ""
+      },
+      updatedAt: new Date().toISOString()
+    },
+    timestamp: new Date().toISOString()
+  } as VoiceSessionEvent);
+
+  assert.deepEqual(service.emittedPetEvents, [
+    {
+      type: "voice-state",
+      phase: "assistant-thinking",
+      mode: "free"
+    }
+  ]);
 });

@@ -118,6 +118,7 @@ function createPlaybackBridge(overrides?: {
   onEnqueue?: (input: any) => void;
   onClear?: (input: any) => void;
 }) {
+  let listener: ((event: any) => void) | null = null;
   return {
     enqueueSpeech: async (input: any) => {
       overrides?.onEnqueue?.(input);
@@ -127,12 +128,41 @@ function createPlaybackBridge(overrides?: {
       overrides?.onClear?.(input);
       return true;
     },
-    onVoiceEvent: () => () => undefined
+    onVoiceEvent: (next: (event: any) => void) => {
+      listener = next;
+      return () => {
+        if (listener === next) {
+          listener = null;
+        }
+      };
+    },
+    emit(event: any) {
+      listener?.(event);
+    }
   };
 }
 
-async function handlePlaybackEvent(service: any, event: any): Promise<void> {
-  await service.handlePlaybackEvent(event);
+async function emitReferenceFrame(service: any, input: {
+  generation: number;
+  pcm: Buffer;
+  sampleRate?: number;
+  active?: boolean;
+  pendingCount?: number;
+}): Promise<void> {
+  await service.handlePlaybackEvent({
+    type: "reference-frame",
+    generation: input.generation,
+    pcm: input.pcm,
+    sampleRate: input.sampleRate ?? 16_000,
+    state: {
+      generation: input.generation,
+      active: input.active ?? true,
+      currentChunkId: null,
+      currentText: "",
+      queuedCount: 0,
+      pendingCount: input.pendingCount ?? 0
+    }
+  });
 }
 
 test("realtime voice: free mode startSession always uses native capture when supported", async () => {
@@ -560,11 +590,9 @@ test("realtime voice: playback-matching echo does not trigger a new speech start
   });
 
   const echoedPlayback = makeSineChunk(440);
-  await handlePlaybackEvent(service, {
-    type: "speech-reference-frame",
-    pcm: Array.from(new Uint8Array(echoedPlayback)),
-    sampleRate: 16_000,
-    generation: 1
+  await emitReferenceFrame(service, {
+    generation: 1,
+    pcm: echoedPlayback
   });
   await service.handlePcmFrame(echoedPlayback, 16_000);
 
@@ -621,11 +649,9 @@ test("realtime voice: delayed playback echo still does not trigger a new speech 
   const playbackReference = makeNoiseChunk(11, 11_000);
   const delayedEcho = delayAndScaleChunk(playbackReference, 42, 0.58, 220);
 
-  await handlePlaybackEvent(service, {
-    type: "speech-reference-frame",
-    pcm: Array.from(new Uint8Array(playbackReference)),
-    sampleRate: 16_000,
-    generation: 1
+  await emitReferenceFrame(service, {
+    generation: 1,
+    pcm: playbackReference
   });
   await service.handlePcmFrame(delayedEcho, 16_000);
 
@@ -688,11 +714,9 @@ test("realtime voice: longer delayed playback echo still does not trigger a new 
   try {
     for (let frameIndex = 0; frameIndex <= delayFrames; frameIndex += 1) {
       Date.now = () => 6_000 + frameIndex * 20;
-      await handlePlaybackEvent(service, {
-        type: "speech-reference-frame",
-        pcm: Array.from(new Uint8Array(sliceFrame(playbackReference, frameIndex))),
-        sampleRate: 16_000,
-        generation: 1
+      await emitReferenceFrame(service, {
+        generation: 1,
+        pcm: sliceFrame(playbackReference, frameIndex)
       });
     }
 
@@ -711,12 +735,13 @@ test("realtime voice: longer delayed playback echo still does not trigger a new 
 
 test("realtime voice: distinct user speech can still barge in during assistant playback", async () => {
   const order: string[] = [];
+  const playbackBridge = createPlaybackBridge({
+    onClear: () => {
+      order.push("speech-clear");
+    }
+  });
   const service = createService({
-    playbackBridge: createPlaybackBridge({
-      onClear: () => {
-        order.push("speech-clear");
-      }
-    }),
+    playbackBridge,
     createVad: async () =>
       createFakeVad(async () => ({
         probability: 0.88,
@@ -753,16 +778,15 @@ test("realtime voice: distinct user speech can still barge in during assistant p
       threadId: "primary-thread"
     }
   });
+  service.playbackGeneration = service.playbackController.beginGeneration();
   service.state = reduceVoiceSessionState(service.state, {
     type: "assistant-playback-started"
   });
   service.replyAbortController = abortController;
 
-  await handlePlaybackEvent(service, {
-    type: "speech-reference-frame",
-    pcm: Array.from(new Uint8Array(makeSineChunk(440))),
-    sampleRate: 16_000,
-    generation: 1
+  await emitReferenceFrame(service, {
+    generation: 1,
+    pcm: makeSineChunk(440)
   });
   await service.handlePcmFrame(makeSineChunk(1_260, 16_000), 16_000);
 
@@ -1510,6 +1534,121 @@ test("realtime voice: playback start watchdog recovers when queued speech never 
   assert.equal(clearCount > 0, true);
   assert.equal(service.state.phase, "listening");
   assert.equal(service.state.errorMessage, null);
+});
+
+test("realtime voice: queued speech stays in thinking until playback actually starts", async () => {
+  const enqueued: string[] = [];
+  const service = createService({
+    conversation: {
+      reply: async (input: any) => {
+        input.stream?.onVisibleTextDelta?.("这是一段足够长的语音回复，可以进入播报。");
+        input.stream?.onVisibleTextFinal?.("这是一段足够长的语音回复，可以进入播报。");
+        return "这是一段足够长的语音回复，可以进入播报。";
+      }
+    },
+    playbackBridge: createPlaybackBridge({
+      onEnqueue: (input) => {
+        enqueued.push(String(input?.chunkId ?? ""));
+      }
+    })
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  void service.handleUserTurn("测试准备阶段", null, []);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(enqueued.length > 0, true);
+  assert.equal(service.state.phase, "assistant-thinking");
+});
+
+test("realtime voice: reference frames prevent false playback-start timeout when started ack is missed", async () => {
+  let clearCount = 0;
+  let firstChunkGeneration: number | null = null;
+  const bridge = createPlaybackBridge({
+    onEnqueue: (input) => {
+      if (firstChunkGeneration === null) {
+        firstChunkGeneration = Number(input?.generation ?? 0);
+      }
+    },
+    onClear: () => {
+      clearCount += 1;
+    }
+  });
+  const service = createService({
+    getConfig: () =>
+      ({
+        realtimeVoice: {
+          enabled: true,
+          mode: "free",
+          aecEnabled: true,
+          autoInterrupt: true,
+          preRollMs: 300,
+          vadThreshold: 0.35,
+          maxUtteranceMs: 45_000,
+          minSpeechMs: 180,
+          minSilenceMs: 600,
+          firstChunkStrategy: "aggressive"
+        },
+        voice: {
+          ttsVoice: "stub-voice",
+          ttsRate: "+0%",
+          ttsPitch: "+0Hz",
+          requestTimeoutMs: 80,
+          retryCount: 0,
+          asrProvider: "sensevoice-local",
+          ttsProvider: "edge"
+        }
+      }) as never,
+    conversation: {
+      reply: async (input: any) => {
+        input.stream?.onVisibleTextDelta?.("这是一段足够长的语音回复，可以进入播报。");
+        input.stream?.onVisibleTextFinal?.("这是一段足够长的语音回复，可以进入播报。");
+        return "这是一段足够长的语音回复，可以进入播报。";
+      }
+    },
+    playbackBridge: bridge
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  void service.handleUserTurn("测试 started 丢失", null, []);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  assert.notEqual(firstChunkGeneration, null);
+  if (firstChunkGeneration === null) {
+    throw new Error("expected first playback chunk to be enqueued");
+  }
+  bridge.emit({
+    type: "speech-reference-frame",
+    pcm: [0, 0, 0, 0],
+    sampleRate: 16_000,
+    generation: firstChunkGeneration
+  });
+  await new Promise((resolve) => setTimeout(resolve, 90));
+
+  assert.equal(clearCount, 0);
+  assert.equal(service.state.phase, "assistant-speaking");
 });
 
 test("realtime voice: stale assistant callbacks are ignored after an interrupt", async () => {

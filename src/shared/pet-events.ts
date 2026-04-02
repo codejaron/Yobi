@@ -33,14 +33,12 @@ export type PetVoiceEvent =
       type: "speech-playback-started";
       chunkId: string;
       text: string;
-      queueLength: number;
       generation: number;
     }
   | {
       type: "speech-playback-ended";
       chunkId: string;
       text: string;
-      queueLength: number;
       generation: number;
     }
   | {
