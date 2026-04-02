@@ -138,6 +138,9 @@ function createPlaybackBridge(overrides?: {
     },
     emit(event: any) {
       listener?.(event);
+    },
+    listenerCount() {
+      return listener ? 1 : 0;
     }
   };
 }
@@ -495,6 +498,155 @@ test("realtime voice: stopSession blocks in-flight tts chunks from re-enqueueing
   assert.deepEqual(steps, ["stop-stream", "speech-clear"]);
 });
 
+test("realtime voice: late tts synth results still enqueue after llm reply completes", async () => {
+  const enqueuedTexts: string[] = [];
+  const enqueuedChunkIds: string[] = [];
+  const secondSynthDeferred = createDeferred<Buffer>();
+  let synthCount = 0;
+  let closeCount = 0;
+  const playbackBridge = createPlaybackBridge({
+    onEnqueue: (input) => {
+      enqueuedChunkIds.push(String(input?.chunkId ?? ""));
+      enqueuedTexts.push(String(input?.text ?? ""));
+    }
+  });
+  const service = createService({
+    voiceRouter: {
+      createStreamingTtsSession: () =>
+        ({
+          synthesizeChunk: async () => {
+            synthCount += 1;
+            if (synthCount === 1) {
+              return Buffer.from("audio-1");
+            }
+            return secondSynthDeferred.promise;
+          },
+          close: async () => {
+            closeCount += 1;
+          }
+        }) satisfies StreamingTtsSession
+    },
+    conversation: {
+      reply: async (input: any) => {
+        input.stream?.onVisibleTextDelta?.("第一段足够长，可以先播。");
+        input.stream?.onVisibleTextDelta?.("第二段也应该继续排队。");
+        input.stream?.onVisibleTextFinal?.("第一段足够长，可以先播。第二段也应该继续排队。");
+        return "第一段足够长，可以先播。第二段也应该继续排队。";
+      }
+    },
+    playbackBridge
+  });
+
+  service.host = {
+    send: async () => undefined
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  const handlePromise = service.handleUserTurn("测试晚到的 tts 片段", null, []);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(enqueuedTexts, ["第一段足够长，可以先播。"]);
+  assert.equal(closeCount, 0);
+
+  secondSynthDeferred.resolve(Buffer.from("audio-2"));
+  await handlePromise;
+
+  const firstChunkId = enqueuedChunkIds[0];
+  assert.ok(firstChunkId);
+  playbackBridge.emit({
+    type: "speech-playback-ended",
+    chunkId: firstChunkId,
+    generation: 1
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(enqueuedTexts.length, 2);
+  assert.equal(enqueuedTexts[0], "第一段足够长，可以先播。");
+  assert.equal(enqueuedTexts[1], "第二段也应该继续排队。");
+  assert.equal(closeCount, 1);
+});
+
+test("realtime voice: bridge playback started promotes live turn to assistant-speaking", async () => {
+  const playbackBridge = createPlaybackBridge();
+  let firstChunk: { chunkId: string; generation: number; text: string } | null = null;
+  const service = createService({
+    playbackBridge: {
+      ...playbackBridge,
+      enqueueSpeech: async (input: any) => {
+        if (!firstChunk) {
+          firstChunk = {
+            chunkId: input.chunkId,
+            generation: input.generation,
+            text: input.text
+          };
+        }
+        return await playbackBridge.enqueueSpeech(input);
+      }
+    },
+    conversation: {
+      reply: async (input: any) => {
+        input.stream?.onVisibleTextDelta?.("第一段足够长，可以先播。");
+        input.stream?.onVisibleTextFinal?.("第一段足够长，可以先播。");
+        return "第一段足够长，可以先播。";
+      }
+    }
+  });
+
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+
+  await service.handleUserTurn("测试 started 事件", null, []);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(firstChunk);
+  if (!firstChunk) {
+    throw new Error("expected first playback chunk");
+  }
+  const chunk: { chunkId: string; generation: number; text: string } = firstChunk;
+
+  playbackBridge.emit({
+    type: "speech-playback-started",
+    chunkId: chunk.chunkId,
+    text: chunk.text,
+    generation: chunk.generation
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.state.phase, "assistant-speaking");
+  playbackBridge.emit({
+    type: "speech-playback-ended",
+    chunkId: chunk.chunkId,
+    text: chunk.text,
+    generation: chunk.generation
+  });
+});
+
+test("realtime voice: reversible stop keeps playback bridge listener attached", () => {
+  const playbackBridge = createPlaybackBridge();
+  const service = createService({
+    playbackBridge
+  });
+
+  assert.equal(playbackBridge.listenerCount(), 1);
+  service.stop();
+  assert.equal(playbackBridge.listenerCount(), 1);
+  service.start();
+  assert.equal(playbackBridge.listenerCount(), 1);
+});
+
 test("realtime voice: speech start interrupts assistant thinking before opening a new ASR session", async () => {
   const order: string[] = [];
   const service = createService({
@@ -733,6 +885,80 @@ test("realtime voice: longer delayed playback echo still does not trigger a new 
   assert.equal(service.activeAsrSession, null);
 });
 
+test("realtime voice: a single non-echo playback speech blip does not immediately barge in", async () => {
+  const order: string[] = [];
+  let callCount = 0;
+  const playbackBridge = createPlaybackBridge({
+    onClear: () => {
+      order.push("speech-clear");
+    }
+  });
+  const service = createService({
+    playbackBridge,
+    createVad: async () =>
+      createFakeVad(async () => {
+        callCount += 1;
+        return {
+          probability: 0.88,
+          speechStarted: callCount === 1,
+          speechEnded: false,
+          speaking: true
+        };
+      }),
+    voiceRouter: {
+      createStreamingAsrSession: () => {
+        order.push("create-asr");
+        return {
+          pushPcm: async () => undefined,
+          flush: async () => ({
+            text: "",
+            metadata: null
+          }),
+          abort: async () => undefined
+        } satisfies StreamingAsrSession;
+      }
+    }
+  });
+  const abortController = new AbortController();
+
+  service.host = {
+    send: async (command: { type: string }) => {
+      order.push(command.type);
+    }
+  };
+  service.state = createVoiceSessionState({
+    sessionId: "session-1",
+    mode: "free",
+    target: {
+      resourceId: "primary-user",
+      threadId: "primary-thread"
+    }
+  });
+  service.playbackGeneration = service.playbackController.beginGeneration();
+  service.state = reduceVoiceSessionState(service.state, {
+    type: "assistant-playback-started"
+  });
+  service.replyAbortController = abortController;
+
+  const originalDateNow = Date.now;
+  try {
+    Date.now = () => 10_000;
+    await emitReferenceFrame(service, {
+      generation: 1,
+      pcm: makeSineChunk(440)
+    });
+    await service.handlePcmFrame(makeSineChunk(1_260, 16_000), 16_000);
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(abortController.signal.aborted, false);
+  assert.deepEqual(order, []);
+  assert.equal(service.state.phase, "assistant-speaking");
+  assert.equal(service.speechActive, false);
+  assert.equal(service.activeAsrSession, null);
+});
+
 test("realtime voice: distinct user speech can still barge in during assistant playback", async () => {
   const order: string[] = [];
   const playbackBridge = createPlaybackBridge({
@@ -784,11 +1010,19 @@ test("realtime voice: distinct user speech can still barge in during assistant p
   });
   service.replyAbortController = abortController;
 
-  await emitReferenceFrame(service, {
-    generation: 1,
-    pcm: makeSineChunk(440)
-  });
-  await service.handlePcmFrame(makeSineChunk(1_260, 16_000), 16_000);
+  const originalDateNow = Date.now;
+  try {
+    for (let frameIndex = 0; frameIndex < 8; frameIndex += 1) {
+      Date.now = () => 20_000 + frameIndex * 20;
+      await emitReferenceFrame(service, {
+        generation: 1,
+        pcm: makeSineChunk(440)
+      });
+      await service.handlePcmFrame(makeSineChunk(1_260, 16_000), 16_000);
+    }
+  } finally {
+    Date.now = originalDateNow;
+  }
 
   assert.equal(abortController.signal.aborted, true);
   assert.deepEqual(order, ["speech-clear", "create-asr"]);

@@ -80,7 +80,7 @@ export class PetService {
     this.input.pet.close();
     this.input.globalPtt.stop();
     this.petPttRecording = false;
-    this.input.realtimeVoice.stop();
+    this.input.realtimeVoice.dispose();
   }
 
   setCompanionCaptureContextProvider(provider: (() => Promise<ChatAttachment[]>) | null): void {

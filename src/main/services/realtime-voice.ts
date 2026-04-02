@@ -99,6 +99,7 @@ const TRANSCRIPTION_TIMEOUT_ERROR = "realtime-voice-transcription-timeout";
 const ASSISTANT_PROGRESS_TIMEOUT_ERROR = "realtime-voice-assistant-progress-timeout";
 const PLAYBACK_START_TIMEOUT_ERROR = "realtime-voice-playback-start-timeout";
 const SILENCE_RMS_THRESHOLD = 0.008;
+const PLAYBACK_BARGE_IN_CONFIRM_MS = 140;
 
 function createPlaybackState(): VoiceSessionState["playback"] {
   return {
@@ -181,6 +182,7 @@ export class RealtimeVoiceService {
   private playedAssistantText = "";
   private assistantCommitPersisted = false;
   private readonly playbackReferenceTracker = new PlaybackReferenceTracker();
+  private playbackBargeInStartedAtMs = 0;
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
     this.captureService = input.captureService ?? null;
@@ -228,6 +230,12 @@ export class RealtimeVoiceService {
   }
 
   stop(): void {
+    void this.stopSession();
+    this.disposeVad();
+    void this.captureService?.stop().catch(() => undefined);
+  }
+
+  dispose(): void {
     void this.stopSession();
     this.disposePlaybackListener?.();
     this.playbackController?.dispose();
@@ -597,6 +605,7 @@ export class RealtimeVoiceService {
     this.preRollBuffers = [];
     this.speechBuffers = [];
     this.speechSilenceStartedAtMs = 0;
+    this.playbackBargeInStartedAtMs = 0;
     this.vad?.reset();
   }
 
@@ -754,6 +763,7 @@ export class RealtimeVoiceService {
       return;
     }
 
+    this.playbackBargeInStartedAtMs = 0;
     if (this.shouldInterruptAssistantForSpeechStart()) {
       await this.interrupt("vad");
     }
@@ -1002,6 +1012,17 @@ export class RealtimeVoiceService {
   }
 
   private async handlePlaybackEvent(message: RealtimeVoicePlaybackControllerEvent): Promise<void> {
+    if (message.type !== "reference-frame") {
+      this.input.logger.info("realtime-voice", "playback:event", {
+        eventType: message.type,
+        eventGeneration: message.generation,
+        currentPlaybackGeneration: this.playbackGeneration,
+        phase: this.state.phase,
+        currentChunkId: message.state.currentChunkId,
+        pendingPlaybackCount: message.state.pendingCount
+      });
+    }
+
     if (message.type === "reference-frame") {
       if (!this.isPlaybackGenerationCurrent(message.generation)) {
         return;
@@ -1117,16 +1138,22 @@ export class RealtimeVoiceService {
       return;
     }
 
+    const nowMs = Date.now();
+    const playbackReferenceMatch = !this.speechActive
+      ? this.playbackReferenceTracker.classifyMicChunk({
+          pcm: chunk,
+          sampleRate,
+          capturedAtMs: nowMs
+        })
+      : {
+          echoLikely: false,
+          match: null
+        };
+
     // During assistant playback, reject mic chunks that still look like the rendered TTS
     // instead of globally muting barge-in while audio is active.
-    if (
-      !this.speechActive &&
-      this.playbackReferenceTracker.classifyMicChunk({
-        pcm: chunk,
-        sampleRate,
-        capturedAtMs: Date.now()
-      }).echoLikely
-    ) {
+    if (!this.speechActive && playbackReferenceMatch.echoLikely) {
+      this.playbackBargeInStartedAtMs = 0;
       this.preRollBuffers = [];
       this.vad?.reset();
       return;
@@ -1135,13 +1162,50 @@ export class RealtimeVoiceService {
     const wasSpeechActive = this.speechActive;
     const vad = await this.ensureVadReady();
     const result = await vad.processChunk(chunk);
-    const nowMs = Date.now();
 
     if (!wasSpeechActive && !result.speechStarted) {
       this.rememberPreRoll(chunk);
     }
 
-    if (result.speechStarted) {
+    const shouldStartPlaybackBargeIn =
+      !wasSpeechActive &&
+      this.state.phase === "assistant-speaking" &&
+      (result.speechStarted || result.speaking);
+    if (shouldStartPlaybackBargeIn) {
+      const rms = getPcm16RmsLevel(chunk);
+      if (this.playbackBargeInStartedAtMs === 0) {
+        this.playbackBargeInStartedAtMs = nowMs;
+        this.input.logger.info("realtime-voice", "speech:barge-in-candidate", {
+          sessionId: this.state.sessionId ?? "unknown",
+          probability: result.probability,
+          rms,
+          echoLikely: playbackReferenceMatch.echoLikely,
+          correlation: playbackReferenceMatch.match?.correlation ?? null,
+          residualRatio: playbackReferenceMatch.match?.residualRatio ?? null,
+          micToReferenceRmsRatio: playbackReferenceMatch.match?.micToReferenceRmsRatio ?? null
+        });
+      }
+
+      this.rememberPreRoll(chunk);
+      if (nowMs - this.playbackBargeInStartedAtMs < PLAYBACK_BARGE_IN_CONFIRM_MS) {
+        return;
+      }
+
+      this.input.logger.info("realtime-voice", "speech:barge-in-confirmed", {
+        sessionId: this.state.sessionId ?? "unknown",
+        durationMs: nowMs - this.playbackBargeInStartedAtMs,
+        probability: result.probability,
+        rms,
+        echoLikely: playbackReferenceMatch.echoLikely,
+        correlation: playbackReferenceMatch.match?.correlation ?? null,
+        residualRatio: playbackReferenceMatch.match?.residualRatio ?? null,
+        micToReferenceRmsRatio: playbackReferenceMatch.match?.micToReferenceRmsRatio ?? null
+      });
+    } else if (!wasSpeechActive) {
+      this.playbackBargeInStartedAtMs = 0;
+    }
+
+    if (result.speechStarted || shouldStartPlaybackBargeIn) {
       await this.beginSpeech();
     }
 
@@ -1365,10 +1429,7 @@ export class RealtimeVoiceService {
           this.clearAssistantProgressWatchdog();
           this.llmFinished = true;
         }
-        await ttsSession.close();
-        if (this.activeTtsSession === ttsSession) {
-          this.activeTtsSession = null;
-        }
+        await this.maybeCloseActiveTtsSession(ttsSession);
       }
     })();
     await this.responseSequence;
@@ -1393,11 +1454,22 @@ export class RealtimeVoiceService {
       try {
         this.input.logger.info("realtime-voice", "tts:chunk-start", {
           generation: playbackGeneration,
+          pendingSynthesisCount: this.pendingSynthesisCount,
           textLength: normalized.length,
           textPreview: toLogPreview(normalized)
         });
         const audio = await session.synthesizeChunk(normalized);
-        if (!this.isPlaybackGenerationActive(session, playbackGeneration)) {
+        const activeAfterSynthesize = this.isPlaybackGenerationActive(session, playbackGeneration);
+        this.input.logger.info("realtime-voice", "tts:chunk-synth-returned", {
+          generation: playbackGeneration,
+          textLength: normalized.length,
+          audioBytes: audio.length,
+          activeAfterSynthesize,
+          sessionActive: this.activeTtsSession === session,
+          hasSessionId: this.state.sessionId !== null,
+          currentPlaybackGeneration: this.playbackGeneration
+        });
+        if (!activeAfterSynthesize) {
           return;
         }
 
@@ -1435,10 +1507,20 @@ export class RealtimeVoiceService {
         this.refreshAssistantProgressWatchdog(this.assistantGeneration);
       } catch (error) {
         this.input.logger.warn("realtime-voice", "tts-chunk-failed", {
+          generation: playbackGeneration,
           textLength: normalized.length
         }, error);
       } finally {
         this.pendingSynthesisCount = Math.max(0, this.pendingSynthesisCount - 1);
+        this.input.logger.info("realtime-voice", "tts:chunk-finished", {
+          generation: playbackGeneration,
+          textLength: normalized.length,
+          pendingSynthesisCount: this.pendingSynthesisCount,
+          sessionActive: this.activeTtsSession === session,
+          hasSessionId: this.state.sessionId !== null,
+          currentPlaybackGeneration: this.playbackGeneration
+        });
+        await this.maybeCloseActiveTtsSession(session);
       }
     });
 
@@ -1446,7 +1528,17 @@ export class RealtimeVoiceService {
   }
 
   private async maybeFinalizeAssistantTurn(): Promise<void> {
-    if (!this.llmFinished || this.pendingSynthesisCount > 0 || this.hasPendingPlaybackWork()) {
+    const pendingPlaybackCount = this.playbackController?.getPendingCount() ?? 0;
+    this.input.logger.info("realtime-voice", "assistant:finalize-check", {
+      sessionId: this.state.sessionId ?? "unknown",
+      phase: this.state.phase,
+      llmFinished: this.llmFinished,
+      pendingSynthesisCount: this.pendingSynthesisCount,
+      pendingPlaybackCount,
+      assistantCommitPersisted: this.assistantCommitPersisted
+    });
+
+    if (!this.llmFinished || this.pendingSynthesisCount > 0 || pendingPlaybackCount > 0) {
       return;
     }
 
@@ -1484,6 +1576,11 @@ export class RealtimeVoiceService {
       await this.input.onAssistantMessage?.();
     }
 
+    this.input.logger.info("realtime-voice", "assistant:finalize-commit", {
+      sessionId: this.state.sessionId,
+      assistantTextLength: this.llmVisibleText.length,
+      playedAssistantTextLength: this.playedAssistantText.length
+    });
     this.clearCurrentTurnTranscripts();
     this.applyState({
       type: "assistant-playback-finished"
@@ -1491,8 +1588,15 @@ export class RealtimeVoiceService {
     await this.notifyStatusChange();
   }
 
-  private hasPendingPlaybackWork(): boolean {
-    return (this.playbackController?.getPendingCount() ?? 0) > 0;
+  private async maybeCloseActiveTtsSession(session: StreamingTtsSession): Promise<void> {
+    if (this.activeTtsSession !== session || !this.llmFinished || this.pendingSynthesisCount > 0) {
+      return;
+    }
+
+    await session.close();
+    if (this.activeTtsSession === session && this.pendingSynthesisCount === 0 && this.llmFinished) {
+      this.activeTtsSession = null;
+    }
   }
 
   private async persistInterruptedAssistantTurn(): Promise<void> {

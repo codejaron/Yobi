@@ -358,15 +358,72 @@ export class PetWindowController {
 
   emitEvent(event: PetEvent): void {
     if (!this.window || this.window.isDestroyed()) {
+      if (event.type === "speech-enqueue" || event.type === "speech-clear" || event.type === "voice-state") {
+        logger.warn("pet-window", "voice:emit-skipped-window-offline", {
+          type: event.type
+        });
+      }
       return;
     }
 
     const normalizedEvent = normalizePetEvent(event);
     if (!this.loaded) {
+      if (
+        normalizedEvent.type === "speech-enqueue" ||
+        normalizedEvent.type === "speech-clear" ||
+        normalizedEvent.type === "voice-state"
+      ) {
+        logger.info("pet-window", "voice:emit-queued-until-load", {
+          type: normalizedEvent.type,
+          ...(normalizedEvent.type === "speech-enqueue"
+            ? {
+                chunkId: normalizedEvent.chunkId,
+                generation: normalizedEvent.generation
+              }
+            : {}),
+          ...(normalizedEvent.type === "speech-clear"
+            ? {
+                generation: normalizedEvent.generation,
+                reason: normalizedEvent.reason
+              }
+            : {}),
+          ...(normalizedEvent.type === "voice-state"
+            ? {
+                phase: normalizedEvent.phase
+              }
+            : {})
+        });
+      }
       this.pendingEvents.push(normalizedEvent);
       return;
     }
 
+    if (
+      normalizedEvent.type === "speech-enqueue" ||
+      normalizedEvent.type === "speech-clear" ||
+      normalizedEvent.type === "voice-state"
+    ) {
+      logger.info("pet-window", "voice:emit-send", {
+        type: normalizedEvent.type,
+        ...(normalizedEvent.type === "speech-enqueue"
+          ? {
+              chunkId: normalizedEvent.chunkId,
+              generation: normalizedEvent.generation
+            }
+          : {}),
+        ...(normalizedEvent.type === "speech-clear"
+          ? {
+              generation: normalizedEvent.generation,
+              reason: normalizedEvent.reason
+            }
+          : {}),
+        ...(normalizedEvent.type === "voice-state"
+          ? {
+              phase: normalizedEvent.phase
+            }
+          : {})
+      });
+    }
     this.window.webContents.send("pet:event", normalizedEvent);
   }
 
@@ -403,6 +460,28 @@ export class PetWindowController {
     }
 
     for (const event of this.pendingEvents) {
+      if (event.type === "speech-enqueue" || event.type === "speech-clear" || event.type === "voice-state") {
+        logger.info("pet-window", "voice:emit-flush-pending", {
+          type: event.type,
+          ...(event.type === "speech-enqueue"
+            ? {
+                chunkId: event.chunkId,
+                generation: event.generation
+              }
+            : {}),
+          ...(event.type === "speech-clear"
+            ? {
+                generation: event.generation,
+                reason: event.reason
+              }
+            : {}),
+          ...(event.type === "voice-state"
+            ? {
+                phase: event.phase
+              }
+            : {})
+        });
+      }
       this.window.webContents.send("pet:event", event);
     }
     this.pendingEvents = [];
@@ -418,6 +497,31 @@ export class PetWindowController {
       senderWindow.id !== this.window.id
     ) {
       return;
+    }
+
+    if (payload.type !== "speech-reference-frame") {
+      logger.info("pet-window", "voice:event", {
+        type: payload.type,
+        listenerCount: this.voiceListeners.size,
+        ...(payload.type === "speech-playback-started" ||
+        payload.type === "speech-playback-ended" ||
+        payload.type === "speech-playback-error"
+          ? {
+              chunkId: payload.chunkId,
+              generation: payload.generation
+            }
+          : {}),
+        ...(payload.type === "speech-playback-error"
+          ? {
+              message: payload.message
+            }
+          : {}),
+        ...(payload.type === "speech-playback-cleared"
+          ? {
+              generation: payload.generation
+            }
+          : {})
+      });
     }
 
     for (const listener of this.voiceListeners) {

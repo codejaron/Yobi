@@ -1573,6 +1573,13 @@
             if (!petBridge || typeof petBridge.emitVoiceEvent !== "function" || !payload) {
               return;
             }
+            if (payload.type !== "speech-reference-frame") {
+              debugLog("voice:emit", {
+                type: payload.type,
+                chunkId: typeof payload.chunkId === "string" ? payload.chunkId : null,
+                generation: Number.isFinite(payload.generation) ? Number(payload.generation) : 0
+              });
+            }
             petBridge.emitVoiceEvent(payload);
           };
 
@@ -1683,7 +1690,13 @@
 	                "voice:reference-decode-timeout"
 	              );
 	              const source = decoded.getChannelData(0);
-	              return resampleToReferenceFrames(source, decoded.sampleRate);
+                const frames = resampleToReferenceFrames(source, decoded.sampleRate);
+                debugLog("voice:reference-decode-complete", {
+                  frameCount: frames.length,
+                  sampleRate: decoded.sampleRate,
+                  sampleCount: source.length
+                });
+	              return frames;
 	            } catch (error) {
 	              debugLog("voice:reference-decode-skipped", {
 	                reason: error instanceof Error ? error.message : String(error)
@@ -1696,9 +1709,17 @@
 
           const startSpeechReferenceEmitter = (frames, generation) => {
             if (!Array.isArray(frames) || frames.length === 0) {
+              debugLog("voice:reference-emitter-skipped", {
+                generation,
+                frameCount: Array.isArray(frames) ? frames.length : 0
+              });
               return () => undefined;
             }
 
+            debugLog("voice:reference-emitter-started", {
+              generation,
+              frameCount: frames.length
+            });
             let cancelled = false;
             let frameIndex = 0;
             let timer = 0;
@@ -1872,6 +1893,12 @@
           };
 
           const stopCurrentAudio = () => {
+            debugLog("voice:speech-stop-current", {
+              chunkId: activeSpeechItem?.chunkId ?? null,
+              generation: activeSpeechItem?.generation ?? null,
+              localSpeechActive,
+              localSpeechStarting
+            });
             localSpeechToken += 1;
             const currentItem = activeSpeechItem;
             activeSpeechItem = null;
@@ -1892,8 +1919,12 @@
             stopTalkingMotion();
           };
 
-	          const finishSpeech = (token) => {
+          const finishSpeech = (token) => {
             if (typeof token === "number" && token !== localSpeechToken) {
+              debugLog("voice:speech-finish-stale", {
+                token,
+                localSpeechToken
+              });
               return;
             }
 
@@ -1902,6 +1933,11 @@
             localSpeechStarting = false;
             localSpeechActive = false;
             syncSpeechActive();
+            debugLog("voice:speech-finished", {
+              chunkId: finishedItem?.chunkId ?? null,
+              generation: finishedItem?.generation ?? null,
+              token
+            });
 	            if (finishedItem) {
 	              finishedItem.stopReferenceEmitter?.();
 	              finishedItem.revokeAudioUrl?.();
@@ -1950,6 +1986,13 @@
 	            const speechToken = localSpeechToken + 1;
 	            localSpeechToken = speechToken;
               localSpeechStarting = true;
+            debugLog("voice:speech-start-attempt", {
+              chunkId: item.chunkId,
+              generation: item.generation,
+              speechToken,
+              localSpeechActive,
+              localSpeechStarting
+            });
 	            const audioUrl = createSpeechAudioUrl(payload, item.mimeType);
             if (!audioUrl) {
               localSpeechStarting = false;
@@ -2019,7 +2062,7 @@
 	                return false;
 	              }
 
-	              if (!ok) {
+		              if (!ok) {
 	                localSpeechStarting = false;
 	                debugLog("voice:speech-start-rejected", {
 	                  chunkId: item.chunkId,
@@ -2038,9 +2081,14 @@
 	              }
 
                 localSpeechStarting = false;
-	              localSpeechActive = true;
-	              syncSpeechActive();
-	              activeSpeechItem = {
+		              localSpeechActive = true;
+		              syncSpeechActive();
+                  debugLog("voice:speech-started", {
+                    chunkId: item.chunkId,
+                    generation: item.generation,
+                    speechToken
+                  });
+		              activeSpeechItem = {
 	                chunkId: item.chunkId,
 	                text: item.text,
 	                generation: item.generation,
@@ -2103,6 +2151,13 @@
               return;
             }
 
+            debugLog("voice:speech-enqueue-received", {
+              chunkId,
+              generation: Number.isFinite(item.generation) ? Number(item.generation) : 0,
+              localSpeechActive,
+              localSpeechStarting
+            });
+
               if (localSpeechActive || localSpeechStarting) {
                 debugLog("voice:speech-enqueue-rejected-busy", {
                   chunkId,
@@ -2129,6 +2184,9 @@
 	          };
 
 	          const clearPetSpeech = (generation) => {
+            debugLog("voice:speech-clear-received", {
+              generation: Number.isFinite(generation) ? Number(generation) : 0
+            });
 	            stopCurrentAudio();
             emitSpeechEvent({
               type: "speech-playback-cleared",
@@ -2683,6 +2741,15 @@
           const unsubscribePetEvents = petBridge.onEvent((data) => {
             if (!data || typeof data !== "object") {
               return;
+            }
+
+            if (data.type === "speech-enqueue" || data.type === "speech-clear" || data.type === "voice-state") {
+              debugLog("voice:pet-event-received", {
+                type: data.type,
+                chunkId: typeof data.chunkId === "string" ? data.chunkId : null,
+                generation: Number.isFinite(data.generation) ? Number(data.generation) : null,
+                phase: typeof data.phase === "string" ? data.phase : null
+              });
             }
 
             if (data.type === "ptt") {

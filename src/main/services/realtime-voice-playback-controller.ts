@@ -208,7 +208,26 @@ export class RealtimeVoicePlaybackController {
   }
 
   async handleBridgeEvent(event: PetVoiceEvent): Promise<void> {
+    if (event.type !== "speech-reference-frame") {
+      this.logger.info("realtime-voice-playback", "bridge-event", {
+        eventType: event.type,
+        eventGeneration: event.generation,
+        controllerGeneration: this.generation,
+        currentChunkId: this.current?.chunkId ?? null,
+        currentStarted: this.currentStarted,
+        queuedCount: this.queue.length
+      });
+    }
+
     if (event.generation !== this.generation) {
+      if (event.type !== "speech-reference-frame") {
+        this.logger.info("realtime-voice-playback", "bridge-event-ignored", {
+          reason: "generation-mismatch",
+          eventType: event.type,
+          eventGeneration: event.generation,
+          controllerGeneration: this.generation
+        });
+      }
       return;
     }
 
@@ -217,6 +236,11 @@ export class RealtimeVoicePlaybackController {
       if (current && !this.currentStarted) {
         this.currentStarted = true;
         this.clearStartTimer();
+        this.logger.info("realtime-voice-playback", "bridge-event-promote-start", {
+          chunkId: current.chunkId,
+          generation: current.generation,
+          queuedCount: this.queue.length
+        });
         this.emit({
           type: "chunk-started",
           chunkId: current.chunkId,
@@ -247,16 +271,34 @@ export class RealtimeVoicePlaybackController {
 
     const current = this.current;
     if (!current || current.chunkId !== event.chunkId) {
+      this.logger.info("realtime-voice-playback", "bridge-event-ignored", {
+        reason: current ? "chunk-mismatch" : "missing-current",
+        eventType: event.type,
+        eventChunkId: "chunkId" in event ? event.chunkId : null,
+        currentChunkId: current?.chunkId ?? null,
+        generation: event.generation
+      });
       return;
     }
 
     if (event.type === "speech-playback-started") {
       if (this.currentStarted) {
+        this.logger.info("realtime-voice-playback", "bridge-event-ignored", {
+          reason: "already-started",
+          eventType: event.type,
+          chunkId: current.chunkId,
+          generation: current.generation
+        });
         return;
       }
 
       this.currentStarted = true;
       this.clearStartTimer();
+      this.logger.info("realtime-voice-playback", "bridge-event-started", {
+        chunkId: current.chunkId,
+        generation: current.generation,
+        queuedCount: this.queue.length
+      });
       this.emit({
         type: "chunk-started",
         chunkId: current.chunkId,
@@ -271,6 +313,11 @@ export class RealtimeVoicePlaybackController {
       this.clearStartTimer();
       this.current = null;
       this.currentStarted = false;
+      this.logger.info("realtime-voice-playback", "bridge-event-ended", {
+        chunkId: current.chunkId,
+        generation: current.generation,
+        queuedCount: this.queue.length
+      });
       this.emit({
         type: "chunk-ended",
         chunkId: current.chunkId,
@@ -286,6 +333,12 @@ export class RealtimeVoicePlaybackController {
       this.clearStartTimer();
       this.current = null;
       this.currentStarted = false;
+      this.logger.info("realtime-voice-playback", "bridge-event-error", {
+        chunkId: current.chunkId,
+        generation: current.generation,
+        message: event.message,
+        queuedCount: this.queue.length
+      });
       this.emit({
         type: "chunk-error",
         chunkId: current.chunkId,
@@ -394,6 +447,18 @@ export class RealtimeVoicePlaybackController {
   }
 
   private emit(event: RealtimeVoicePlaybackControllerEvent): void {
+    if (event.type !== "reference-frame") {
+      this.logger.info("realtime-voice-playback", "controller-event", {
+        eventType: event.type,
+        generation: event.generation,
+        chunkId: "chunkId" in event ? event.chunkId : null,
+        currentChunkId: this.current?.chunkId ?? null,
+        currentStarted: this.currentStarted,
+        queuedCount: this.queue.length,
+        pendingCount: event.state.pendingCount
+      });
+    }
+
     for (const listener of this.listeners) {
       try {
         listener(event);
