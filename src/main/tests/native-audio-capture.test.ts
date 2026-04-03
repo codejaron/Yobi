@@ -251,6 +251,38 @@ test("native audio capture: stream mode forwards pcm frames and stops cleanly", 
   await service.stop();
 });
 
+test("native audio capture: stream mode forwards playback reference commands to helper", async () => {
+  const child = new FakeChildProcess();
+  const service = createService(child);
+
+  const startPromise = service.startStream();
+  await flushMicrotasks();
+  child.stdout.pushLine({
+    type: "ready"
+  });
+  await flushMicrotasks();
+  child.stdout.pushLine({
+    type: "opened"
+  });
+  await startPromise;
+
+  await service.pushPlaybackReferenceFrame({
+    pcm: Buffer.from([1, 2, 3, 4]),
+    sampleRate: 16_000
+  });
+  await service.clearPlaybackReference();
+
+  const commands = child.stdin.readLines().map((line) => JSON.parse(line));
+  assert.deepEqual(
+    commands.map((command) => command.command),
+    ["ensure_open", "start_stream", "push_reference_frame", "clear_reference"]
+  );
+  assert.equal(commands[2]?.sampleRate, 16_000);
+  assert.equal(commands[2]?.pcm16Base64, Buffer.from([1, 2, 3, 4]).toString("base64"));
+
+  await service.stop();
+});
+
 test("native audio capture: concurrent startSegment calls only issue one helper start", async () => {
   const child = new FakeChildProcess();
   const service = createService(child);

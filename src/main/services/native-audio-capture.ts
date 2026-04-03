@@ -43,6 +43,8 @@ type NativeAudioHelperCommand =
   | { command: "cancel_segment" }
   | { command: "start_stream" }
   | { command: "stop_stream" }
+  | { command: "push_reference_frame"; pcm16Base64: string; sampleRate: number }
+  | { command: "clear_reference" }
   | { command: "shutdown" };
 
 type NativeAudioHelperEvent =
@@ -65,6 +67,8 @@ export interface NativeAudioCaptureBackend {
   cancelSegment(): Promise<{ accepted: boolean }>;
   startStream(): Promise<void>;
   stopStream(): Promise<void>;
+  pushPlaybackReferenceFrame(input: { pcm: Buffer; sampleRate: number }): Promise<void>;
+  clearPlaybackReference(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -247,6 +251,36 @@ export class NativeAudioCaptureService implements NativeAudioCaptureBackend {
       }).catch(() => undefined);
       this.activeMode = null;
       this.armIdleTimer();
+    });
+  }
+
+  async pushPlaybackReferenceFrame(input: {
+    pcm: Buffer;
+    sampleRate: number;
+  }): Promise<void> {
+    await this.runSerialized(async () => {
+      if (!this.isNativeSupported() || input.pcm.length === 0) {
+        return;
+      }
+
+      await this.ensureProcess();
+      await this.sendCommand({
+        command: "push_reference_frame",
+        pcm16Base64: input.pcm.toString("base64"),
+        sampleRate: input.sampleRate
+      });
+    });
+  }
+
+  async clearPlaybackReference(): Promise<void> {
+    await this.runSerialized(async () => {
+      if (!this.isNativeSupported() || !this.child || !this.helperReady) {
+        return;
+      }
+
+      await this.sendCommand({
+        command: "clear_reference"
+      }).catch(() => undefined);
     });
   }
 

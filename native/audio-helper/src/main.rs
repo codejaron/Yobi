@@ -1,7 +1,10 @@
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
+use aec_rs::{Aec, AecConfig};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -10,10 +13,19 @@ use serde::{Deserialize, Serialize};
 
 const OUTPUT_SAMPLE_RATE: u32 = 16_000;
 const STREAM_CHUNK_SAMPLES: usize = 320;
+const AEC_FILTER_LENGTH: i32 = 4_800;
+const AEC_PLAYOUT_DELAY_MS: u64 = 80;
+const REFERENCE_MATCH_MAX_DELTA_MS: u64 = 80;
+const REFERENCE_FRAME_RETENTION_MS: u64 = 500;
+const AEC_ENABLE_PREPROCESS: bool = true;
 
 #[derive(Debug, Deserialize)]
 struct RawCommand {
     command: String,
+    #[serde(rename = "pcm16Base64")]
+    pcm16_base64: Option<String>,
+    #[serde(rename = "sampleRate")]
+    sample_rate: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -25,13 +37,21 @@ enum HelperCommand {
     CancelSegment,
     StartStream,
     StopStream,
+    PushReferenceFrame {
+        samples: Vec<i16>,
+        sample_rate: u32,
+    },
+    ClearReference,
     Shutdown,
 }
 
 #[derive(Debug)]
 enum EngineMessage {
     Command(HelperCommand),
-    Samples(Vec<f32>),
+    Samples {
+        samples: Vec<f32>,
+        captured_at: Instant,
+    },
     Error(String),
     StdinClosed,
 }
@@ -66,6 +86,123 @@ enum HelperEvent {
         message: String,
     },
     Closed,
+}
+
+trait EchoCancellerBackend {
+    fn cancel_echo(&mut self, rec_buffer: &[i16], echo_buffer: &[i16], out_buffer: &mut [i16]);
+    fn reset(&mut self);
+}
+
+struct SpeexEchoCanceller {
+    config: AecConfig,
+    inner: Aec,
+}
+
+impl SpeexEchoCanceller {
+    fn new() -> Self {
+        let config = AecConfig {
+            frame_size: STREAM_CHUNK_SAMPLES,
+            filter_length: AEC_FILTER_LENGTH,
+            sample_rate: OUTPUT_SAMPLE_RATE,
+            enable_preprocess: AEC_ENABLE_PREPROCESS,
+        };
+        let inner = Aec::new(&config);
+        Self { config, inner }
+    }
+}
+
+impl EchoCancellerBackend for SpeexEchoCanceller {
+    fn cancel_echo(&mut self, rec_buffer: &[i16], echo_buffer: &[i16], out_buffer: &mut [i16]) {
+        self.inner.cancel_echo(rec_buffer, echo_buffer, out_buffer);
+    }
+
+    fn reset(&mut self) {
+        self.inner = Aec::new(&self.config);
+    }
+}
+
+struct ReferenceFrame {
+    samples: Vec<i16>,
+    received_at: Instant,
+}
+
+struct ReferenceFrameQueue {
+    frames: VecDeque<ReferenceFrame>,
+}
+
+impl ReferenceFrameQueue {
+    fn new() -> Self {
+        Self {
+            frames: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, samples: Vec<i16>, received_at: Instant) {
+        self.frames.push_back(ReferenceFrame {
+            samples,
+            received_at,
+        });
+        self.prune_retained(received_at);
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    fn take_best_match(&mut self, captured_at: Instant) -> Option<Vec<i16>> {
+        self.prune_retained(captured_at);
+
+        let max_delta = Duration::from_millis(REFERENCE_MATCH_MAX_DELTA_MS);
+        let mut best_index: Option<usize> = None;
+        let mut best_delta = Duration::MAX;
+
+        for (index, frame) in self.frames.iter().enumerate() {
+            let delta = instant_delta(captured_at, frame.received_at);
+            if delta <= max_delta && delta < best_delta {
+                best_index = Some(index);
+                best_delta = delta;
+            }
+        }
+
+        if let Some(index) = best_index {
+            for _ in 0..index {
+                self.frames.pop_front();
+            }
+            return self.frames.pop_front().map(|frame| frame.samples);
+        }
+
+        self.prune_stale(captured_at);
+        None
+    }
+
+    fn prune_retained(&mut self, now: Instant) {
+        let max_age = Duration::from_millis(REFERENCE_FRAME_RETENTION_MS);
+        while self
+            .frames
+            .front()
+            .map(|frame| now.saturating_duration_since(frame.received_at) > max_age)
+            .unwrap_or(false)
+        {
+            self.frames.pop_front();
+        }
+    }
+
+    fn prune_stale(&mut self, captured_at: Instant) {
+        let max_delta = Duration::from_millis(REFERENCE_MATCH_MAX_DELTA_MS);
+        while self
+            .frames
+            .front()
+            .map(|frame| captured_at.saturating_duration_since(frame.received_at) > max_delta)
+            .unwrap_or(false)
+        {
+            self.frames.pop_front();
+        }
+    }
 }
 
 struct Downsampler {
@@ -141,6 +278,8 @@ struct AudioEngine {
     mode: CaptureMode,
     segment_samples: Vec<i16>,
     stream_samples: Vec<i16>,
+    echo_canceller: Box<dyn EchoCancellerBackend>,
+    reference_frames: ReferenceFrameQueue,
 }
 
 impl AudioEngine {
@@ -151,6 +290,21 @@ impl AudioEngine {
             mode: CaptureMode::Idle,
             segment_samples: Vec::new(),
             stream_samples: Vec::new(),
+            echo_canceller: Box::new(SpeexEchoCanceller::new()),
+            reference_frames: ReferenceFrameQueue::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_echo_canceller(echo_canceller: Box<dyn EchoCancellerBackend>) -> Self {
+        Self {
+            stream: None,
+            downsampler: None,
+            mode: CaptureMode::Idle,
+            segment_samples: Vec::new(),
+            stream_samples: Vec::new(),
+            echo_canceller,
+            reference_frames: ReferenceFrameQueue::new(),
         }
     }
 
@@ -177,11 +331,12 @@ impl AudioEngine {
     fn start_segment(&mut self) -> Result<(), String> {
         self.ensure_idle_transition()?;
         self.ensure_open_state()?;
+        self.reset_aec();
         self.mode = CaptureMode::Segment;
         self.segment_samples.clear();
         self.stream_samples.clear();
         if let Some(downsampler) = self.downsampler.as_mut() {
-          downsampler.reset();
+            downsampler.reset();
         }
         Ok(())
     }
@@ -204,6 +359,7 @@ impl AudioEngine {
     }
 
     fn cancel_segment(&mut self) {
+        self.reset_aec();
         self.mode = CaptureMode::Idle;
         self.segment_samples.clear();
         self.stream_samples.clear();
@@ -215,6 +371,7 @@ impl AudioEngine {
     fn start_stream(&mut self) -> Result<(), String> {
         self.ensure_idle_transition()?;
         self.ensure_open_state()?;
+        self.reset_aec();
         self.mode = CaptureMode::Stream;
         self.stream_samples.clear();
         self.segment_samples.clear();
@@ -225,6 +382,7 @@ impl AudioEngine {
     }
 
     fn stop_stream(&mut self) {
+        self.reset_aec();
         self.mode = CaptureMode::Idle;
         self.stream_samples.clear();
         if let Some(downsampler) = self.downsampler.as_mut() {
@@ -232,7 +390,47 @@ impl AudioEngine {
         }
     }
 
-    fn process_samples(&mut self, samples: Vec<f32>) -> Vec<HelperEvent> {
+    fn push_reference_frame_samples(&mut self, samples: Vec<i16>, sample_rate: u32) {
+        if sample_rate != OUTPUT_SAMPLE_RATE || samples.len() != STREAM_CHUNK_SAMPLES {
+            return;
+        }
+
+        self.reference_frames.push(samples, Instant::now());
+    }
+
+    #[cfg(test)]
+    fn reference_frame_count(&self) -> usize {
+        self.reference_frames.len()
+    }
+
+    fn process_stream_frame(&mut self, mic_frame: &[i16], captured_at: Instant) -> Vec<i16> {
+        let Some(reference_frame) = self
+            .reference_frames
+            .take_best_match(reference_target_instant(captured_at))
+        else {
+            return mic_frame.to_vec();
+        };
+
+        if reference_frame.len() != mic_frame.len() {
+            return mic_frame.to_vec();
+        }
+
+        let mut output = vec![0i16; mic_frame.len()];
+        self.echo_canceller
+            .cancel_echo(mic_frame, &reference_frame, &mut output);
+        output
+    }
+
+    fn clear_reference_frames(&mut self) {
+        self.reference_frames.clear();
+    }
+
+    fn reset_aec(&mut self) {
+        self.clear_reference_frames();
+        self.echo_canceller.reset();
+    }
+
+    fn process_samples(&mut self, samples: Vec<f32>, captured_at: Instant) -> Vec<HelperEvent> {
         if self.mode == CaptureMode::Idle {
             return Vec::new();
         }
@@ -257,8 +455,9 @@ impl AudioEngine {
                 let mut events = Vec::new();
                 while self.stream_samples.len() >= STREAM_CHUNK_SAMPLES {
                     let chunk: Vec<i16> = self.stream_samples.drain(..STREAM_CHUNK_SAMPLES).collect();
+                    let processed = self.process_stream_frame(&chunk, captured_at);
                     events.push(HelperEvent::PcmFrame {
-                        pcm16_base64: encode_i16_samples(&chunk),
+                        pcm16_base64: encode_i16_samples(&processed),
                         sample_rate: OUTPUT_SAMPLE_RATE,
                     });
                 }
@@ -272,6 +471,7 @@ impl AudioEngine {
     }
 
     fn close(&mut self) {
+        self.reset_aec();
         self.mode = CaptureMode::Idle;
         self.segment_samples.clear();
         self.stream_samples.clear();
@@ -294,6 +494,12 @@ impl AudioEngine {
 
         Err("audio capture is not open".to_string())
     }
+}
+
+fn reference_target_instant(captured_at: Instant) -> Instant {
+    captured_at
+        .checked_sub(Duration::from_millis(AEC_PLAYOUT_DELAY_MS))
+        .unwrap_or(captured_at)
 }
 
 fn main() {
@@ -356,13 +562,25 @@ fn run_event_loop(
                 HelperCommand::StopStream => {
                     engine.stop_stream();
                 }
+                HelperCommand::PushReferenceFrame {
+                    samples,
+                    sample_rate,
+                } => {
+                    engine.push_reference_frame_samples(samples, sample_rate);
+                }
+                HelperCommand::ClearReference => {
+                    engine.clear_reference_frames();
+                }
                 HelperCommand::Shutdown => {
                     engine.shutdown();
                     break;
                 }
             },
-            EngineMessage::Samples(samples) => {
-                for event in engine.process_samples(samples) {
+            EngineMessage::Samples {
+                samples,
+                captured_at,
+            } => {
+                for event in engine.process_samples(samples, captured_at) {
                     let _ = emit_event(writer, event);
                 }
             }
@@ -419,6 +637,24 @@ fn parse_command(raw: &str) -> Result<HelperCommand, String> {
         "cancel_segment" => Ok(HelperCommand::CancelSegment),
         "start_stream" => Ok(HelperCommand::StartStream),
         "stop_stream" => Ok(HelperCommand::StopStream),
+        "push_reference_frame" => {
+            let sample_rate = parsed
+                .sample_rate
+                .ok_or_else(|| "missing sampleRate for push_reference_frame".to_string())?;
+            let encoded = parsed
+                .pcm16_base64
+                .as_deref()
+                .ok_or_else(|| "missing pcm16Base64 for push_reference_frame".to_string())?;
+            let bytes = BASE64
+                .decode(encoded)
+                .map_err(|error| format!("invalid base64 reference audio: {error}"))?;
+            let samples = decode_i16_samples(&bytes)?;
+            Ok(HelperCommand::PushReferenceFrame {
+                samples,
+                sample_rate,
+            })
+        }
+        "clear_reference" => Ok(HelperCommand::ClearReference),
         "shutdown" => Ok(HelperCommand::Shutdown),
         other => Err(format!("unsupported command: {other}")),
     }
@@ -488,7 +724,10 @@ fn build_input_stream(
                     config,
                     move |data: &[f32], _| {
                         let mono = downmix_f32(data, channels);
-                        let _ = sample_sender.send(EngineMessage::Samples(mono));
+                        let _ = sample_sender.send(EngineMessage::Samples {
+                            samples: mono,
+                            captured_at: Instant::now(),
+                        });
                     },
                     move |error| {
                         let _ = error_sender.send(EngineMessage::Error(error.to_string()));
@@ -505,7 +744,10 @@ fn build_input_stream(
                     config,
                     move |data: &[i16], _| {
                         let mono = downmix_i16(data, channels);
-                        let _ = sample_sender.send(EngineMessage::Samples(mono));
+                        let _ = sample_sender.send(EngineMessage::Samples {
+                            samples: mono,
+                            captured_at: Instant::now(),
+                        });
                     },
                     move |error| {
                         let _ = error_sender.send(EngineMessage::Error(error.to_string()));
@@ -522,7 +764,10 @@ fn build_input_stream(
                     config,
                     move |data: &[u16], _| {
                         let mono = downmix_u16(data, channels);
-                        let _ = sample_sender.send(EngineMessage::Samples(mono));
+                        let _ = sample_sender.send(EngineMessage::Samples {
+                            samples: mono,
+                            captured_at: Instant::now(),
+                        });
                     },
                     move |error| {
                         let _ = error_sender.send(EngineMessage::Error(error.to_string()));
@@ -595,11 +840,229 @@ fn encode_i16_samples(samples: &[i16]) -> String {
     BASE64.encode(bytes)
 }
 
+fn decode_i16_samples(bytes: &[u8]) -> Result<Vec<i16>, String> {
+    if bytes.len() % 2 != 0 {
+        return Err("pcm16 payload must contain an even number of bytes".to_string());
+    }
+
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect())
+}
+
+fn instant_delta(left: Instant, right: Instant) -> Duration {
+    if left >= right {
+        left.duration_since(right)
+    } else {
+        right.duration_since(left)
+    }
+}
+
 fn float_to_i16(sample: f32) -> i16 {
     let clamped = sample.clamp(-1.0, 1.0);
     if clamped < 0.0 {
         (clamped * 32_768.0).round() as i16
     } else {
         (clamped * 32_767.0).round() as i16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    #[derive(Clone, Default)]
+    struct FakeEchoCancellerState {
+        cancel_calls: Vec<(Vec<i16>, Vec<i16>)>,
+        reset_calls: usize,
+        next_output: Option<Vec<i16>>,
+    }
+
+    struct FakeEchoCanceller {
+        state: Rc<RefCell<FakeEchoCancellerState>>,
+    }
+
+    impl FakeEchoCanceller {
+        fn new(state: Rc<RefCell<FakeEchoCancellerState>>) -> Self {
+            Self { state }
+        }
+    }
+
+    impl EchoCancellerBackend for FakeEchoCanceller {
+        fn cancel_echo(&mut self, rec_buffer: &[i16], echo_buffer: &[i16], out_buffer: &mut [i16]) {
+            let mut state = self.state.borrow_mut();
+            state
+                .cancel_calls
+                .push((rec_buffer.to_vec(), echo_buffer.to_vec()));
+            if let Some(next_output) = state.next_output.take() {
+                out_buffer.copy_from_slice(&next_output);
+                return;
+            }
+
+            out_buffer.copy_from_slice(rec_buffer);
+        }
+
+        fn reset(&mut self) {
+            self.state.borrow_mut().reset_calls += 1;
+        }
+    }
+
+    #[test]
+    fn parse_command_supports_reference_commands() {
+        let push_command = parse_command(
+            r#"{"command":"push_reference_frame","pcm16Base64":"AQIDBA==","sampleRate":16000}"#,
+        )
+        .expect("push_reference_frame should parse");
+        match push_command {
+            HelperCommand::PushReferenceFrame { sample_rate, .. } => {
+                assert_eq!(sample_rate, 16_000);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let clear_command =
+            parse_command(r#"{"command":"clear_reference"}"#).expect("clear_reference should parse");
+        assert!(matches!(clear_command, HelperCommand::ClearReference));
+    }
+
+    #[test]
+    fn speex_echo_canceller_uses_tuned_desktop_defaults() {
+        let canceller = SpeexEchoCanceller::new();
+
+        assert_eq!(canceller.config.filter_length, 4_800);
+        assert!(canceller.config.enable_preprocess);
+    }
+
+    #[test]
+    fn reference_frame_queue_selects_the_nearest_frame() {
+        let mut queue = ReferenceFrameQueue::new();
+        let base = std::time::Instant::now();
+
+        queue.push(vec![1; STREAM_CHUNK_SAMPLES], base);
+        queue.push(vec![2; STREAM_CHUNK_SAMPLES], base + Duration::from_millis(20));
+        queue.push(vec![3; STREAM_CHUNK_SAMPLES], base + Duration::from_millis(40));
+
+        let matched = queue
+            .take_best_match(base + Duration::from_millis(19))
+            .expect("expected a nearby reference frame");
+
+        assert_eq!(matched, vec![2; STREAM_CHUNK_SAMPLES]);
+    }
+
+    #[test]
+    fn reference_frame_queue_accepts_matches_within_80ms_window() {
+        let mut queue = ReferenceFrameQueue::new();
+        let base = std::time::Instant::now();
+        queue.push(vec![8; STREAM_CHUNK_SAMPLES], base);
+
+        let matched = queue
+            .take_best_match(base + Duration::from_millis(75))
+            .expect("expected reference frame to remain matchable inside the widened window");
+
+        assert_eq!(matched, vec![8; STREAM_CHUNK_SAMPLES]);
+    }
+
+    #[test]
+    fn reference_frame_queue_prunes_stale_unmatched_frames() {
+        let mut queue = ReferenceFrameQueue::new();
+        let base = std::time::Instant::now();
+        queue.push(vec![7; STREAM_CHUNK_SAMPLES], base);
+
+        let matched = queue.take_best_match(base + Duration::from_millis(120));
+
+        assert!(matched.is_none());
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    fn audio_engine_stream_frame_falls_back_to_original_pcm_without_reference() {
+        let state = Rc::new(RefCell::new(FakeEchoCancellerState {
+            next_output: Some(vec![9; STREAM_CHUNK_SAMPLES]),
+            ..FakeEchoCancellerState::default()
+        }));
+        let mut engine =
+            AudioEngine::with_echo_canceller(Box::new(FakeEchoCanceller::new(state.clone())));
+        engine.mode = CaptureMode::Stream;
+        let mic = vec![5; STREAM_CHUNK_SAMPLES];
+
+        let output = engine.process_stream_frame(&mic, std::time::Instant::now());
+
+        assert_eq!(output, mic);
+        assert_eq!(state.borrow().cancel_calls.len(), 0);
+    }
+
+    #[test]
+    fn audio_engine_stream_frame_uses_echo_canceller_when_reference_is_available() {
+        let state = Rc::new(RefCell::new(FakeEchoCancellerState {
+            next_output: Some(vec![9; STREAM_CHUNK_SAMPLES]),
+            ..FakeEchoCancellerState::default()
+        }));
+        let mut engine =
+            AudioEngine::with_echo_canceller(Box::new(FakeEchoCanceller::new(state.clone())));
+        engine.mode = CaptureMode::Stream;
+        engine.push_reference_frame_samples(vec![3; STREAM_CHUNK_SAMPLES], OUTPUT_SAMPLE_RATE);
+        let mic = vec![5; STREAM_CHUNK_SAMPLES];
+
+        let output = engine.process_stream_frame(&mic, std::time::Instant::now());
+
+        assert_eq!(output, vec![9; STREAM_CHUNK_SAMPLES]);
+        assert_eq!(state.borrow().cancel_calls.len(), 1);
+    }
+
+    #[test]
+    fn audio_engine_stream_frame_applies_playout_delay_compensation_before_matching_reference() {
+        let state = Rc::new(RefCell::new(FakeEchoCancellerState {
+            next_output: Some(vec![9; STREAM_CHUNK_SAMPLES]),
+            ..FakeEchoCancellerState::default()
+        }));
+        let mut engine =
+            AudioEngine::with_echo_canceller(Box::new(FakeEchoCanceller::new(state.clone())));
+        let base = std::time::Instant::now();
+        engine.mode = CaptureMode::Stream;
+        engine
+            .reference_frames
+            .push(vec![1; STREAM_CHUNK_SAMPLES], base + Duration::from_millis(100));
+        engine
+            .reference_frames
+            .push(vec![2; STREAM_CHUNK_SAMPLES], base + Duration::from_millis(140));
+        let mic = vec![5; STREAM_CHUNK_SAMPLES];
+
+        let output = engine.process_stream_frame(&mic, base + Duration::from_millis(180));
+
+        assert_eq!(output, vec![9; STREAM_CHUNK_SAMPLES]);
+        assert_eq!(state.borrow().cancel_calls.len(), 1);
+        assert_eq!(
+            state.borrow().cancel_calls[0].1,
+            vec![1; STREAM_CHUNK_SAMPLES]
+        );
+    }
+
+    #[test]
+    fn audio_engine_stop_stream_clears_reference_queue_and_resets_aec() {
+        let state = Rc::new(RefCell::new(FakeEchoCancellerState::default()));
+        let mut engine =
+            AudioEngine::with_echo_canceller(Box::new(FakeEchoCanceller::new(state.clone())));
+        engine.mode = CaptureMode::Stream;
+        engine.push_reference_frame_samples(vec![1; STREAM_CHUNK_SAMPLES], OUTPUT_SAMPLE_RATE);
+
+        engine.stop_stream();
+
+        assert_eq!(engine.reference_frame_count(), 0);
+        assert_eq!(state.borrow().reset_calls, 1);
+    }
+
+    #[test]
+    fn audio_engine_ignores_reference_frames_with_unsupported_sample_rate() {
+        let state = Rc::new(RefCell::new(FakeEchoCancellerState::default()));
+        let mut engine =
+            AudioEngine::with_echo_canceller(Box::new(FakeEchoCanceller::new(state)));
+
+        engine.push_reference_frame_samples(vec![1; STREAM_CHUNK_SAMPLES], 8_000);
+
+        assert_eq!(engine.reference_frame_count(), 0);
     }
 }

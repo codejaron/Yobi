@@ -32,6 +32,11 @@ function createService(overrides?: {
     startStream?: () => Promise<void>;
     stopStream?: () => Promise<void>;
     onPcmFrame?: (listener: (frame: { pcm: Buffer; sampleRate: number }) => void) => () => void;
+    pushPlaybackReferenceFrame?: (input: {
+      pcm: Buffer;
+      sampleRate: number;
+    }) => Promise<void>;
+    clearPlaybackReference?: () => Promise<void>;
     stop?: () => Promise<void> | void;
   };
   playbackBridge?: {
@@ -405,47 +410,6 @@ function makeSineChunk(
   return pcm;
 }
 
-function makeNoiseChunk(seed = 7, amplitude = 14_000, sampleCount = 320): Buffer {
-  const pcm = Buffer.alloc(sampleCount * 2);
-  let state = seed >>> 0;
-
-  for (let index = 0; index < sampleCount; index += 1) {
-    state = (state * 1_664_525 + 1_013_904_223) >>> 0;
-    const normalized = (state / 0xffffffff) * 2 - 1;
-    const value = Math.round(normalized * amplitude);
-    pcm.writeInt16LE(value, index * 2);
-  }
-
-  return pcm;
-}
-
-function delayAndScaleChunk(
-  input: Buffer,
-  delaySamples: number,
-  gain: number,
-  noiseAmplitude = 0
-): Buffer {
-  const sampleCount = Math.floor(input.length / 2);
-  const delayed = Buffer.alloc(input.length);
-  let state = 17 >>> 0;
-
-  for (let index = 0; index < sampleCount; index += 1) {
-    const sourceIndex = index - delaySamples;
-    const sourceSample = sourceIndex >= 0 ? input.readInt16LE(sourceIndex * 2) : 0;
-    state = (state * 1_103_515_245 + 12_345) >>> 0;
-    const noise = noiseAmplitude > 0 ? (((state / 0xffffffff) * 2 - 1) * noiseAmplitude) : 0;
-    const value = Math.round(sourceSample * gain + noise);
-    delayed.writeInt16LE(Math.max(-0x8000, Math.min(0x7fff, value)), index * 2);
-  }
-
-  return delayed;
-}
-
-function sliceFrame(input: Buffer, frameIndex: number, frameSamples = 320): Buffer {
-  const start = frameIndex * frameSamples * 2;
-  return input.subarray(start, start + frameSamples * 2);
-}
-
 test("realtime voice: stopSession blocks in-flight tts chunks from re-enqueueing playback", async () => {
   const steps: string[] = [];
   const synthDeferred = createDeferred<Buffer>();
@@ -698,36 +662,20 @@ test("realtime voice: speech start interrupts assistant thinking before opening 
   assert.ok(service.activeAsrSession);
 });
 
-test("realtime voice: playback-matching echo does not trigger a new speech start", async () => {
-  const order: string[] = [];
+test("realtime voice: reference frames are forwarded to native capture when AEC is enabled", async () => {
+  const forwarded: Array<{ pcm: Buffer; sampleRate: number }> = [];
   const service = createService({
-    createVad: async () =>
-      createFakeVad(async () => ({
-        probability: 0.88,
-        speechStarted: true,
-        speechEnded: false,
-        speaking: true
-      })),
-    voiceRouter: {
-      createStreamingAsrSession: () => {
-        order.push("create-asr");
-        return {
-          pushPcm: async () => undefined,
-          flush: async () => ({
-            text: "",
-            metadata: null
-          }),
-          abort: async () => undefined
-        } satisfies StreamingAsrSession;
+    captureService: {
+      onPcmFrame: () => () => undefined,
+      pushPlaybackReferenceFrame: async (input) => {
+        forwarded.push({
+          pcm: Buffer.from(input.pcm),
+          sampleRate: input.sampleRate
+        });
       }
     }
   });
 
-  service.host = {
-    send: async (command: { type: string }) => {
-      order.push(command.type);
-    }
-  };
   service.state = createVoiceSessionState({
     sessionId: "session-1",
     mode: "free",
@@ -737,54 +685,59 @@ test("realtime voice: playback-matching echo does not trigger a new speech start
     }
   });
   service.playbackGeneration = 1;
-  service.state = reduceVoiceSessionState(service.state, {
-    type: "assistant-playback-started"
-  });
 
   const echoedPlayback = makeSineChunk(440);
   await emitReferenceFrame(service, {
     generation: 1,
     pcm: echoedPlayback
   });
-  await service.handlePcmFrame(echoedPlayback, 16_000);
 
-  assert.equal(service.state.phase, "assistant-speaking");
-  assert.equal(service.state.playback.active, true);
-  assert.equal(service.speechActive, false);
-  assert.deepEqual(order, []);
-  assert.equal(service.activeAsrSession, null);
+  assert.deepEqual(forwarded, [
+    {
+      pcm: echoedPlayback,
+      sampleRate: 16_000
+    }
+  ]);
 });
 
-test("realtime voice: delayed playback echo still does not trigger a new speech start", async () => {
-  const order: string[] = [];
+test("realtime voice: reference frames are not forwarded when AEC is disabled", async () => {
+  const forwarded: Array<{ pcm: Buffer; sampleRate: number }> = [];
   const service = createService({
-    createVad: async () =>
-      createFakeVad(async () => ({
-        probability: 0.88,
-        speechStarted: true,
-        speechEnded: false,
-        speaking: true
-      })),
-    voiceRouter: {
-      createStreamingAsrSession: () => {
-        order.push("create-asr");
-        return {
-          pushPcm: async () => undefined,
-          flush: async () => ({
-            text: "",
-            metadata: null
-          }),
-          abort: async () => undefined
-        } satisfies StreamingAsrSession;
+    getConfig: () =>
+      ({
+        realtimeVoice: {
+          enabled: true,
+          mode: "free",
+          aecEnabled: false,
+          autoInterrupt: true,
+          preRollMs: 300,
+          vadThreshold: 0.35,
+          maxUtteranceMs: 10_000,
+          minSpeechMs: 300,
+          minSilenceMs: 500,
+          firstChunkStrategy: "aggressive"
+        },
+        voice: {
+          ttsVoice: "stub-voice",
+          ttsRate: "+0%",
+          ttsPitch: "+0Hz",
+          requestTimeoutMs: 5_000,
+          retryCount: 0,
+          asrProvider: "sensevoice-local",
+          ttsProvider: "edge"
+        }
+      }) as never,
+    captureService: {
+      onPcmFrame: () => () => undefined,
+      pushPlaybackReferenceFrame: async (input) => {
+        forwarded.push({
+          pcm: Buffer.from(input.pcm),
+          sampleRate: input.sampleRate
+        });
       }
     }
   });
 
-  service.host = {
-    send: async (command: { type: string }) => {
-      order.push(command.type);
-    }
-  };
   service.state = createVoiceSessionState({
     sessionId: "session-1",
     mode: "free",
@@ -794,56 +747,26 @@ test("realtime voice: delayed playback echo still does not trigger a new speech 
     }
   });
   service.playbackGeneration = 1;
-  service.state = reduceVoiceSessionState(service.state, {
-    type: "assistant-playback-started"
-  });
-
-  const playbackReference = makeNoiseChunk(11, 11_000);
-  const delayedEcho = delayAndScaleChunk(playbackReference, 42, 0.58, 220);
 
   await emitReferenceFrame(service, {
     generation: 1,
-    pcm: playbackReference
+    pcm: makeSineChunk(440)
   });
-  await service.handlePcmFrame(delayedEcho, 16_000);
 
-  assert.equal(service.state.phase, "assistant-speaking");
-  assert.equal(service.state.playback.active, true);
-  assert.equal(service.speechActive, false);
-  assert.deepEqual(order, []);
-  assert.equal(service.activeAsrSession, null);
+  assert.deepEqual(forwarded, []);
 });
 
-test("realtime voice: longer delayed playback echo still does not trigger a new speech start", async () => {
-  const order: string[] = [];
+test("realtime voice: natural playback end clears playback references immediately", async () => {
+  const clearCalls: string[] = [];
   const service = createService({
-    createVad: async () =>
-      createFakeVad(async () => ({
-        probability: 0.88,
-        speechStarted: true,
-        speechEnded: false,
-        speaking: true
-      })),
-    voiceRouter: {
-      createStreamingAsrSession: () => {
-        order.push("create-asr");
-        return {
-          pushPcm: async () => undefined,
-          flush: async () => ({
-            text: "",
-            metadata: null
-          }),
-          abort: async () => undefined
-        } satisfies StreamingAsrSession;
+    captureService: {
+      onPcmFrame: () => () => undefined,
+      clearPlaybackReference: async () => {
+        clearCalls.push("clear-reference");
       }
     }
   });
 
-  service.host = {
-    send: async (command: { type: string }) => {
-      order.push(command.type);
-    }
-  };
   service.state = createVoiceSessionState({
     sessionId: "session-1",
     mode: "free",
@@ -853,36 +776,23 @@ test("realtime voice: longer delayed playback echo still does not trigger a new 
     }
   });
   service.playbackGeneration = 1;
-  service.state = reduceVoiceSessionState(service.state, {
-    type: "assistant-playback-started"
+
+  await service.handlePlaybackEvent({
+    type: "chunk-ended",
+    chunkId: "chunk-1",
+    text: "第一句",
+    generation: 1,
+    state: {
+      generation: 1,
+      active: false,
+      currentChunkId: null,
+      currentText: "",
+      queuedCount: 0,
+      pendingCount: 0
+    }
   });
 
-  const totalFrames = 30;
-  const delayFrames = 12;
-  const playbackReference = makeNoiseChunk(23, 11_000, 320 * totalFrames);
-  const delayedEcho = delayAndScaleChunk(playbackReference, 320 * delayFrames, 0.58, 220);
-  const originalDateNow = Date.now;
-
-  try {
-    for (let frameIndex = 0; frameIndex <= delayFrames; frameIndex += 1) {
-      Date.now = () => 6_000 + frameIndex * 20;
-      await emitReferenceFrame(service, {
-        generation: 1,
-        pcm: sliceFrame(playbackReference, frameIndex)
-      });
-    }
-
-    Date.now = () => 6_000 + delayFrames * 20;
-    await service.handlePcmFrame(sliceFrame(delayedEcho, delayFrames), 16_000);
-  } finally {
-    Date.now = originalDateNow;
-  }
-
-  assert.equal(service.state.phase, "assistant-speaking");
-  assert.equal(service.state.playback.active, true);
-  assert.equal(service.speechActive, false);
-  assert.deepEqual(order, []);
-  assert.equal(service.activeAsrSession, null);
+  assert.deepEqual(clearCalls, ["clear-reference"]);
 });
 
 test("realtime voice: a single non-echo playback speech blip does not immediately barge in", async () => {

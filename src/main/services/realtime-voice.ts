@@ -21,7 +21,6 @@ import {
   type RealtimeVoicePlaybackBridge,
   type RealtimeVoicePlaybackControllerEvent
 } from "./realtime-voice-playback-controller";
-import { PlaybackReferenceTracker } from "./realtime-voice-playback-reference";
 import { buildInterruptedAssistantCommit } from "./realtime-voice-persistence";
 import { createVoiceSessionState, reduceVoiceSessionState } from "./realtime-voice-state";
 import {
@@ -181,7 +180,6 @@ export class RealtimeVoiceService {
   private llmVisibleText = "";
   private playedAssistantText = "";
   private assistantCommitPersisted = false;
-  private readonly playbackReferenceTracker = new PlaybackReferenceTracker();
   private playbackBargeInStartedAtMs = 0;
 
   constructor(private readonly input: RealtimeVoiceServiceInput) {
@@ -334,6 +332,7 @@ export class RealtimeVoiceService {
     await this.captureService?.stopStream().catch(() => undefined);
     await this.clearPlayback("system");
     this.pttHeld = false;
+    await this.clearPlaybackReference();
     this.resetSpeechTracking();
     this.state = createEmptyVoiceState(this.state.mode);
     this.emitState();
@@ -356,6 +355,7 @@ export class RealtimeVoiceService {
       type: "barge-in-detected",
       reason
     });
+    await this.clearPlaybackReference();
     this.resetSpeechTracking();
     return {
       accepted: true
@@ -516,11 +516,11 @@ export class RealtimeVoiceService {
     this.preRollBuffers = [];
     this.speechBuffers = [];
     this.speechSilenceStartedAtMs = 0;
-    this.playbackReferenceTracker.clear();
     this.speechCaptureGeneration += 1;
     this.activeSpeechCaptureSession = null;
     this.activeSpeechCapturePromise = null;
     this.vad?.reset();
+    void this.clearPlaybackReference();
     if (this.activeAsrSession) {
       void this.activeAsrSession.abort().catch(() => undefined);
       this.activeAsrSession = null;
@@ -678,7 +678,7 @@ export class RealtimeVoiceService {
     }, createTimeoutError(ASSISTANT_PROGRESS_TIMEOUT_ERROR));
     await this.abortActiveResponse("system");
     await this.clearPlayback("system");
-    this.playbackReferenceTracker.clear();
+    await this.clearPlaybackReference();
     this.clearCurrentTurnTranscripts();
     this.transitionToReadyState();
     await this.notifyStatusChange();
@@ -704,7 +704,7 @@ export class RealtimeVoiceService {
     }, createTimeoutError(PLAYBACK_START_TIMEOUT_ERROR));
     await this.abortActiveResponse("system");
     await this.clearPlayback("system");
-    this.playbackReferenceTracker.clear();
+    await this.clearPlaybackReference();
     this.clearCurrentTurnTranscripts();
     this.transitionToReadyState();
     await this.notifyStatusChange();
@@ -1028,7 +1028,7 @@ export class RealtimeVoiceService {
         return;
       }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-      this.playbackReferenceTracker.pushFrame({
+      await this.forwardPlaybackReferenceFrame({
         pcm: Buffer.from(message.pcm),
         sampleRate: message.sampleRate
       });
@@ -1074,6 +1074,7 @@ export class RealtimeVoiceService {
         return;
       }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
+      await this.clearPlaybackReference();
       this.syncPlaybackState({
         active: message.state.active,
         queueLength: message.state.pendingCount,
@@ -1089,7 +1090,7 @@ export class RealtimeVoiceService {
         return;
       }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
-      this.playbackReferenceTracker.clear();
+      await this.clearPlaybackReference();
       this.syncPlaybackState({
         active: false,
         queueLength: 0,
@@ -1104,6 +1105,7 @@ export class RealtimeVoiceService {
         return;
       }
       this.refreshAssistantProgressWatchdog(this.assistantGeneration);
+      await this.clearPlaybackReference();
       this.syncPlaybackState({
         active: message.state.active,
         queueLength: message.state.pendingCount,
@@ -1139,26 +1141,6 @@ export class RealtimeVoiceService {
     }
 
     const nowMs = Date.now();
-    const playbackReferenceMatch = !this.speechActive
-      ? this.playbackReferenceTracker.classifyMicChunk({
-          pcm: chunk,
-          sampleRate,
-          capturedAtMs: nowMs
-        })
-      : {
-          echoLikely: false,
-          match: null
-        };
-
-    // During assistant playback, reject mic chunks that still look like the rendered TTS
-    // instead of globally muting barge-in while audio is active.
-    if (!this.speechActive && playbackReferenceMatch.echoLikely) {
-      this.playbackBargeInStartedAtMs = 0;
-      this.preRollBuffers = [];
-      this.vad?.reset();
-      return;
-    }
-
     const wasSpeechActive = this.speechActive;
     const vad = await this.ensureVadReady();
     const result = await vad.processChunk(chunk);
@@ -1178,11 +1160,7 @@ export class RealtimeVoiceService {
         this.input.logger.info("realtime-voice", "speech:barge-in-candidate", {
           sessionId: this.state.sessionId ?? "unknown",
           probability: result.probability,
-          rms,
-          echoLikely: playbackReferenceMatch.echoLikely,
-          correlation: playbackReferenceMatch.match?.correlation ?? null,
-          residualRatio: playbackReferenceMatch.match?.residualRatio ?? null,
-          micToReferenceRmsRatio: playbackReferenceMatch.match?.micToReferenceRmsRatio ?? null
+          rms
         });
       }
 
@@ -1195,11 +1173,7 @@ export class RealtimeVoiceService {
         sessionId: this.state.sessionId ?? "unknown",
         durationMs: nowMs - this.playbackBargeInStartedAtMs,
         probability: result.probability,
-        rms,
-        echoLikely: playbackReferenceMatch.echoLikely,
-        correlation: playbackReferenceMatch.match?.correlation ?? null,
-        residualRatio: playbackReferenceMatch.match?.residualRatio ?? null,
-        micToReferenceRmsRatio: playbackReferenceMatch.match?.micToReferenceRmsRatio ?? null
+        rms
       });
     } else if (!wasSpeechActive) {
       this.playbackBargeInStartedAtMs = 0;
@@ -1720,6 +1694,34 @@ export class RealtimeVoiceService {
         reason
       }, error);
     }
+  }
+
+  private async forwardPlaybackReferenceFrame(input: {
+    pcm: Buffer;
+    sampleRate: number;
+  }): Promise<void> {
+    if (!this.input.getConfig().realtimeVoice.aecEnabled) {
+      return;
+    }
+
+    await this.captureService?.pushPlaybackReferenceFrame?.(input);
+  }
+
+  private async clearPlaybackReference(): Promise<void> {
+    if (!this.input.getConfig().realtimeVoice.aecEnabled) {
+      return;
+    }
+
+    const clearPromise = this.captureService?.clearPlaybackReference?.();
+    if (!clearPromise) {
+      return;
+    }
+
+    await clearPromise.catch((error) => {
+      this.input.logger.warn("realtime-voice", "clear-playback-reference-failed", {
+        generation: this.playbackGeneration
+      }, error);
+    });
   }
 
   private applyState(event: Parameters<typeof reduceVoiceSessionState>[1]): void {
